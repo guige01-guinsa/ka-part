@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_name }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="wrap">
+    <h1>{{ app_name }}</h1>
+    <p>{{ role }}</p>
+    <p>Render + Cloudflare + Flask (Gunicorn) 프로토타입이 정상 동작 중입니다.</p>
+    <p><a href="/health">/health</a> → JSON 헬스체크</p>
+  </main>
+</body>
+</html>

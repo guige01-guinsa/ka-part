@@ -1,0 +1,5 @@
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Malgun Gothic,sans-serif;line-height:1.6;margin:0}
+.wrap{max-width:720px;margin:56px auto;padding:0 16px}
+h1{font-size:28px;margin:0 0 8px}
+p{margin:6px 0}
+a{text-decoration:none}
