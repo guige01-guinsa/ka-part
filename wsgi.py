@@ -1,3 +1,1 @@
-flask
-flask_sqlalchemy
-gunicorn
+from app import app
