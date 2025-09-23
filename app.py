@@ -399,7 +399,7 @@ def render(title, body, **ctx):
 # ───────────────────────────────────────────────────────────────────
 # 8) UI: 수변전/설비 일지 목록 + CSV/월별/재계산
 # ───────────────────────────────────────────────────────────────────
-@app.route(["/","/ui"])
+@app.route("/")
 def ui_home():
     rows = SubstationLog.query.order_by(
         func.coalesce(SubstationLog.log_date, date(1900,1,1)).desc(),
