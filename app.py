@@ -342,9 +342,9 @@ def compute_auto_fields(row: SubstationLog, prev: Optional[SubstationLog], s: Se
 @app.route("/health")
 def health(): return jsonify(status="ok")
 
-@app.route("/")
-def home(): 
-    return "Hello ka-part!" #redirect(url_for("ui_home"))
+#@app.route("/")
+#def home(): 
+#    return "app.py 실행 확인 성공!" #redirect(url_for("ui_home"))
 
 
 #app = Flask(__name__)
@@ -399,7 +399,7 @@ def render(title, body, **ctx):
 # ───────────────────────────────────────────────────────────────────
 # 8) UI: 수변전/설비 일지 목록 + CSV/월별/재계산
 # ───────────────────────────────────────────────────────────────────
-@app.route("/ui")
+@app.route(["/", "/ui"])
 def ui_home():
     rows = SubstationLog.query.order_by(
         func.coalesce(SubstationLog.log_date, date(1900,1,1)).desc(),
