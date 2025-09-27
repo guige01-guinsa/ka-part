@@ -1,5 +1,5 @@
 # app.py — Android(Pydroid3) 호환 All-in-One 아파트 관리 클라이언트
-# 기능: 수변전 일지(전력/급수/열량/유량) + 민원/고장 + 업무파일 + 설정
+# 기능: 일검침 일지(전력/급수/열량/유량) + 민원/고장 + 업무파일 + 설정
 # 보조: 누락 컬럼 자동 마이그레이션, CSV 내보내기, 월별 집계, 일괄 재계산, 음성 입력
 # 주의: 같은 폰의 크롬에서 http://127.0.0.1:8000/ 로 접속
 
@@ -111,7 +111,7 @@ DEFAULT_OPERATOR = OPERATORS[0]
 # ───────────────────────────────────────────────────────────────────
 # 3) 모델 정의
 #    - Settings: 사용량 보정 계수/요금/카카오 전송 설정
-#    - SubstationLog: 수변전/설비 일지 (누적/일사용량 포함)
+#    - SubstationLog: 일검침/설비 일지 (누적/일사용량 포함)
 #    - WorkFile: 업무파일 저장소
 #    - Complaint: 민원/고장 접수
 # ───────────────────────────────────────────────────────────────────
@@ -157,7 +157,7 @@ class Settings(db.Model):
 
 class SubstationLog(db.Model):
     """
-    수변전/설비 일지
+    일검침/설비일지
     - 전력: 고압 수전, 저압 3회선, 누적/일사용량
     - 설비: 급수/열량/유량 누적/일사용량, 각종 온도
     """
@@ -197,10 +197,10 @@ class SubstationLog(db.Model):
     # 온도(설비)
     hst = db.Column(db.Float); hrt = db.Column(db.Float)
     lst = db.Column(db.Float); lrt = db.Column(db.Float)
-    dhws = db.Column(db.Float); dhwr = db.Column(db.Float)
+    TR1 = db.Column(db.Float); TR2 = db.Column(db.Float)
 
     # 기타
-    air_temp = db.Column(db.Float); winding_temp = db.Column(db.Float)
+    TR3 = db.Column(db.Float); winding_temp = db.Column(db.Float)
     event = db.Column(db.String(160), default="")   # 특이사항
     remarks = db.Column(db.Text, default="")        # 비고
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -226,8 +226,8 @@ class SubstationLog(db.Model):
             "acc_heat":  f(self.acc_heat),  "day_heat":  f(self.day_heat),
             "acc_flow":  f(self.acc_flow),  "day_flow":  f(self.day_flow),
             "hst": f(self.hst), "hrt": f(self.hrt), "lst": f(self.lst), "lrt": f(self.lrt),
-            "dhws": f(self.dhws), "dhwr": f(self.dhwr),
-            "air_temp": f(self.air_temp), "winding_temp": f(self.winding_temp),
+            "TR1": f(self.TR1), "TR2": f(self.TR2),
+            "TR3": f(self.TR3), "winding_temp": f(self.winding_temp),
             "event": self.event, "remarks": self.remarks,
         }
 
@@ -349,8 +349,8 @@ def auto_migrate_columns():
             ("acc_heat","REAL"),  ("day_heat","REAL"),
             ("acc_flow","REAL"),  ("day_flow","REAL"),
             ("hst","REAL"), ("hrt","REAL"), ("lst","REAL"), ("lrt","REAL"),
-            ("dhws","REAL"), ("dhwr","REAL"),
-            ("air_temp","REAL"), ("winding_temp","REAL"),
+            ("TR1","REAL"), ("TR2","REAL"),
+            ("TR3","REAL"), ("winding_temp","REAL"),
             ("event","TEXT"), ("remarks","TEXT"), ("created_at","TEXT"),
         ]:
             ensure_column(conn, "substation_log", name, ddl)
@@ -471,7 +471,7 @@ BASE = """
  <div class="container-fluid">
    <a class="navbar-brand" href="{{ url_for('ui_home') }}">🏢 아파트 관리</a>
    <div class="d-flex gap-2">
-     <a class="btn btn-outline-light btn-sm" href="{{ url_for('ui_home') }}">수변전</a>
+     <a class="btn btn-outline-light btn-sm" href="{{ url_for('ui_home') }}">일검침</a>
      <a class="btn btn-outline-light btn-sm" href="{{ url_for('ui_files') }}">업무파일</a>
      <!-- ⚠️ 여기 있던 '⚡ 비교견적' 버튼 전부 삭제 -->
      <a class="btn btn-outline-light btn-sm" href="{{ url_for('ui_complaints') }}">민원/고장</a>
@@ -499,7 +499,7 @@ def render(title, body, **ctx):
     return render_template_string(BASE, title=title, body=body, **ctx)
 
 # ───────────────────────────────────────────────────────────────────
-# 8) UI: 수변전/설비 일지 목록 + CSV/월별/재계산
+# 8) UI: 일검침/설비 일지 목록 + CSV/월별/재계산
 # ───────────────────────────────────────────────────────────────────
 @app.route("/ui")
 def ui_home():
@@ -510,7 +510,7 @@ def ui_home():
     ).limit(200).all()
     body = render_template_string("""
 <div class="d-flex justify-content-between align-items-center mb-2">
-  <h5 class="m-0">수변전/설비 일지</h5>
+  <h5 class="m-0">일검침/설비 일지</h5>
   <div>
     <a class="btn btn-sm btn-primary" href="{{ url_for('ui_new_log') }}">+ 새 기록</a>
     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('export_csv') }}">CSV</a>
@@ -522,9 +522,9 @@ def ui_home():
 <table class="table table-sm table-hover">
   <thead class="table-light">
   <tr>
-    <th>ID</th><th>일시</th><th>수전kW</th>
-    <th>고압누적/일</th><th>산업누적/일</th><th>가로등누적/일</th>
-    <th>급수누적/일</th><th>열량누적/일</th><th>유량누적/일</th>
+    <th>ID</th><th>일시</th><th>vcb_Kw</th>
+    <th>유효전력/사용량</th><th>산업용/사용량</th><th>가로등/사용량</th>
+    <th>상수도/사용량</th><th>열량/사용량</th><th>유량/사용량</th>
     <th>비고</th><th></th>
   </tr>
   </thead>
@@ -555,7 +555,7 @@ def ui_home():
 </table>
 </div>
 """, rows=rows)
-    return render("수변전 일지", body)
+    return render("일검침 일지", body)
 
 # 신규/수정 폼 (폼 name이 모델 필드와 정확히 일치하도록 주의)
 FORM = """
@@ -568,66 +568,69 @@ FORM = """
     <input type="date" name="log_date" class="form-control" value="{{v.log_date}}"></div>
   <div class="col-6 col-md-3"><label class="form-label">시각</label>
     <input type="time" name="log_time" class="form-control" value="{{v.log_time}}"></div>
-  <div class="col-12 col-md-3"><label class="form-label">점검자</label>
-    <select name="operator" class="form-select">
+  <div class="col-6 col-md-3"><label class="form-label">점검자</label>
+   <select name="operator" class="form-select">
       {% for n in operators %}<option value="{{n}}" {% if v.operator==n %}selected{% endif %}>{{n}}</option>{% endfor %}
     </select>
   </div>
-
-  <!-- 고압 수전 측정치 (kV, A, PF) -->
-  <div class="col-4 col-md-2"><label class="form-label">HV(kV)</label>
-    <input name="incomer_voltage" class="form-control" value="{{v.incomer_voltage}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">HV(A)</label>
-    <input name="incomer_curr" class="form-control" value="{{v.incomer_curr}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">HV역률</label>
-    <input name="vcb_p_factor" class="form-control" value="{{v.vcb_p_factor}}"></div>
-
-  <!-- 저압 3회선 (V, A) + 공통 역률 -->
-  <div class="col-4 col-md-2"><label class="form-label">LV1(V)</label>
-    <input name="lv1_v" class="form-control" value="{{v.lv1_v}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">LV1(A)</label>
-    <input name="lv1_a" class="form-control" value="{{v.lv1_a}}"></div>
-
-  <div class="col-4 col-md-2"><label class="form-label">LV2(V)</label>
-    <input name="lv2_v" class="form-control" value="{{v.lv2_v}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">LV2(A)</label>
-    <input name="lv2_a" class="form-control" value="{{v.lv2_a}}"></div>
-
-  <div class="col-4 col-md-2"><label class="form-label">LV3(V)</label>
-    <input name="lv3_v" class="form-control" value="{{v.lv3_v}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">LV3(A)</label>
-    <input name="lv3_a" class="form-control" value="{{v.lv3_a}}"></div>
-
-  <div class="col-4 col-md-2"><label class="form-label">저압역률</label>
+  
+  <div class="col-3 col-md-2"><label class="form-label">vcb역률</label>
+  <input name="vcb_p_factor" class="form-control" value="{{v.vcb_p_factor}}"></div>
+  
+  <div class="col-3 col-md-2"><label class="form-label">LV역률</label>
     <input name="power_factor" class="form-control" value="{{v.power_factor}}"></div>
 
+  <!-- 고압 수전 측정치 (kV, A, PF) -->
+  <div class="col-6 col-md-3"><label class="form-label">vcb(kV)</label>
+    <input name="incomer_voltage" class="form-control" value="{{v.incomer_voltage}}"></div>
+  <div class="col-6 col-md-3"><label class="form-label">vcb(A)</label>
+    <input name="incomer_curr" class="form-control" value="{{v.incomer_curr}}"></div>
+
+
+  <!-- 저압 3회선 (V, A) + 공통 역률 -->
+  <div class="col-6 col-md-3"><label class="form-label">LV1(V)</label>
+    <input name="lv1_v" class="form-control" value="{{v.lv1_v}}"></div>
+  <div class="col-6 col-md-3"><label class="form-label">LV1(A)</label>
+    <input name="lv1_a" class="form-control" value="{{v.lv1_a}}"></div>
+
+  <div class="col-6 col-md-3"><label class="form-label">LV2(V)</label>
+    <input name="lv2_v" class="form-control" value="{{v.lv2_v}}"></div>
+  <div class="col-6 col-md-3"><label class="form-label">LV2(A)</label>
+    <input name="lv2_a" class="form-control" value="{{v.lv2_a}}"></div>
+
+  <div class="col-6 col-md-3"><label class="form-label">LV3(V)</label>
+    <input name="lv3_v" class="form-control" value="{{v.lv3_v}}"></div>
+  <div class="col-6 col-md-3"><label class="form-label">LV3(A)</label>
+    <input name="lv3_a" class="form-control" value="{{v.lv3_a}}"></div>
+
+
+
   <!-- 전력 누적 계기값(당일 지시) -->
-  <div class="col-4 col-md-2"><label class="form-label">고압 누적</label>
+  <div class="col-4 col-md-2"><label class="form-label">유효전력</label>
     <input name="hv_acc_kwh" class="form-control" value="{{v.hv_acc_kwh}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">산업 누적</label>
+  <div class="col-4 col-md-2"><label class="form-label">산 업</label>
     <input name="ind_acc_kwh" class="form-control" value="{{v.ind_acc_kwh}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">가로등 누적</label>
+  <div class="col-4 col-md-2"><label class="form-label">가로등</label>
     <input name="str_acc_kwh" class="form-control" value="{{v.str_acc_kwh}}"></div>
+  <div class="col-4 col-md-2"><label class="form-label">TR1</label><input name="TR1" class="form-control" value="{{v.TR1}}"></div>
+  <div class="col-4 col-md-2"><label class="form-label">TR2</label><input name="TR2" class="form-control" value="{{v.TR2}}"></div>
+  <div class="col-4 col-md-2"><label class="form-label">TR3</label><input name="TR3" class="form-control" value="{{v.TR3}}"></div>
 
   <!-- 설비 누적 값 -->
-  <div class="col-4 col-md-2"><label class="form-label">급수 누적</label>
+  <div class="col-4 col-md-2"><label class="form-label">상수도</label>
     <input name="acc_water" class="form-control" value="{{v.acc_water}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">열량 누적</label>
+  <div class="col-4 col-md-2"><label class="form-label">열량</label>
     <input name="acc_heat" class="form-control" value="{{v.acc_heat}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">유량 누적</label>
+  <div class="col-4 col-md-2"><label class="form-label">유량</label>
     <input name="acc_flow" class="form-control" value="{{v.acc_flow}}"></div>
 
   <!-- 온도 -->
-  <div class="col-4 col-md-2"><label class="form-label">HST</label><input name="hst" class="form-control" value="{{v.hst}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">HRT</label><input name="hrt" class="form-control" value="{{v.hrt}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">LST</label><input name="lst" class="form-control" value="{{v.lst}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">LRT</label><input name="lrt" class="form-control" value="{{v.lrt}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">DHWS</label><input name="dhws" class="form-control" value="{{v.dhws}}"></div>
-  <div class="col-4 col-md-2"><label class="form-label">DHWR</label><input name="dhwr" class="form-control" value="{{v.dhwr}}"></div>
+  <div class="col-6 col-md-3"><label class="form-label">고층난방S</label><input name="hst" class="form-control" value="{{v.hst}}"></div>
+  <div class="col-6 col-md-3"><label class="form-label">고층난방R</label><input name="hrt" class="form-control" value="{{v.hrt}}"></div>
+  <div class="col-6 col-md-3"><label class="form-label">저층난방S</label><input name="lst" class="form-control" value="{{v.lst}}"></div>
+  <div class="col-6 col-md-3"><label class="form-label">저층난방R</label><input name="lrt" class="form-control" value="{{v.lrt}}"></div>
 
-  <!-- 기타 -->
-  <div class="col-6 col-md-3"><label class="form-label">주변온도</label><input name="air_temp" class="form-control" value="{{v.air_temp}}"></div>
-  <div class="col-6 col-md-3"><label class="form-label">권선온도</label><input name="winding_temp" class="form-control" value="{{v.winding_temp}}"></div>
+<!--<div class="col-6 col-md-3"><label class="form-label">권선온도</label><input name="winding_temp" class="form-control" value="{{v.winding_temp}}"></div> -->
 
   <div class="col-12"><label class="form-label">특이사항</label>
     <input id="event" name="event" class="form-control" value="{{v.event}}">
@@ -676,9 +679,9 @@ def ui_new_log():
 
             hst=parse_float(payload.get("hst")), hrt=parse_float(payload.get("hrt")),
             lst=parse_float(payload.get("lst")), lrt=parse_float(payload.get("lrt")),
-            dhws=parse_float(payload.get("dhws")), dhwr=parse_float(payload.get("dhwr")),
+            TR1=parse_float(payload.get("TR1")), TR2=parse_float(payload.get("TR2")),
 
-            air_temp=parse_float(payload.get("air_temp")),
+            TR3=parse_float(payload.get("TR3")),
             winding_temp=parse_float(payload.get("winding_temp")),
             event=payload.get("event") or "", remarks=payload.get("remarks") or ""
         )
@@ -703,7 +706,7 @@ def ui_new_log():
         lv1_v="", lv1_a="", lv2_v="", lv2_a="", lv3_v="", lv3_a="", power_factor="",
         hv_acc_kwh="", ind_acc_kwh="", str_acc_kwh="",
         acc_water="", acc_heat="", acc_flow="",
-        hst="", hrt="", lst="", lrt="", dhws="", dhwr="", air_temp="", winding_temp="",
+        hst="", hrt="", lst="", lrt="", TR1="", TR2="", TR3="", winding_temp="",
         event="", remarks=""
     )
     return render("새 기록", render_template_string(FORM, title="새 기록", v=v, operators=OPERATORS))
@@ -739,9 +742,9 @@ def ui_edit_log(lid):
 
         r.hst = parse_float(request.form.get("hst")); r.hrt = parse_float(request.form.get("hrt"))
         r.lst = parse_float(request.form.get("lst")); r.lrt = parse_float(request.form.get("lrt"))
-        r.dhws = parse_float(request.form.get("dhws")); r.dhwr = parse_float(request.form.get("dhwr"))
+        r.TR1 = parse_float(request.form.get("TR1")); r.TR2 = parse_float(request.form.get("TR2"))
 
-        r.air_temp = parse_float(request.form.get("air_temp"))
+        r.TR3 = parse_float(request.form.get("TR3"))
         r.winding_temp = parse_float(request.form.get("winding_temp"))
         r.event = request.form.get("event",""); r.remarks = request.form.get("remarks","")
 
