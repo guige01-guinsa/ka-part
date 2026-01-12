@@ -445,14 +445,13 @@ def health(): return jsonify(status="ok")
 
 @app.route("/")
 def home(): 
-    return "Hello ka-part!" #redirect(url_for("ui_home"))
+    return redirect(url_for("ui_home"))
 
 
-#app = Flask(__name__)
+app = Flask(__name__)
 
-#@app.route("/health")
-#def health():
-#    return jsonify(status="ok")
+@app.route("/health")def health():
+    return jsonify(status="ok")
 # ───────────────────────────────────────────────────────────────────
 # 7) UI 기본 레이아웃 (부트스트랩 + 탭 네비)
 #    - 음성 입력 지원 버튼 포함
