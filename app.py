@@ -3,6 +3,8 @@
 # 보조: 누락 컬럼 자동 마이그레이션, CSV 내보내기, 월별 집계, 일괄 재계산, 음성 입력
 # 주의: 같은 폰의 크롬에서 http://127.0.0.1:8000/ 로 접속
 
+# 1️⃣ import 구문 (파일 상단)
+from blueprints.tool_search.main import tool_search_bp
 import os, math, json, mimetypes, uuid
 import requests  # ← 카카오 REST 호출
 from datetime import datetime, date, time
@@ -61,6 +63,7 @@ app.config["SECRET_KEY"] = "replace_me_for_forms"
 
 db = SQLAlchemy(app)
 
+app.register_blueprint(tool_search_bp, url_prefix="/ts")
 # ───────────────────────────────────────────────────────────────────
 # 2) 유틸 함수들 (파서/반올림/전력 계산)
 # ───────────────────────────────────────────────────────────────────
@@ -448,10 +451,7 @@ def home():
     return redirect(url_for("ui_home"))
 
 
-app = Flask(__name__)
 
-@app.route("/health")def health():
-    return jsonify(status="ok")
 # ───────────────────────────────────────────────────────────────────
 # 7) UI 기본 레이아웃 (부트스트랩 + 탭 네비)
 #    - 음성 입력 지원 버튼 포함
