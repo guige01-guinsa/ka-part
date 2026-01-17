@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+uploads/
+tools.db
+git_token/
