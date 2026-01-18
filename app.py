@@ -69,20 +69,26 @@ def _normalize_database_url(url: str) -> str:
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 if DATABASE_URL:
     # Render 우선: DATABASE_URL -> 없으면 SQLite(instance)
-db_path = os.path.join(app.instance_path, "apartment.db")
-default_sqlite = "sqlite:///" + db_path
+    db_path = os.path.join(app.instance_path, "apartment.db")
+    default_sqlite = "sqlite:///" + db_path
 
-db_url = os.environ.get("DATABASE_URL", "").strip()
+    db_url = os.environ.get("DATABASE_URL", "").strip()
+
+# Render postgres:// 보정
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
+# URI 확정
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url or default_sqlite
 
-# Postgres에서는 check_same_thread 옵션 넣으면 안 됨 → SQLite일 때만
+# 엔진 옵션 분기
 if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///"):
-    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"check_same_thread": False}}
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "connect_args": {"check_same_thread": False}
+    }
 else:
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {}
+
 
 else:
     # Render 우선: DATABASE_URL -> 없으면 SQLite(instance)
