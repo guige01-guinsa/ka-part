@@ -55,7 +55,62 @@ UPLOAD_DIR = os.path.join(app.instance_path, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 db_path = os.path.join(app.instance_path, "apartment.db")
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + db_path
+
+def _normalize_database_url(url: str) -> str:
+    # Render/Heroku 계열에서 postgres:// 로 주는 경우가 있어 SQLAlchemy 호환 보정
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    # Render Postgres는 보통 SSL이 필요할 수 있어 보수적으로 require 권장
+    if url.startswith("postgresql://") and "sslmode=" not in url:
+        join = "&" if "?" in url else "?"
+        url = url + join + "sslmode=require"
+    return url
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+if DATABASE_URL:
+    # Render 우선: DATABASE_URL -> 없으면 SQLite(instance)
+db_path = os.path.join(app.instance_path, "apartment.db")
+default_sqlite = "sqlite:///" + db_path
+
+db_url = os.environ.get("DATABASE_URL", "").strip()
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url or default_sqlite
+
+# Postgres에서는 check_same_thread 옵션 넣으면 안 됨 → SQLite일 때만
+if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///"):
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"check_same_thread": False}}
+else:
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {}
+
+else:
+    # Render 우선: DATABASE_URL -> 없으면 SQLite(instance)
+db_path = os.path.join(app.instance_path, "apartment.db")
+default_sqlite = "sqlite:///" + db_path
+
+db_url = os.environ.get("DATABASE_URL", "").strip()
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url or default_sqlite
+
+# Postgres에서는 check_same_thread 옵션 넣으면 안 됨 → SQLite일 때만
+if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///"):
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"check_same_thread": False}}
+else:
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {}
+
+
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+# SQLite에서만 check_same_thread 옵션이 의미 있음
+if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///"):
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"check_same_thread": False}}
+else:
+    # Postgres에서는 pool_pre_ping 정도만(선택)
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_pre_ping": True}
+
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 # 안드로이드 환경에서 같은 스레드 체크로 생기는 경고 방지
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"connect_args": {"check_same_thread": False}}
@@ -63,7 +118,8 @@ app.config["SECRET_KEY"] = "replace_me_for_forms"
 
 db = SQLAlchemy(app)
 
-app.register_blueprint(tool_search_bp, url_prefix="/ts")
+app.register_blueprint(tool_search_bp, url_prefix="/ka-part/ts")
+
 # ───────────────────────────────────────────────────────────────────
 # 2) 유틸 함수들 (파서/반올림/전력 계산)
 # ───────────────────────────────────────────────────────────────────
@@ -318,7 +374,11 @@ def ensure_column(conn, table, name, ddl):
         conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 def auto_migrate_columns():
-    """필요 테이블 생성 + 모든 사용 칼럼 보강"""
+    """필요 테이블 생성 + 모든 사용 칼럼 보강 (SQLite 전용)"""
+    if db.engine.dialect.name != "sqlite":
+        return
+    # 이하 기존 코드 그대로...
+
     with db.engine.begin() as conn:
         # 최소 테이블 생성
         conn.execute(text("CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY)"))
@@ -447,8 +507,9 @@ def compute_auto_fields(row: SubstationLog, prev: Optional[SubstationLog], s: Se
 def health(): return jsonify(status="ok")
 
 @app.route("/")
-def home(): 
-    return redirect(url_for("ui_home"))
+def home():
+    return redirect(url_for("ui_apps"))
+
 
 
 
@@ -460,24 +521,39 @@ BASE = """
 <!doctype html><html lang="ko"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title or '아파트 관리' }}</title>
+<link rel="manifest" href="/ka-part/manifest.webmanifest">
+<meta name="theme-color" content="#111111">
+
+<link rel="icon" sizes="192x192" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="icon" sizes="512x512" href="{{ url_for('static', filename='icons/icon-512.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
 
 <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <style>body{background:#f7f8fb;padding-bottom:70px}.table-sm td,.table-sm th{padding:.35rem .5rem}</style>
 </head><body>
+
 <nav class="navbar navbar-dark bg-dark mb-3">
  <div class="container-fluid">
-   <a class="navbar-brand" href="{{ url_for('ui_home') }}">🏢 아파트 관리</a>
+   <a class="navbar-brand" href="/ka-part">🏢 아파트 관리</a>
    <div class="d-flex gap-2">
+     <!-- ✅ 허브(상위 메뉴) -->
+     <a class="btn btn-outline-light btn-sm" href="/ka-part">☰ 메뉴</a>
+
+     <!-- ✅ 기존 4개(스샷과 동일) -->
      <a class="btn btn-outline-light btn-sm" href="{{ url_for('ui_home') }}">일검침</a>
      <a class="btn btn-outline-light btn-sm" href="{{ url_for('ui_files') }}">업무파일</a>
-     <!-- ⚠️ 여기 있던 '⚡ 비교견적' 버튼 전부 삭제 -->
+     <a class="btn btn-outline-light btn-sm" href="/ts/">tool-search</a>
      <a class="btn btn-outline-light btn-sm" href="{{ url_for('ui_complaints') }}">민원/고장</a>
      <a class="btn btn-outline-light btn-sm" href="{{ url_for('ui_settings') }}">설정</a>
+
+     <!-- ✅ 공구(blueprint: /ts) -->
+     <a class="btn btn-outline-light btn-sm" href="/ts">공구</a>
    </div>
  </div>
 </nav>
+
 <div class="container">
  {% with messages=get_flashed_messages() %}
    {% if messages %}<div class="alert alert-info">{{ messages[0] }}</div>{% endif %}
@@ -492,10 +568,62 @@ function fillFromSpeech(id){
   r.start();
 }
 </script>
+<script>
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("/ka-part/sw.js").catch(function(){});
+  });
+}
+</script>
+
+
 </body></html>
 """
 def render(title, body, **ctx):
     return render_template_string(BASE, title=title, body=body, **ctx)
+UI_APPS = """
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h5 class="m-0">🏢 시설관리 메뉴</h5>
+  <span class="text-muted small">현장=속도 · 서버=진실</span>
+</div>
+
+<div class="row g-2">
+  {% for a in apps %}
+  <div class="col-12 col-md-6">
+    <a class="text-decoration-none" href="{{ a.href }}">
+      <div class="card h-100">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="fw-bold">{{ a.title }}</div>
+              <div class="text-muted small mt-1">{{ a.desc }}</div>
+            </div>
+            <div class="text-muted">→</div>
+          </div>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="alert alert-light border mt-3 small mb-0">
+  기록(저장/접수/확정/삭제)은 서버가 정답입니다. 네트워크가 없으면 “보여주기”만 되고 “쓰기”는 실패로 남겨야 합니다.
+</div>
+"""
+
+@app.route("/ka-part")
+def ui_apps():
+    apps = [
+        {"title": "일검침/설비 일지", "desc": "전력/급수/열량/유량 기록·월별집계·CSV", "href": url_for("ui_home")},
+        {"title": "업무 파일", "desc": "업로드·검색·카카오 전송(선택)", "href": url_for("ui_files")},
+        {"title": "비교견적", "desc": "업체/품목/단가 매트릭스·DOCX 품의서", "href": url_for("ui_compare")},
+        {"title": "민원/고장", "desc": "접수·분류·미디어 첨부", "href": url_for("ui_complaints")},
+        {"title": "공구 검색/관리", "desc": "공구 모듈(blueprint: /ts)", "href": "/ts"},
+        {"title": "설정", "desc": "보정계수/요금/카카오/공개URL", "href": url_for("ui_settings")},
+    ]
+    body = render_template_string(UI_APPS, apps=apps)
+    return render("시설관리 메뉴", body)
 
 # ───────────────────────────────────────────────────────────────────
 # 8) UI: 일검침/설비 일지 목록 + CSV/월별/재계산
@@ -1542,6 +1670,38 @@ def kakao_send_default(access_token: str, friend_uuids: list[str], text: str, li
     return ok, (resp.text if not ok else "OK")
 # 11) UI: 설정 (보정계수/요금/카카오)
 # ───────────────────────────────────────────────────────────────────
+@app.route("/ka-part/manifest.webmanifest")
+def manifest():
+    # static/manifest.webmanifest 파일을 그대로 서빙
+    path = os.path.join(app.static_folder, "manifest.webmanifest")
+    return send_file(path, mimetype="application/manifest+json", max_age=0)
+
+@app.route("/ka-part/sw.js")
+def sw():
+    path = os.path.join(app.static_folder, "sw.js")
+    return send_file(path, mimetype="application/javascript", max_age=0)
+
+@app.route("/ka-part/ui")
+def ui_home_alias():
+    return ui_home()
+
+@app.route("/ka-part/files", methods=["GET","POST"])
+def ui_files_alias():
+    return ui_files()
+
+@app.route("/ka-part/compare")
+def ui_compare_alias():
+    return ui_compare()
+
+@app.route("/ka-part/c", methods=["GET","POST"])
+def ui_complaints_alias():
+    return ui_complaints()
+
+@app.route("/ka-part/settings", methods=["GET","POST"])
+def ui_settings_alias():
+    return ui_settings()
+
+
 @app.route("/settings", methods=["GET","POST"])
 def ui_settings():
     """보정계수/요금/카카오 전송 설정"""
@@ -1616,7 +1776,7 @@ def ui_settings():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-        auto_migrate_columns()   # ← 누락 컬럼 자동 보강 (저장 누락 방지 핵심)
-        Settings.get()           # ← ID=1 기본 설정 생성
-    # 같은 폰 브라우저에서 접속: http://127.0.0.1:8000/
+        # ✅ SQLite면 누락 컬럼 보강, Postgres면 create_all로 충분
+        auto_migrate_columns()
+        Settings.get()
     app.run(host="127.0.0.1", port=8000, debug=False, use_reloader=False, threaded=False)
