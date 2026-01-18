@@ -11,14 +11,16 @@ db = SQLAlchemy()
 
 
 def _normalize_database_url(url: str) -> str:
-    # postgres:// -> postgresql:// (SQLAlchemy 호환)
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
-    # Render Postgres는 보통 SSL 필요(External 접속/운영 안정)
-    if url.startswith("postgresql://") and "sslmode=" not in url:
+    # psycopg3 드라이버 명시 (python 3.13 안정)
+    if url.startswith("postgresql://") and not url.startswith("postgresql+psycopg://"):
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if url.startswith("postgresql+psycopg://") and "sslmode=" not in url:
         join = "&" if "?" in url else "?"
         url = url + join + "sslmode=require"
     return url
+
 
 
 def create_app() -> Flask:
