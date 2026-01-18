@@ -24,7 +24,15 @@ def _normalize_database_url(url: str) -> str:
 
 
 def create_app() -> Flask:
-    app = Flask(__name__, template_folder="templates", static_folder="static")
+    def create_app() -> Flask:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    app = Flask(
+        __name__,
+        template_folder=os.path.join(BASE_DIR, "templates"),
+        static_folder=os.path.join(BASE_DIR, "static"),
+    )
+
 
     # instance 폴더(로컬 sqlite 대비)
     app.instance_path = os.path.join(os.getcwd(), "instance")
@@ -99,6 +107,14 @@ def create_app() -> Flask:
         return redirect("/ka-part")
 
     return app
+    @app.get("/ka-part")
+    def ka_part_home():
+        return render_template(
+            "index.html",
+            page_title="아파트 관리",
+            active_menu="home",
+        )
+
 
 
 # gunicorn app:app 대응
