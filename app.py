@@ -56,38 +56,46 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 db_path = os.path.join(app.instance_path, "apartment.db")
 
+# ===============================
+# Database URL normalize
+# ===============================
+
 def _normalize_database_url(url: str) -> str:
-    # Render/Heroku 계열에서 postgres:// 로 주는 경우가 있어 SQLAlchemy 호환 보정
+    # postgres:// -> postgresql:// 보정
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
-    # Render Postgres는 보통 SSL이 필요할 수 있어 보수적으로 require 권장
+    # Render Postgres SSL 요구 대응
     if url.startswith("postgresql://") and "sslmode=" not in url:
         join = "&" if "?" in url else "?"
         url = url + join + "sslmode=require"
     return url
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
-if DATABASE_URL:
-    # Render 우선: DATABASE_URL -> 없으면 SQLite(instance)
-    db_path = os.path.join(app.instance_path, "apartment.db")
-    default_sqlite = "sqlite:///" + db_path
 
-    db_url = os.environ.get("DATABASE_URL", "").strip()
+# ===============================
+# Database configuration
+# ===============================
 
-# Render postgres:// 보정
-if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
+# 기본 SQLite (DATABASE_URL 없을 때)
+db_path = os.path.join(app.instance_path, "apartment.db")
+default_sqlite = "sqlite:///" + db_path
 
-# URI 확정
-app.config["SQLALCHEMY_DATABASE_URI"] = db_url or default_sqlite
+raw_db_url = os.environ.get("DATABASE_URL", "").strip()
 
-# 엔진 옵션 분기
+if raw_db_url:
+    db_url = _normalize_database_url(raw_db_url)
+else:
+    db_url = default_sqlite
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+
+# 엔진 옵션 분기 (SQLite만 check_same_thread 필요)
 if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///"):
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
         "connect_args": {"check_same_thread": False}
     }
 else:
     app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {}
+
 
 
 else:
