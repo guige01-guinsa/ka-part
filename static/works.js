@@ -1,4 +1,4 @@
-// static/works.js
+﻿// static/works.js
 // 목표:
 // 1) 기본 모드 = ALL
 // 2) 첫 진입에서도 1건 보이게(오늘 0건이면 ALL로 자동 폴백)
@@ -86,6 +86,15 @@
       headers: { ...headerLogin(), "Content-Type": "application/json" },
       body: JSON.stringify(body || {}),
     });
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch (e) {}
+    if (!res.ok) {
+      const errMsg = data?.error || data?.detail || text || `HTTP ${res.status}`;
+      throw new Error(errMsg);
+    }
+    return data ?? {};
+  }
 
   async function loadMasterData() {
     try {
@@ -94,6 +103,10 @@
 
       if (elNewCategory) {
         elNewCategory.innerHTML = "";
+        const opt0 = document.createElement("option");
+        opt0.value = "";
+        opt0.textContent = "분류 선택";
+        elNewCategory.appendChild(opt0);
         (cats.items || []).forEach((c) => {
           const opt = document.createElement("option");
           opt.value = c.id;
@@ -104,6 +117,10 @@
 
       if (elNewLocation) {
         elNewLocation.innerHTML = "";
+        const opt0 = document.createElement("option");
+        opt0.value = "";
+        opt0.textContent = "위치 선택";
+        elNewLocation.appendChild(opt0);
         (locs.items || []).forEach((l) => {
           const opt = document.createElement("option");
           opt.value = l.id;
@@ -112,17 +129,8 @@
         });
       }
     } catch (e) {
-      if (elCreateMsg) elCreateMsg.textContent = "??/?? ?? ?? ??";
+      if (elCreateMsg) elCreateMsg.textContent = "분류/위치 불러오기 실패";
     }
-  }
-    const text = await res.text();
-    let data = null;
-    try { data = JSON.parse(text); } catch (e) {}
-    if (!res.ok) {
-      const errMsg = data?.error || data?.detail || text || `HTTP ${res.status}`;
-      throw new Error(errMsg);
-    }
-    return data ?? {};
   }
 
   function buildWorksUrl(mode) {
@@ -355,3 +363,4 @@
   wire();
   init();
 })();
+
