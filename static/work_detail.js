@@ -7,6 +7,14 @@
   // --------------------
   const qs = (sel) => document.querySelector(sel);
 
+  function apiUrl(path) {
+    if (typeof path !== "string") return path;
+    if (path.startsWith("/api") && location.hostname === "ka-part.com") {
+      return `https://www.ka-part.com${path}`;
+    }
+    return path;
+  }
+
   function getWorkIdFromPath() {
     // /ui/works/{id}
     let m = location.pathname.match(/\/ui\/works\/(\d+)/);
@@ -31,14 +39,14 @@
     if (login) headers.set("X-User-Login", login);
 
     // Also pass login via query to survive cross-origin redirects.
-    let finalUrl = url;
+    let finalUrl = apiUrl(url);
     if (login) {
       try {
-        const u = new URL(url, location.origin);
+        const u = new URL(finalUrl, location.origin);
         if (!u.searchParams.get("login")) {
           u.searchParams.set("login", login);
         }
-        finalUrl = u.pathname + u.search + u.hash;
+        finalUrl = apiUrl(u.pathname + u.search + u.hash);
       } catch (_) {}
     }
 
@@ -193,7 +201,7 @@
         ? `<button class="btn danger" data-act="att-del" data-id="${id}">삭제</button>`
         : "";
 
-      const fileLink = `/api/attachments/file/${id}`;
+      const fileLink = apiUrl(`/api/attachments/file/${id}`);
       return `
         <div class="card" style="display:flex; gap:10px; align-items:center; justify-content:space-between; margin:8px 0;">
           <div style="min-width:0;">
@@ -300,7 +308,7 @@
     if (noteEl) body.result_note = noteEl.value || "";
     if (urgentEl) body.urgent = !!urgentEl.checked;
 
-    return await apiFetch(`/api/works/${workId}`, {
+    return await apiFetch(apiUrl(`/api/works/${workId}`), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -311,7 +319,7 @@
     const note = (qs("#transitionNote") && qs("#transitionNote").value) ? qs("#transitionNote").value : "";
     const body = { to_status: toStatus, note };
 
-    return await apiFetch(`/api/works/${workId}/status`, {
+    return await apiFetch(apiUrl(`/api/works/${workId}/status`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -327,18 +335,18 @@
     fd.append("entity_id", String(workId));
     fd.append("file", f.files[0]);
 
-    return await apiFetch(`/api/attachments`, {
+    return await apiFetch(apiUrl(`/api/attachments`), {
       method: "POST",
       body: fd,
     });
   }
 
   async function doDeleteAttachment(attId) {
-    return await apiFetch(`/api/attachments/${attId}`, { method: "DELETE" });
+    return await apiFetch(apiUrl(`/api/attachments/${attId}`), { method: "DELETE" });
   }
 
   async function doDeleteWork(workId) {
-    return await apiFetch(`/api/works/${workId}`, { method: "DELETE" });
+    return await apiFetch(apiUrl(`/api/works/${workId}`), { method: "DELETE" });
   }
 
   // --------------------
@@ -352,7 +360,7 @@
       return;
     }
 
-    const me = await apiFetch("/api/me");
+    const me = await apiFetch(apiUrl("/api/me"));
     const loginEl = qs("#login");
     if (loginEl && (!loginEl.value || !loginEl.value.trim()) && me?.login) {
       loginEl.value = me.login;
@@ -363,7 +371,7 @@
       meEl.textContent = `${fmt(me.name)} (${fmt(me.login)}) · roles=[${r}] · is_admin=${!!me.is_admin}`;
     }
 
-    const w = await apiFetch(`/api/works/${workId}`);
+    const w = await apiFetch(apiUrl(`/api/works/${workId}`));
     const work = w.work ? w.work : w;
 
     renderWork(work);

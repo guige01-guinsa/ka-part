@@ -68,14 +68,22 @@
     return { "X-User-Login": login };
   }
 
+  function apiUrl(path) {
+    if (typeof path !== "string") return path;
+    if (path.startsWith("/api") && location.hostname === "ka-part.com") {
+      return `https://www.ka-part.com${path}`;
+    }
+    return path;
+  }
+
   async function apiGet(url) {
     const login = (elLogin.value || "").trim() || "admin";
-    let finalUrl = url;
+    let finalUrl = apiUrl(url);
     if (login) {
       try {
-        const u = new URL(url, location.origin);
+        const u = new URL(finalUrl, location.origin);
         if (!u.searchParams.get("login")) u.searchParams.set("login", login);
-        finalUrl = u.pathname + u.search + u.hash;
+        finalUrl = apiUrl(u.pathname + u.search + u.hash);
       } catch (_) {}
     }
     const res = await fetch(finalUrl, { headers: headerLogin() });
@@ -91,12 +99,12 @@
 
   async function apiPost(url, body) {
     const login = (elLogin.value || "").trim() || "admin";
-    let finalUrl = url;
+    let finalUrl = apiUrl(url);
     if (login) {
       try {
-        const u = new URL(url, location.origin);
+        const u = new URL(finalUrl, location.origin);
         if (!u.searchParams.get("login")) u.searchParams.set("login", login);
-        finalUrl = u.pathname + u.search + u.hash;
+        finalUrl = apiUrl(u.pathname + u.search + u.hash);
       } catch (_) {}
     }
     const res = await fetch(finalUrl, {
