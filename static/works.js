@@ -275,27 +275,21 @@
         const key = b.getAttribute("data-quick") || "ALL";
 
         // UI 키 → API mode
-        // TODAY → today, OPEN/URGENT/DONE/ALL 은 서버가 지원하는지 불확실하니
-        // 가장 안전한 전략: mode는 all/today만 쓰고, 나머지는 q/status로 처리
+        // 서버는 mode=all|today|open|urgent|done 를 지원하므로 그대로 전달
         if (key === "TODAY") {
           state.mode = "today";
           elStatus.value = "";
         } else if (key === "DONE") {
-          state.mode = "all";
-          elStatus.value = "DONE";
+          state.mode = "done";
+          elStatus.value = "";
         } else if (key === "ALL") {
           state.mode = "all";
           elStatus.value = "";
         } else if (key === "OPEN") {
-          state.mode = "all";
-          // "미완료"는 서버 필터가 없을 수 있으니 status 빈칸 + q로는 불가
-          // 따라서: DONE 제외 목록이 필요하면 서버에 open 모드 구현이 맞다.
-          // 일단은 status 공란으로 전체를 보여주되, 사용자에게 힌트 제공.
+          state.mode = "open";
           elStatus.value = "";
         } else if (key === "URGENT") {
-          state.mode = "all";
-          // urgent 필터도 서버 지원이 불확실하니 일단 전체 호출
-          // (필요하면 /api/works?urgent=1 같은 옵션을 서버에 추가하는 게 정답)
+          state.mode = "urgent";
           elStatus.value = "";
         } else {
           state.mode = "all";
