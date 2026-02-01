@@ -132,22 +132,32 @@ def _ensure_bootstrap(conn: sqlite3.Connection) -> None:
     user1_id = conn.execute("SELECT id FROM users WHERE login='user1'").fetchone()
     role_id = lambda code: conn.execute("SELECT id FROM roles WHERE code=?", (code,)).fetchone()
 
-    if admin_id:
+    def _row_id(row):
+        if not row:
+            return None
+        # sqlite3 without row_factory returns tuples
+        return row[0] if isinstance(row, (tuple, list)) else row.get("id")
+
+    admin_uid = _row_id(admin_id)
+    if admin_uid is not None:
         for rc in ("ADMIN", "CHIEF", "MANAGER"):
             r = role_id(rc)
-            if r:
+            rid = _row_id(r)
+            if rid is not None:
                 conn.execute(
                     "INSERT OR IGNORE INTO user_roles(user_id, role_id) VALUES(?, ?)",
-                    (admin_id["id"], r["id"]),
+                    (admin_uid, rid),
                 )
 
-    if user1_id:
+    user1_uid = _row_id(user1_id)
+    if user1_uid is not None:
         for rc in ("STAFF", "TECH"):
             r = role_id(rc)
-            if r:
+            rid = _row_id(r)
+            if rid is not None:
                 conn.execute(
                     "INSERT OR IGNORE INTO user_roles(user_id, role_id) VALUES(?, ?)",
-                    (user1_id["id"], r["id"]),
+                    (user1_uid, rid),
                 )
 
 
