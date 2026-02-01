@@ -499,6 +499,18 @@ def work_patch(request: Request, work_id: int, body: WorkPatchIn):
         raise HTTPException(status_code=403, detail="forbidden")
 
     with db_conn() as db:
+        # Ensure columns exist for legacy DBs
+        if not _has_col(db, "work_orders", "result_note"):
+            try:
+                db.execute("ALTER TABLE work_orders ADD COLUMN result_note TEXT")
+            except Exception:
+                pass
+        if not _has_col(db, "work_orders", "urgent"):
+            try:
+                db.execute("ALTER TABLE work_orders ADD COLUMN urgent INTEGER DEFAULT 0")
+            except Exception:
+                pass
+
         row = _get_work_row(db, work_id)
         if not row:
             raise HTTPException(status_code=404, detail="Work not found")

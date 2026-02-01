@@ -15,6 +15,20 @@
     return path;
   }
 
+  function withLogin(url) {
+    const login = getLogin();
+    if (!login) return url;
+    try {
+      const u = new URL(url, location.origin);
+      if (!u.searchParams.get("login")) {
+        u.searchParams.set("login", login);
+      }
+      return u.pathname + u.search + u.hash;
+    } catch (_) {
+      return url;
+    }
+  }
+
   function getWorkIdFromPath() {
     // /ui/works/{id}
     let m = location.pathname.match(/\/ui\/works\/(\d+)/);
@@ -201,7 +215,7 @@
         ? `<button class="btn danger" data-act="att-del" data-id="${id}">삭제</button>`
         : "";
 
-      const fileLink = apiUrl(`/api/attachments/file/${id}`);
+      const fileLink = withLogin(apiUrl(`/api/attachments/file/${id}`));
       return `
         <div class="card" style="display:flex; gap:10px; align-items:center; justify-content:space-between; margin:8px 0;">
           <div style="min-width:0;">
