@@ -1,0 +1,18 @@
+/* static/app.css - minimal UI skin */
+:root{
+  --bg:#0b1220; --card:#0f1a2e; --line:#24324f; --text:#e8eefc; --muted:#9fb0d0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,Apple SD Gothic Neo,Malgun Gothic,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:14px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+.btn{display:inline-block;border:1px solid var(--line);background:#13213b;color:var(--text);
+  padding:8px 12px;border-radius:12px;text-decoration:none;cursor:pointer;font-weight:700}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.muted{color:var(--muted)}
+.meta{color:var(--muted);font-size:13px;margin-top:3px}
+.tbl{width:100%;border-collapse:collapse;margin-top:8px}
+.tbl th,.tbl td{border-bottom:1px solid var(--line);padding:8px;text-align:left;font-size:13px}
+.toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);
+  background:#111c33;border:1px solid var(--line);padding:10px 14px;border-radius:14px}
+.hr{opacity:.9}

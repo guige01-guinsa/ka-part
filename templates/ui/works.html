@@ -1,0 +1,70 @@
+{% extends "ui/base.html" %}
+
+{% block content %}
+  <div>
+    <h1 style="margin:0;font-size:18px;">작업 목록(카드뷰)</h1>
+    <div class="small" style="margin-top:6px;">현장 동선: 목록 → 상세 → 완료</div>
+  </div>
+
+  <div class="hr"></div>
+
+  <div class="row" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+    <div style="flex:1;min-width:280px;">
+      <label>검색</label><br/>
+      <input id="q" style="width:100%;" placeholder="작업코드/제목/위치/분류 검색 (예: WO-2026, 전기실)" />
+    </div>
+
+    <div style="min-width:190px;">
+      <label>상태</label><br/>
+      <select id="status" style="width:100%;">
+        <option value="">전체</option>
+        <option value="NEW">NEW</option>
+        <option value="ASSIGNED">ASSIGNED</option>
+        <option value="IN_PROGRESS">IN_PROGRESS</option>
+        <option value="REVIEW">REVIEW</option>
+        <option value="APPROVED">APPROVED</option>
+        <option value="DONE">DONE</option>
+        <option value="CANCELED">CANCELED</option>
+      </select>
+    </div>
+
+    <div style="min-width:120px;">
+      <label>&nbsp;</label><br/>
+      <button class="pill" id="btnReload">새로고침</button>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="pill active" data-quick="TODAY">오늘 작업</button>
+    <button class="pill" data-quick="OPEN">미완료</button>
+    <button class="pill" data-quick="URGENT">긴급</button>
+    <button class="pill" data-quick="DONE">DONE</button>
+    <button class="pill" data-quick="ALL">전체</button>
+  </div>
+
+  <div class="hr"></div>
+
+  <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
+    <div style="border:1px solid #25324a;border-radius:14px;padding:10px 12px;background:rgba(0,0,0,.08);">
+      <div class="small">오늘</div><div style="font-size:20px;font-weight:900;margin-top:6px;" id="sToday">-</div>
+    </div>
+    <div style="border:1px solid #25324a;border-radius:14px;padding:10px 12px;background:rgba(0,0,0,.08);">
+      <div class="small">미완료</div><div style="font-size:20px;font-weight:900;margin-top:6px;" id="sOpen">-</div>
+    </div>
+    <div style="border:1px solid #25324a;border-radius:14px;padding:10px 12px;background:rgba(0,0,0,.08);">
+      <div class="small">긴급</div><div style="font-size:20px;font-weight:900;margin-top:6px;" id="sUrgent">-</div>
+    </div>
+    <div style="border:1px solid #25324a;border-radius:14px;padding:10px 12px;background:rgba(0,0,0,.08);">
+      <div class="small">DONE</div><div style="font-size:20px;font-weight:900;margin-top:6px;" id="sDone">-</div>
+    </div>
+  </div>
+
+  <div id="err" style="display:none;color:#fecaca;background:rgba(220,38,38,.12);border:1px solid rgba(220,38,38,.35);padding:10px 12px;border-radius:12px;margin-top:12px;white-space:pre-wrap;"></div>
+
+  <div id="cards" style="margin-top:14px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;"></div>
+  <div class="small" id="empty" style="margin-top:14px;display:none;">조건에 맞는 작업이 없습니다.</div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/works.js"></script>
+{% endblock %}

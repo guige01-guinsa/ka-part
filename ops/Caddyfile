@@ -1,0 +1,7 @@
+ka-part.com, www.ka-part.com {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:8000
+    log {
+        output file C:\ka-part\ops\caddy-access.log
+    }
+}

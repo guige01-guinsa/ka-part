@@ -1,0 +1,39 @@
+{% extends "ui/base.html" %}
+
+{% block content %}
+  <div>
+    <h1 style="margin:0;font-size:18px;">카카오 응답 로그</h1>
+    <div class="small" style="margin-top:6px;">전송 실패/대기 건을 재전송할 수 있습니다.</div>
+  </div>
+
+  <div class="hr"></div>
+
+  <div class="row" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+    <div style="min-width:140px;">
+      <label>상태</label><br/>
+      <select id="statusFilter" style="width:100%;">
+        <option value="">전체</option>
+        <option value="PENDING">PENDING</option>
+        <option value="SENT">SENT</option>
+        <option value="ERROR">ERROR</option>
+      </select>
+    </div>
+    <div style="min-width:220px;">
+      <label>검색(수신자/오류)</label><br/>
+      <input id="q" placeholder="전화번호 또는 오류 문자열" />
+    </div>
+    <div style="min-width:120px;">
+      <label>&nbsp;</label><br/>
+      <button class="pill" id="btnReload">새로고침</button>
+    </div>
+  </div>
+
+  <div class="hr"></div>
+
+  <div id="queueList"></div>
+  <div class="small" id="empty" style="margin-top:14px;display:none;">로그가 없습니다.</div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/admin_notifications.js"></script>
+{% endblock %}

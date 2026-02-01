@@ -1,0 +1,36 @@
+{% extends "ui/base.html" %}
+
+{% block title %}작업 상세{% endblock %}
+
+{% block body %}
+  <div class="card">
+    <div class="between">
+      <div>
+        <h1 style="margin:0;font-size:18px;">작업 상세</h1>
+        <div class="small" style="margin-top:6px;">현장 기록은 상세에서 완결됩니다.</div>
+      </div>
+
+      <div class="row" style="gap:10px;">
+        <div class="small">login: <b>{{ login }}</b></div>
+        <a class="btn btnGhost" href="/ui/works?login={{ login }}">목록으로</a>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+
+    <div id="err" class="err" style="display:none;"></div>
+
+    <!-- work_detail.js 렌더 영역 -->
+    <div id="detailRoot">
+      <div class="small">불러오는 중…</div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    window.UI_LOGIN = {{ (login or 'admin')|tojson }};
+    window.WORK_ID = {{ work_id|default(0) }};
+  </script>
+  <script src="/static/work_detail.js"></script>
+{% endblock %}

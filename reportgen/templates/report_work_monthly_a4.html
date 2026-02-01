@@ -1,0 +1,306 @@
+<!-- 파일명: reportgen/templates/report_work_monthly_a4.html  (Jinja2 완성본) -->
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>월간 작업 실적 보고서 (A4)</title>
+  <style>
+    @page { size: A4; margin: 12mm; }
+    html, body { height: 100%; }
+    body{
+      font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","Apple SD Gothic Neo",
+                   "Segoe UI",Roboto,Helvetica,Arial,"Noto Sans KR",sans-serif;
+      color:#111; font-size:12px; line-height:1.35;
+    }
+    .wrap{ width:100%; }
+    .title-row{
+      display:grid; grid-template-columns:1fr auto; gap:10px; align-items:end;
+      border-bottom:2px solid #111; padding-bottom:8px; margin-bottom:10px;
+    }
+    .h1{ font-size:18px; font-weight:900; letter-spacing:-0.3px; }
+    .meta{ text-align:right; font-size:11px; color:#333; }
+    .meta div{ margin:1px 0; }
+
+    .grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .grid-3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+
+    .box{ border:1px solid #222; border-radius:6px; padding:8px; }
+    .box-title{
+      font-weight:900; font-size:12px; margin-bottom:6px;
+      display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+    }
+    .box-sub{ font-size:11px; color:#444; font-weight:600; }
+
+    .kpi{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:10px; }
+    .kpi .tile{ border:1px solid #222; border-radius:8px; padding:8px; min-height:54px; }
+    .kpi .label{ font-size:10.5px; color:#444; font-weight:700; }
+    .kpi .value{ font-size:18px; font-weight:900; margin-top:2px; }
+    .unit{ font-size:10px; color:#444; font-weight:700; margin-left:3px; }
+
+    table{ border-collapse:collapse; width:100%; }
+    th, td{ border:1px solid #222; padding:4px 6px; vertical-align:top; }
+    th{ background:#f2f2f2; font-weight:900; font-size:11px; text-align:left; }
+    td{ font-size:11px; }
+    .right{ text-align:right; }
+    .center{ text-align:center; }
+
+    .foot{
+      margin-top:8px; font-size:10.5px; color:#444;
+      display:flex; justify-content:space-between;
+      border-top:1px dashed #888; padding-top:6px;
+    }
+
+    .no-break{ break-inside:avoid; page-break-inside:avoid; }
+    .mt-10{ margin-top:10px; }
+    .muted{ color:#555; }
+    .tag{
+      display:inline-block; border:1px solid #333; border-radius:999px;
+      padding:1px 6px; font-size:10px; font-weight:800; margin-left:6px;
+    }
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <div class="title-row">
+    <div>
+      <div class="h1">월간 작업 실적 보고서 <span class="tag">내부용</span></div>
+      <div class="muted" style="margin-top:2px;">
+        보고기간: <b>{{ period_label }}</b>
+        ({{ date_from }} ~ {{ date_to_exclusive }}) / 작성부서: {{ dept_name }}
+      </div>
+    </div>
+    <div class="meta">
+      <div>단지명: <b>{{ site_name }}</b></div>
+      <div>작성일: {{ generated_at }}</div>
+      <div>승인: 관리소장 {{ approver_name }}</div>
+    </div>
+  </div>
+
+  <!-- KPI -->
+  <div class="kpi no-break">
+    <div class="tile">
+      <div class="label">총 완료 작업</div>
+      <div class="value">{{ kpi.total_done }}<span class="unit">건</span></div>
+    </div>
+    <div class="tile">
+      <div class="label">점검 발생 작업</div>
+      <div class="value">{{ kpi.from_inspection }}<span class="unit">건</span></div>
+    </div>
+    <div class="tile">
+      <div class="label">민원 발생 작업</div>
+      <div class="value">{{ kpi.from_complaint }}<span class="unit">건</span></div>
+    </div>
+    <div class="tile">
+      <div class="label">긴급 작업</div>
+      <div class="value">{{ kpi.emergency_cnt }}<span class="unit">건</span></div>
+    </div>
+  </div>
+
+  <div class="grid-3 no-break">
+    <div class="box">
+      <div class="box-title">리드타임(생성→완료) <span class="box-sub">평균</span></div>
+      <div style="font-size:18px; font-weight:900;">
+        {{ kpi.avg_lead_days }}<span class="unit">일</span>
+      </div>
+      <div class="muted" style="margin-top:4px;">완료일 기준 집계</div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">반려 작업 <span class="box-sub">기간 내 1회 이상</span></div>
+      <div style="font-size:18px; font-weight:900;">
+        {{ kpi.rejected_work_cnt }}<span class="unit">건</span>
+      </div>
+      <div class="muted" style="margin-top:4px;">REVIEW/APPROVE 반려 이벤트 기준</div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">재작업 <span class="box-sub">반려 후 진행 복귀</span></div>
+      <div style="font-size:18px; font-weight:900;">
+        {{ kpi.rework_cnt }}<span class="unit">건</span>
+      </div>
+      <div class="muted" style="margin-top:4px;">STATUS_CHANGE → IN_PROGRESS</div>
+    </div>
+  </div>
+
+  <!-- Aggregations -->
+  <div class="grid-2 mt-10">
+    <div class="box no-break">
+      <div class="box-title">작업 유형별 실적</div>
+      <table>
+        <thead>
+          <tr><th>유형</th><th class="right">건수</th></tr>
+        </thead>
+        <tbody>
+          {% if by_source_type and by_source_type|length > 0 %}
+            {% for r in by_source_type %}
+              <tr>
+                <td>{{ r.label }}</td>
+                <td class="right">{{ r.cnt }}</td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr><td colspan="2" class="center muted">데이터 없음</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box no-break">
+      <div class="box-title">설비 분류별 실적</div>
+      <table>
+        <thead>
+          <tr><th>분류</th><th class="right">건수</th></tr>
+        </thead>
+        <tbody>
+          {% if by_category and by_category|length > 0 %}
+            {% for r in by_category %}
+              <tr>
+                <td>{{ r.category_name or "-" }}</td>
+                <td class="right">{{ r.cnt }}</td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr><td colspan="2" class="center muted">데이터 없음</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid-2 mt-10">
+    <div class="box no-break">
+      <div class="box-title">위치별 실적 <span class="box-sub">공용부</span></div>
+      <table>
+        <thead>
+          <tr><th>위치</th><th class="right">건수</th></tr>
+        </thead>
+        <tbody>
+          {% if by_common_location and by_common_location|length > 0 %}
+            {% for r in by_common_location %}
+              <tr>
+                <td>{{ r.location_name }}</td>
+                <td class="right">{{ r.cnt }}</td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr><td colspan="2" class="center muted">데이터 없음</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box no-break">
+      <div class="box-title">담당자별 실적</div>
+      <table>
+        <thead>
+          <tr><th>담당</th><th class="right">완료</th><th class="right">평균 처리일</th></tr>
+        </thead>
+        <tbody>
+          {% if by_assignee and by_assignee|length > 0 %}
+            {% for r in by_assignee %}
+              <tr>
+                <td>{{ r.assignee_name or "-" }}</td>
+                <td class="right">{{ r.done_cnt }}</td>
+                <td class="right">{{ r.avg_lead_days }}</td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr><td colspan="3" class="center muted">데이터 없음</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Procurement -->
+  <div class="box mt-10 no-break">
+    <div class="box-title">구매 연계 실적</div>
+    <table>
+      <thead>
+        <tr>
+          <th>구분</th>
+          <th class="right">값</th>
+          <th>비고</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>구매 연계 완료 작업</td>
+          <td class="right">{{ proc.done_with_pr_cnt }} 건</td>
+          <td>PR 연결 기준(취소 제외)</td>
+        </tr>
+        <tr>
+          <td>발주 금액 합계</td>
+          <td class="right">{{ proc.total_po_amount }} 원</td>
+          <td>보고기간 내 PO 발주일 기준</td>
+        </tr>
+        <tr>
+          <td>상위 구매 품목(Top3)</td>
+          <td class="right">{{ proc.top_items_amount_sum }} 원</td>
+          <td class="muted">{{ proc.top_items_labels }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Top works -->
+  <div class="box mt-10">
+    <div class="box-title">주요 작업 상세 (최근 완료 Top {{ top_works_limit }})</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 12%;">작업코드</th>
+          <th style="width: 14%;">위치</th>
+          <th style="width: 10%;">분류</th>
+          <th>작업내용 요약</th>
+          <th style="width: 10%;">담당</th>
+          <th style="width: 10%;">완료일</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if top_works and top_works|length > 0 %}
+          {% for r in top_works %}
+            <tr>
+              <td>{{ r.work_code }}</td>
+              <td>{{ r.location_name or "-" }}</td>
+              <td>{{ r.category_name or "-" }}</td>
+              <td>{{ r.title or "-" }}</td>
+              <td class="center">{{ r.assignee_name or "-" }}</td>
+              <td class="center">{{ r.completed_date or "-" }}</td>
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="6" class="center muted">데이터 없음</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+    <div class="muted" style="margin-top:6px;">
+      ※ 각 작업은 시스템에서 사진/측정값/이력(Event)으로 역추적 가능해야 함.
+    </div>
+  </div>
+
+  <!-- Notes -->
+  <div class="grid-2 mt-10 no-break">
+    <div class="box">
+      <div class="box-title">특이사항</div>
+      <div style="min-height: 72px; white-space: pre-wrap;">{{ notes.special }}</div>
+    </div>
+    <div class="box">
+      <div class="box-title">다음 달 중점 관리</div>
+      <div style="min-height: 72px; white-space: pre-wrap;">{{ notes.next_focus }}</div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="foot">
+    <div>집계 기준: status=DONE & completed_at(완료일) / 반려·재작업은 events 기반</div>
+    <div>문서번호: {{ doc_no }}</div>
+  </div>
+
+</div>
+</body>
+</html>

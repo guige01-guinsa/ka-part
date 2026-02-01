@@ -1,0 +1,37 @@
+{% extends "ui/base.html" %}
+
+{% block content %}
+  <div>
+    <h1 style="margin:0;font-size:18px;">알림 템플릿 관리</h1>
+    <div class="small" style="margin-top:6px;">이벤트 키별 템플릿/메시지 포맷을 관리합니다.</div>
+  </div>
+
+  <div class="hr"></div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+    <div>
+      <h3 style="margin:0 0 8px 0;font-size:14px;">템플릿 목록</h3>
+      <div id="tplList"></div>
+    </div>
+    <div>
+      <h3 style="margin:0 0 8px 0;font-size:14px;">템플릿 등록/수정</h3>
+      <div class="small">event_key는 대문자 사용 권장</div>
+      <div style="margin-top:10px;display:grid;gap:8px;">
+        <input id="eventKey" placeholder="EVENT_KEY (예: WORK_STATUS)" />
+        <input id="templateCode" placeholder="템플릿 코드" />
+        <select id="enabled">
+          <option value="1">활성</option>
+          <option value="0">비활성</option>
+        </select>
+        <textarea id="messageFormat" rows="4" style="width:100%;background:#0b1528;color:#e5e7eb;border:1px solid #25324a;border-radius:12px;padding:10px 12px;"></textarea>
+        <div class="small">{title} / {message} / {work_id} 변수를 사용할 수 있습니다.</div>
+        <button class="pill" id="btnSave">저장</button>
+        <div class="small" id="msg"></div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/admin_templates.js"></script>
+{% endblock %}

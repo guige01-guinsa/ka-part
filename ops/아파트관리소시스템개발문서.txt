@@ -1,0 +1,2056 @@
+
+1. 업무 범위(도메인) 정의
+1.1 점검 도메인(최우선)
+
+법정점검/자체점검 체크리스트 운영
+
+측정값 입력(누설전류, 절연저항, 열화상 판정 등)
+
+사진·PDF 첨부를 통한 증빙
+
+이상 발견 시 작업(WorkOrder) 자동 생성
+
+점검/조치 이력 타임라인 제공
+
+1.2 구매 도메인(차순위)
+
+품의(기안) → 구매요청(PR) → 견적(RFQ) → 발주(PO) → 납품/검수(GR) → 정산(비용처리)
+
+작업(WorkOrder)과 구매 문서를 연결하여 “필요–집행–결과”를 한 줄로 묶음
+
+품목/업체/단가 히스토리로 재구매 의사결정을 자동화
+
+2. 사용자 및 권한(내부 운영 기준)
+2.1 역할
+
+시설기사: 점검 수행/기록, 작업 수행/결과 입력, 구매요청 초안
+
+시설과장: 배정/검토, 우선순위·리스크 관리, 구매요청 검토
+
+관리소장: 승인(종결), 대외 제출물 확정(내부 보고 포함)
+
+경리(지원): 계약·정산 문서 관리(구매 프로세스 후단 중심)
+
+2.2 권한 원칙
+
+삭제 금지(감사 리스크) → 상태전환(취소/반려/비활성)로 대체
+
+완료/승인 단계는 증빙(사진·측정·첨부) 없이는 불가(정책 강제 가능)
+
+모든 변경은 Event(이력)로 남겨 “사람 대신 기록이 증명”하도록 한다
+
+3. 위치체계(Location) 표준(확정본)
+3.1 세대 기준
+
+동 / 층 / 실(호)
+예: 101동 / 12층 / 1203호
+
+3.2 공용부 기준(사내 표준 코드)
+
+전기실
+
+펌프실
+
+저수조실
+
+열교환기실
+
+승강기기계실
+
+창고1
+
+창고2
+
+주차장1
+
+주차장2
+
+4. 핵심 개념 모델(데이터 개체)
+4.1 마스터(기준) 개체
+
+Location: 세대/공용부 구분, 표준명, 코드, 상위-하위 구조(동→층→실)
+
+Asset(설비): 설비코드, 위치, 분류(전기/소방/기계/승강기…), 중요도, 점검주기
+
+ChecklistTemplate(점검 템플릿): 항목/판정기준/필수측정/필수사진 규칙
+
+Vendor/Item(업체/품목): 단가, 리드타임, 이력
+
+4.2 트랜잭션(업무) 개체 — 시스템의 골격
+
+Inspection(점검): 대상(Asset/Location), 템플릿, 결과, 판정, 수행자, 일시
+
+Measurement(측정값): 점검에 종속(값/단위/기준/판정)
+
+WorkOrder(작업): 점검/민원/정비를 통합하는 “업무 단위”
+
+Procurement(PR/RFQ/PO/GR): 구매 흐름 문서들(상태 기반)
+
+Attachment(첨부): 사진/PDF/견적서/성적서, 해시/원본명/업로더/시간
+
+Event(이력): 생성/수정/상태변경/승인/반려/첨부/배정 등 모든 행위 로그
+
+5. 프로세스(업무 흐름) 개념 설계
+5.1 점검 → 작업 생성(핵심 루프)
+
+점검계획(주기/대상) 생성
+
+현장 점검 입력(체크리스트 + 측정값 + 사진)
+
+판정이 “주의/불량”이면 WorkOrder 자동 생성(또는 수동 생성)
+
+작업 배정(기사/외주)
+
+조치 결과 입력(사진/부품/공수/소요시간)
+
+검토(과장) → 승인(소장)
+
+작업 실적 보고 자동 집계
+
+5.2 작업 → 구매 연계(차순위 핵심)
+
+작업 중 “부품 교체/자재 필요” 발생 시 구매요청(PR) 생성
+
+PR은 WorkOrder와 1:1 또는 1:N 연결
+
+발주/납품/검수 단계가 완료되면 WorkOrder는 “자재 수급 완료” 상태로 전환 가능
+
+6. 보고서(최우선: 작업 실적) 개념 설계
+6.1 작업 실적 보고서의 집계 축(기본 KPI)
+
+기간: 일/주/월
+
+위치: 동/공용부(전기실 등)
+
+분류: 전기/소방/승강기/기계/건축/통신
+
+상태: 완료/진행/보류/반려
+
+작업유형: 점검발생/민원발생/정기정비/긴급조치
+
+인력: 담당자별 처리건수, 평균 처리시간
+
+비용: 구매 연계된 건의 비용(가능 범위에서)
+
+6.2 “보고서가 거짓말하지 않게” 만드는 규칙
+
+WorkOrder 완료 조건:
+
+결과 서술 1줄 이상
+
+사진 최소 1장(정책값)
+
+필요 시 측정값/첨부 필수(템플릿 기반)
+
+이력(Event)에서 자동으로 “진행 타임라인”을 생성하여 보고서에 반영
+
+7. 화면(UX) 개념 구조 — 내부 사용성 최적화
+
+통합 검색 홈(핵심)
+
+“위치/설비/작업/점검/구매” 단일 검색창
+
+결과는 카드뷰, 즉시 신규 작업/점검 생성 버튼
+
+점검 수행 화면
+
+템플릿 기반 체크
+
+측정값 입력(단위/기준 자동 표시)
+
+사진 촬영/첨부(모바일 우선)
+
+작업 상세(WorkOrder)
+
+상태, 담당, 원인(점검 링크), 결과, 첨부, 이력 타임라인
+
+구매 대시보드
+
+PR 대기/반려/승인/발주/납품/검수 상태 보드
+
+WorkOrder와 연결된 구매만 필터
+
+보고서 센터
+
+작업 실적(기본)
+
+점검 실적(보조)
+
+A4 출력 템플릿(내부 결재/보관용)
+
+8. 비기능/감사/보안 정책(개념)
+
+데이터 보존: 원본 첨부는 해시로 무결성 확보
+
+감사 대응: 삭제 대신 상태전환, 모든 변경 Event로 자동 적재
+
+표준화: 템플릿(점검/보고/구매)을 “문서”가 아니라 “데이터”로 관리
+
+9. MVP(최소 구현 범위) — 우선순위 반영
+Phase 1 (점검·작업·실적)
+
+Location, Asset
+
+ChecklistTemplate, Inspection, Measurement
+
+WorkOrder, Attachment, Event
+
+작업 실적 보고(월간 1종)
+
+Phase 2 (구매 연계)
+
+PR/RFQ/PO/GR 기본 상태흐름
+
+WorkOrder ↔ PR 링크
+
+품목/업체 단가 히스토리
+
+
+1. 보고서 개요
+
+보고서 명: 월간 작업 실적 보고서
+
+작성 주기: 월 1회 (필요 시 주/분기 확장 가능)
+
+작성 대상 데이터: WorkOrder + Event + Attachment
+
+작성 목적
+
+관리소 내부 업무 가시화
+
+입대의·감사 대비용 근거 데이터 확보
+
+인력·업무량·위험요소의 정량적 판단
+
+2. 보고서 기본 정보 영역 (Header)
+항목	설명
+보고기간	YYYY년 MM월
+단지명	○○아파트
+작성일	자동 생성
+작성부서	관리사무소
+승인자	관리소장
+총 작업 건수	기간 내 완료 기준
+
+3. 핵심 집계 요약 (Summary KPI)
+
+첫 페이지 상단에 반드시 위치
+
+지표	정의
+총 작업 건수	완료 상태 WorkOrder 수
+점검 발생 작업	점검(Inspection)에서 파생된 작업
+민원 발생 작업	민원 접수에서 파생된 작업
+긴급 작업	긴급 플래그가 있는 작업
+평균 처리일	생성 → 완료까지 평균 소요일
+재작업 건수	반려/재작업 이력 보유 작업
+4. 작업 분류별 실적
+4.1 작업 유형별
+작업유형	건수
+점검 후 조치	
+민원 조치	
+정기 정비	
+긴급 조치	
+기타	
+4.2 설비 분류별
+분류	건수
+전기	
+소방	
+승강기	
+기계/설비	
+건축	
+통신	
+
+5. 위치(Location) 기준 실적
+5.1 세대 기준
+동	건수
+101동	
+102동	
+…	
+5.2 공용부 기준
+위치	건수
+전기실	
+펌프실	
+저수조실	
+열교환기실	
+승강기기계실	
+창고1 / 창고2	
+주차장1 / 주차장2	
+
+이 표는 향후 “위험 집중 구간” 분석의 출발점이 된다.
+
+6. 담당자별 처리 실적
+담당자	완료 건수	평균 처리일
+홍길동		
+김○○		
+…		
+
+목적: 평가가 아니라 업무 편중·과부하 판단
+
+7. 구매 연계 작업 실적 (2순위 도메인 반영)
+항목	건수
+구매 연계 작업	
+자재 교체 작업	
+외주 발생 작업	
+총 구매 연계 금액	
+
+점검 → 작업 → 구매 → 비용
+이 흐름이 숫자로 보이기 시작하는 지점
+
+8. 주요 작업 상세 목록 (근거 영역)
+
+보고서의 신뢰를 담보하는 핵심 영역
+
+No	작업ID	위치	분류	작업내용 요약	담당	완료일
+1	WO-2026-0012	전기실	전기	AISS 접점 열화 조치	홍길동	
+2	…					
+
+※ 각 작업은 시스템에서 사진/측정값/이력으로 역추적 가능해야 함
+
+9. 특이사항 및 관리 의견 (서술 영역)
+
+반복 발생 작업
+
+위험도 상승 설비
+
+다음 달 중점 관리 대상
+
+구매/교체 예정 사항
+
+이 영역은 사람의 판단이 들어가는 유일한 구간이다.
+나머지는 모두 데이터가 말한다.
+
+
+ERD(테이블 설계 초안) v1.0
+
+범위: 점검(1순위) + 구매(2순위) + 작업실적(보고 1순위) + 내부 권한/이력/첨부
+원칙: 모든 집계의 기준은 work_orders(작업)이며, 모든 행위는 events(이력)로 남긴다.
+
+1) 테이블 목록(요약)
+마스터(기준)
+
+users, roles, user_roles
+
+locations
+
+assets
+
+categories (전기/소방/승강기…)
+
+vendors, items
+
+점검(Inspection)
+
+checklist_templates, checklist_template_items
+
+inspections
+
+inspection_answers
+
+measurements
+
+작업(WorkOrder) + 실적
+
+work_orders
+
+work_assignments(선택)
+
+work_time_logs(선택)
+
+events(필수)
+
+attachments(필수)
+
+work_links(선택: 작업 간 연관)
+
+구매(Procurement)
+
+purchase_requests(PR)
+
+purchase_request_lines
+
+rfqs(견적요청), rfq_quotes(견적서)
+
+purchase_orders(PO), purchase_order_lines
+
+goods_receipts(GR), goods_receipt_lines
+
+2) 핵심 ERD 관계(텍스트 다이어그램)
+
+locations 1 ── N assets
+
+assets 1 ── N inspections
+
+checklist_templates 1 ── N inspections
+
+inspections 1 ── N inspection_answers
+
+inspections 1 ── N measurements
+
+inspections 0..1 ── N work_orders (점검에서 작업 생성)
+
+work_orders 1 ── N events
+
+work_orders 1 ── N attachments
+
+work_orders 0..N ── 0..N purchase_requests (연계 테이블 또는 FK로 단순화 가능)
+
+purchase_requests 1 ── N purchase_request_lines
+
+purchase_orders 1 ── N purchase_order_lines
+
+goods_receipts 1 ── N goods_receipt_lines
+
+3) 테이블 정의(필수 컬럼 중심)
+
+아래 타입 표기는 구현 DB에 맞게 변환하면 됩니다.
+
+id: BIGINT/UUID (권장: BIGINT autoinc 또는 UUID)
+
+ts: TIMESTAMP WITH TIME ZONE
+
+text: TEXT / VARCHAR
+
+num: NUMERIC
+
+3.1 사용자/권한
+users
+
+id (PK)
+
+name (text)
+
+login (text, UNIQUE) — 사번/아이디
+
+phone (text, nullable)
+
+is_active (bool, default true)
+
+created_at (ts), updated_at (ts)
+
+roles
+
+id (PK)
+
+code (text, UNIQUE) — TECH, LEAD, MANAGER, ACCOUNTING
+
+name (text)
+
+user_roles
+
+user_id (FK → users.id)
+
+role_id (FK → roles.id)
+
+PK(user_id,role_id)
+
+3.2 위치/설비(자산)
+locations
+
+id (PK)
+
+type (text) — HOUSEHOLD / COMMON
+
+code (text, UNIQUE) — 예: LOC_101_12_1203, LOC_ELECROOM
+
+name (text) — 표시명(전기실, 펌프실…)
+
+building (text, nullable) — 동(101동 등)
+
+floor (text, nullable) — 12층 등
+
+unit (text, nullable) — 1203호
+
+parent_id (FK → locations.id, nullable) — 동→층→실 계층
+
+is_active (bool)
+
+created_at (ts)
+
+공용부 표준 코드 예시
+LOC_ELECROOM, LOC_PUMPROOM, LOC_TANKROOM, LOC_HEXROOM, LOC_ELEV_MR, LOC_STORAGE1, LOC_STORAGE2, LOC_PARK1, LOC_PARK2
+
+categories
+
+id (PK)
+
+code (text, UNIQUE) — ELEC, FIRE, ELEV, MECH, ARCH, COMM
+
+name (text)
+
+assets
+
+id (PK)
+
+asset_code (text, UNIQUE) — 설비관리번호
+
+name (text)
+
+category_id (FK → categories.id)
+
+location_id (FK → locations.id)
+
+manufacturer (text, nullable)
+
+model (text, nullable)
+
+installed_on (date, nullable)
+
+criticality (int) — 1~5
+
+inspection_cycle_days (int, nullable)
+
+is_active (bool)
+
+created_at (ts), updated_at (ts)
+
+3.3 점검 템플릿/점검 결과
+checklist_templates
+
+id (PK)
+
+code (text, UNIQUE) — ELEC_MONTHLY, FIRE_QUARTERLY 등
+
+name (text)
+
+category_id (FK → categories.id)
+
+scope_type (text) — ASSET / LOCATION (설비 기준/위치 기준 점검)
+
+requires_photo (bool, default true)
+
+requires_signature (bool, default false) — 내부용이면 보통 false
+
+is_active (bool)
+
+created_at (ts)
+
+checklist_template_items
+
+id (PK)
+
+template_id (FK → checklist_templates.id)
+
+seq (int)
+
+item_text (text)
+
+answer_type (text) — OK_NG, OK_WARN_NG, TEXT, NUMBER
+
+is_required (bool)
+
+hint (text, nullable)
+
+inspections
+
+id (PK)
+
+template_id (FK → checklist_templates.id)
+
+category_id (FK → categories.id)
+
+scope_type (text) — ASSET/LOCATION
+
+asset_id (FK → assets.id, nullable)
+
+location_id (FK → locations.id, nullable)
+
+performed_by (FK → users.id)
+
+performed_at (ts)
+
+overall_result (text) — PASS / WARN / FAIL
+
+summary_note (text, nullable)
+
+created_at (ts)
+
+제약(중요)
+
+scope_type='ASSET'이면 asset_id NOT NULL
+
+scope_type='LOCATION'이면 location_id NOT NULL
+
+inspection_answers
+
+id (PK)
+
+inspection_id (FK → inspections.id)
+
+template_item_id (FK → checklist_template_items.id)
+
+answer_text (text, nullable)
+
+answer_num (num, nullable)
+
+result (text, nullable) — OK/WARN/NG
+
+note (text, nullable)
+
+measurements
+
+id (PK)
+
+inspection_id (FK → inspections.id)
+
+measure_type (text) — LEAKAGE_CURRENT, INSULATION_RES, THERMAL_MAXTEMP 등
+
+value (num)
+
+unit (text)
+
+threshold (num, nullable)
+
+judgement (text) — OK/WARN/NG
+
+measured_at (ts)
+
+3.4 작업(WorkOrder) — 보고서의 기준
+work_orders
+
+id (PK)
+
+work_code (text, UNIQUE) — WO-2026-000123 (자동 증가 규칙)
+
+source_type (text) — INSPECTION / COMPLAINT / MAINTENANCE / OTHER
+
+source_id (BIGINT, nullable) — 예: inspections.id (다형 참조; 또는 전용 FK 컬럼으로 분리 가능)
+
+category_id (FK → categories.id)
+
+asset_id (FK → assets.id, nullable)
+
+location_id (FK → locations.id, nullable)
+
+title (text)
+
+description (text, nullable)
+
+priority (int) — 1(긴급)~5
+
+is_emergency (bool)
+
+status (text) — NEW/ASSIGNED/IN_PROGRESS/REVIEW/APPROVED/DONE/HOLD/REJECTED/CANCELED
+
+requested_by (FK → users.id)
+
+assigned_to (FK → users.id, nullable) — 단일 담당(간단 운영)
+
+due_at (ts, nullable)
+
+started_at (ts, nullable)
+
+completed_at (ts, nullable)
+
+closed_at (ts, nullable)
+
+result_note (text, nullable)
+
+created_at (ts), updated_at (ts)
+
+작업 실적 집계 기준(권장): status='DONE' 또는 completed_at IS NOT NULL
+
+(선택) work_assignments — 다중 담당/교대가 필요할 때
+
+id (PK)
+
+work_order_id (FK → work_orders.id)
+
+user_id (FK → users.id)
+
+role_in_work (text) — LEAD/ASSIST
+
+assigned_at (ts)
+
+(선택) work_time_logs — 공수 집계가 필요할 때
+
+id (PK)
+
+work_order_id (FK → work_orders.id)
+
+user_id (FK → users.id)
+
+minutes (int)
+
+work_date (date)
+
+note (text, nullable)
+
+3.5 이력(Event) / 첨부(Attachment) — 감사 대응 코어
+events
+
+id (PK)
+
+entity_type (text) — WORK_ORDER/INSPECTION/PR/PO/...
+
+entity_id (BIGINT)
+
+event_type (text) — CREATE/UPDATE/STATUS_CHANGE/ASSIGN/COMMENT/APPROVE/REJECT/ATTACH_ADD/...
+
+actor_id (FK → users.id)
+
+from_status (text, nullable)
+
+to_status (text, nullable)
+
+note (text, nullable)
+
+created_at (ts)
+
+인덱스(필수)
+
+(entity_type, entity_id, created_at)
+
+attachments
+
+id (PK)
+
+entity_type (text)
+
+entity_id (BIGINT)
+
+file_name (text)
+
+file_path (text) — 저장 경로/키
+
+mime_type (text)
+
+file_size (bigint)
+
+sha256 (text) — 무결성(권장)
+
+uploaded_by (FK → users.id)
+
+uploaded_at (ts)
+
+인덱스(필수)
+
+(entity_type, entity_id)
+
+3.6 구매(Procurement) — 작업과 연결되는 문서 흐름
+vendors
+
+id (PK)
+
+name (text)
+
+phone (text, nullable)
+
+email (text, nullable)
+
+is_active (bool)
+
+items
+
+id (PK)
+
+sku (text, UNIQUE, nullable)
+
+name (text)
+
+spec (text, nullable)
+
+default_unit (text) — EA, M, SET…
+
+category_id (FK → categories.id, nullable)
+
+is_active (bool)
+
+purchase_requests (PR)
+
+id (PK)
+
+pr_code (text, UNIQUE) — PR-2026-000045
+
+work_order_id (FK → work_orders.id, nullable) — 핵심 연결
+
+requested_by (FK → users.id)
+
+status (text) — DRAFT/REVIEW/APPROVED/REJECTED/CANCELED/ORDERED
+
+need_by (date, nullable)
+
+note (text, nullable)
+
+created_at (ts), updated_at (ts)
+
+purchase_request_lines
+
+id (PK)
+
+pr_id (FK → purchase_requests.id)
+
+item_id (FK → items.id, nullable)
+
+item_name (text) — 자유 입력 허용(초기 운영)
+
+qty (num)
+
+unit (text)
+
+target_price (num, nullable)
+
+spec_note (text, nullable)
+
+rfqs (견적요청)
+
+id (PK)
+
+rfq_code (text, UNIQUE)
+
+pr_id (FK → purchase_requests.id)
+
+issued_by (FK → users.id)
+
+status (text) — SENT/RECEIVED/CLOSED
+
+created_at (ts)
+
+rfq_quotes (견적서)
+
+id (PK)
+
+rfq_id (FK → rfqs.id)
+
+vendor_id (FK → vendors.id)
+
+quote_amount (num)
+
+quote_file_attachment_id (FK → attachments.id, nullable)
+
+received_at (ts)
+
+note (text, nullable)
+
+purchase_orders (PO)
+
+id (PK)
+
+po_code (text, UNIQUE)
+
+pr_id (FK → purchase_requests.id)
+
+vendor_id (FK → vendors.id)
+
+ordered_by (FK → users.id)
+
+status (text) — ISSUED/DELIVERING/DELIVERED/CANCELED
+
+order_date (date)
+
+expected_date (date, nullable)
+
+total_amount (num, nullable)
+
+purchase_order_lines
+
+id (PK)
+
+po_id (FK → purchase_orders.id)
+
+item_id (FK → items.id, nullable)
+
+item_name (text)
+
+qty (num)
+
+unit (text)
+
+unit_price (num)
+
+line_amount (num)
+
+goods_receipts (GR) 납품/검수
+
+id (PK)
+
+gr_code (text, UNIQUE)
+
+po_id (FK → purchase_orders.id)
+
+received_by (FK → users.id)
+
+status (text) — RECEIVED/INSPECTED/REJECTED
+
+received_at (ts)
+
+note (text, nullable)
+
+goods_receipt_lines
+
+id (PK)
+
+gr_id (FK → goods_receipts.id)
+
+po_line_id (FK → purchase_order_lines.id)
+
+received_qty (num)
+
+accepted_qty (num)
+
+reject_reason (text, nullable)
+
+
+4) 필수 인덱스/제약(운영 품질을 좌우)
+공통
+
+모든 테이블: created_at 인덱스(대용량 대비 선택)
+
+상태 기반 목록: status 인덱스
+
+점검
+
+inspections(performed_at)
+
+inspections(asset_id, performed_at)
+
+measurements(inspection_id, measure_type)
+
+작업(보고서 핵심)
+
+work_orders(status, completed_at)
+
+work_orders(location_id, completed_at)
+
+work_orders(category_id, completed_at)
+
+work_orders(assigned_to, completed_at)
+
+events(entity_type, entity_id, created_at) 필수
+
+구매
+
+purchase_requests(status, created_at)
+
+purchase_requests(work_order_id) 핵심
+
+purchase_orders(vendor_id, order_date)
+
+5) 코드 체계(자동 번호) 권장 규칙
+
+WO-YYYY-######
+
+PR-YYYY-######
+
+PO-YYYY-######
+
+GR-YYYY-######
+
+번호 생성은 DB 시퀀스 + 연도 접두 조합이 가장 안정적입니다.
+
+WorkOrder 상태 다이어그램 v1.0
+
+목적: 작업 실적 보고서가 흔들리지 않도록, “상태 전이 규칙”을 먼저 못 박는다.
+핵심 원칙: 완료는 말이 아니라 근거(증빙) + 이력으로 성립한다.
+
+1) 상태(State) 정의
+상태	코드	의미
+신규	NEW	작업 생성됨(아직 배정 전)
+배정됨	ASSIGNED	담당자 지정 완료
+진행중	IN_PROGRESS	현장 조치/작업 수행 중
+검토요청	REVIEW	담당 완료 → 과장 검토 단계
+승인완료	APPROVED	소장 승인 완료(종결 전 단계)
+완료	DONE	실적 집계 기준 상태(완료일 확정)
+보류	HOLD	자재수급/외주대기 등 사유로 정지
+반려	REJECTED	검토/승인에서 반려(재작업 필요)
+취소	CANCELED	작업 자체 무효(삭제 대신 취소)
+
+실적 집계 기준(권장): DONE AND completed_at 존재
+(APPROVED까지만으로는 “실제 완료”를 보장하지 못함)
+
+2) 상태 전이(Transition) 규칙
+
+아래는 “허용되는 이동”만 나열한 화이트리스트입니다.
+
+기본 흐름
+
+NEW → ASSIGNED
+
+ASSIGNED → IN_PROGRESS
+
+IN_PROGRESS → REVIEW
+
+REVIEW → APPROVED
+
+APPROVED → DONE
+
+예외 흐름(현장 현실 반영)
+
+NEW → CANCELED
+
+ASSIGNED → HOLD / CANCELED
+
+IN_PROGRESS → HOLD
+
+HOLD → IN_PROGRESS (재개)
+
+REVIEW → REJECTED (과장 반려)
+
+REJECTED → IN_PROGRESS (재작업)
+
+APPROVED → REJECTED (소장 반려)
+
+REVIEW → IN_PROGRESS (담당자 자체 수정 필요)
+
+DONE → (원칙상 금지)
+
+단, 오류 수정이 필요하면 **DONE 취소가 아니라 “정정 이벤트”**로 처리(아래 5절)
+
+3) 전이 조건(Guard) — 완료를 지키는 잠금장치
+3.1 IN_PROGRESS → REVIEW 조건
+
+result_note(조치 결과) 필수
+
+attachments 최소 1건(현장사진) 필수
+(정책값으로 1~3장 설정 가능)
+
+점검발생 작업(source_type=INSPECTION)인 경우:
+
+관련 inspection_id 링크 존재(또는 source_id)
+
+필요 시 측정값/판정 포함(템플릿 규칙)
+
+3.2 REVIEW → APPROVED 조건(과장 검토)
+
+반려 사유 없이 검토 승인 이벤트 기록
+
+위험도/긴급 작업이면:
+
+“재발방지” 또는 “추가조치 계획” 필드 권장(선택)
+
+3.3 APPROVED → DONE 조건(실적 확정)
+
+completed_at 자동 기록
+
+완료 증빙(사진/첨부) 존재
+
+구매 연계가 있는 작업(purchase_requests 존재)인데 “자재 수급 미완료”면:
+
+DONE 불가, HOLD 유지
+(정책 옵션: 예외적으로 DONE 허용하려면 “임시조치 완료” 유형을 분리해야 함)
+
+4) 이벤트(Event) 타입 표준(로그가 곧 감사 대응)
+
+WorkOrder에서 발생하는 모든 변경은 events에 쌓입니다.
+
+이벤트	event_type	기록 시점
+생성	CREATE	작업 생성
+배정	ASSIGN	담당자 지정/변경
+상태변경	STATUS_CHANGE	상태 전이 때마다
+코멘트	COMMENT	내부 메모
+증빙추가	ATTACH_ADD	사진/문서 첨부
+검토승인	REVIEW_OK	과장 승인
+검토반려	REVIEW_REJECT	과장 반려
+소장승인	APPROVE_OK	소장 승인
+소장반려	APPROVE_REJECT	소장 반려
+보류	HOLD_SET	보류 전환
+보류해제	HOLD_CLEAR	보류 재개
+취소	CANCEL	취소 전환
+정정	AMEND	완료 후 정정 처리(5절)
+5) “완료 후 수정” 정책(현장 필수 룰)
+
+DONE 상태의 작업은 원칙적으로 되돌리지 않습니다.
+대신 정정(AMEND) 로 “기록의 진실성”을 보전합니다.
+
+정정 방식(권장)
+
+work_orders의 핵심 값은 수정 가능하되,
+
+수정 시 반드시:
+
+events에 AMEND 이벤트 남김
+
+변경 전/후 요약을 note에 기록
+
+첨부 변경(사진 추가 등)도 Event로 남김
+
+삭제는 흔적을 지워서 위험하지만, 정정은 흔적을 남겨서 안전합니다.
+
+6) 구매(Procurement) 연계 상태 규칙(작업 ↔ 구매)
+
+구매 연계가 생기는 순간, WorkOrder는 “작업이 아니라 공정”이 됩니다.
+
+권장 규칙
+
+구매요청(PR) 생성 시: work_orders.status는 유지(보통 IN_PROGRESS 또는 HOLD)
+
+PR 승인 후 발주(PO) 전: 필요 시 HOLD(자재대기)
+
+납품/검수(GR) 완료: HOLD → IN_PROGRESS 재개 가능
+
+최종 조치 완료 + 증빙 완료: REVIEW로 상신
+
+7) 보고서 집계 규칙(상태 기반)
+
+월간 작업 실적 보고서 집계 조건(기본)
+
+completed_at이 보고기간 내 AND status='DONE'
+
+보조 지표
+
+진행/대기 현황: status IN ('NEW','ASSIGNED','IN_PROGRESS','REVIEW','APPROVED','HOLD','REJECTED')
+
+반려 건수: 기간 내 events.event_type IN ('REVIEW_REJECT','APPROVE_REJECT') 집계
+
+작업 실적 보고서 집계 SQL 정의서 v1.0
+
+전제: ERD 초안의 테이블/컬럼 명을 그대로 사용합니다.
+기준: 실적 집계는 work_orders.status='DONE' AND completed_at 기준.
+
+0) 파라미터(기간)
+
+:date_from = 보고 시작일(예: 2026-01-01)
+
+:date_to = 보고 종료일(예: 2026-02-01) ※ 종료일은 미포함 권장
+
+-- 공통: 보고기간 내 완료 작업 (실적 기준)
+WITH done_works AS (
+  SELECT *
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT COUNT(*) AS total_done
+FROM done_works;
+
+1) 월간 요약 KPI (Summary)
+1.1 총 작업건수 / 점검발생 / 민원발생 / 긴급
+WITH done_works AS (
+  SELECT *
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  COUNT(*) AS total_done,
+  SUM(CASE WHEN source_type = 'INSPECTION' THEN 1 ELSE 0 END) AS from_inspection,
+  SUM(CASE WHEN source_type = 'COMPLAINT'  THEN 1 ELSE 0 END) AS from_complaint,
+  SUM(CASE WHEN is_emergency = TRUE OR priority = 1 THEN 1 ELSE 0 END) AS emergency_cnt
+FROM done_works;
+
+1.2 평균 처리일(생성→완료)
+WITH done_works AS (
+  SELECT created_at, completed_at
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  AVG(EXTRACT(EPOCH FROM (completed_at - created_at)) / 86400.0) AS avg_lead_days
+FROM done_works;
+
+2) 분류별/유형별 실적
+2.1 작업유형(source_type)별
+WITH done_works AS (
+  SELECT source_type
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  source_type,
+  COUNT(*) AS cnt
+FROM done_works
+GROUP BY source_type
+ORDER BY cnt DESC;
+
+2.2 설비 분류(category)별
+WITH done_works AS (
+  SELECT category_id
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  c.code AS category_code,
+  c.name AS category_name,
+  COUNT(*) AS cnt
+FROM done_works w
+LEFT JOIN categories c ON c.id = w.category_id
+GROUP BY c.code, c.name
+ORDER BY cnt DESC;
+
+3) 위치(Location) 기준 실적
+3.1 공용부/세대 구분 포함 집계
+WITH done_works AS (
+  SELECT location_id
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  l.type AS location_type,          -- HOUSEHOLD / COMMON
+  l.code AS location_code,
+  l.name AS location_name,
+  COUNT(*) AS cnt
+FROM done_works w
+LEFT JOIN locations l ON l.id = w.location_id
+GROUP BY l.type, l.code, l.name
+ORDER BY l.type, cnt DESC;
+
+3.2 세대(동) 기준 집계 (동/층/실 중 “동”만)
+WITH done_works AS (
+  SELECT location_id
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  l.building AS building,  -- 예: 101동
+  COUNT(*) AS cnt
+FROM done_works w
+JOIN locations l ON l.id = w.location_id
+WHERE l.type = 'HOUSEHOLD'
+GROUP BY l.building
+ORDER BY cnt DESC;
+
+4) 담당자별 실적
+4.1 담당자별 완료 건수
+
+단일 담당 컬럼(assigned_to) 기준
+
+WITH done_works AS (
+  SELECT assigned_to, created_at, completed_at
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  u.name AS assignee_name,
+  COUNT(*) AS done_cnt,
+  AVG(EXTRACT(EPOCH FROM (completed_at - created_at)) / 86400.0) AS avg_lead_days
+FROM done_works w
+LEFT JOIN users u ON u.id = w.assigned_to
+GROUP BY u.name
+ORDER BY done_cnt DESC;
+
+4.2 (선택) 다중 담당(work_assignments) 기준
+WITH done_works AS (
+  SELECT id, created_at, completed_at
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  u.name AS assignee_name,
+  COUNT(DISTINCT w.id) AS done_cnt
+FROM done_works w
+JOIN work_assignments wa ON wa.work_order_id = w.id
+JOIN users u ON u.id = wa.user_id
+GROUP BY u.name
+ORDER BY done_cnt DESC;
+
+5) 반려/재작업 지표 (Event 기반)
+5.1 기간 내 반려 건수(작업 기준)
+
+반려 이벤트가 1회 이상이면 “반려 작업 1건”으로 집계
+
+WITH period_events AS (
+  SELECT entity_id AS work_order_id
+  FROM events
+  WHERE entity_type = 'WORK_ORDER'
+    AND event_type IN ('REVIEW_REJECT','APPROVE_REJECT')
+    AND created_at >= :date_from
+    AND created_at <  :date_to
+)
+SELECT COUNT(DISTINCT work_order_id) AS rejected_work_cnt
+FROM period_events;
+
+5.2 재작업(반려 후 IN_PROGRESS로 돌아간 작업) 건수
+WITH rej AS (
+  SELECT entity_id AS work_order_id, MIN(created_at) AS first_reject_at
+  FROM events
+  WHERE entity_type = 'WORK_ORDER'
+    AND event_type IN ('REVIEW_REJECT','APPROVE_REJECT')
+    AND created_at >= :date_from
+    AND created_at <  :date_to
+  GROUP BY entity_id
+),
+back_to_progress AS (
+  SELECT e.entity_id AS work_order_id
+  FROM events e
+  JOIN rej r ON r.work_order_id = e.entity_id
+  WHERE e.entity_type = 'WORK_ORDER'
+    AND e.event_type = 'STATUS_CHANGE'
+    AND e.to_status = 'IN_PROGRESS'
+    AND e.created_at > r.first_reject_at
+)
+SELECT COUNT(DISTINCT work_order_id) AS rework_cnt
+FROM back_to_progress;
+
+6) 구매 연계 집계 (작업 ↔ PR ↔ PO)
+6.1 구매 연계 작업 건수(PR 연결)
+WITH done_works AS (
+  SELECT id
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  COUNT(DISTINCT w.id) AS done_with_pr_cnt
+FROM done_works w
+JOIN purchase_requests pr ON pr.work_order_id = w.id
+WHERE pr.status NOT IN ('CANCELED');
+
+6.2 보고기간 내 발주(PO) 금액 합계 (연계 작업 기준)
+
+PO가 보고기간 내 발주된 것만 집계(정산 기준은 별도 확장)
+
+WITH done_works AS (
+  SELECT id
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+),
+linked_pos AS (
+  SELECT po.*
+  FROM purchase_orders po
+  JOIN purchase_requests pr ON pr.id = po.pr_id
+  JOIN done_works w ON w.id = pr.work_order_id
+  WHERE po.order_date >= :date_from
+    AND po.order_date <  :date_to
+    AND po.status <> 'CANCELED'
+)
+SELECT
+  COALESCE(SUM(total_amount), 0) AS total_po_amount
+FROM linked_pos;
+
+6.3 품목별 구매 상위 N (작업 연계)
+WITH done_works AS (
+  SELECT id
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+),
+pos AS (
+  SELECT pol.item_name, pol.qty, pol.line_amount
+  FROM purchase_order_lines pol
+  JOIN purchase_orders po ON po.id = pol.po_id AND po.status <> 'CANCELED'
+  JOIN purchase_requests pr ON pr.id = po.pr_id
+  JOIN done_works w ON w.id = pr.work_order_id
+  WHERE po.order_date >= :date_from
+    AND po.order_date <  :date_to
+)
+SELECT
+  item_name,
+  SUM(qty) AS total_qty,
+  SUM(line_amount) AS total_amount
+FROM pos
+GROUP BY item_name
+ORDER BY total_amount DESC
+LIMIT 10;
+
+7) 보고서 “주요 작업 상세 목록” (A4 하단 표)
+
+보고서에 들어갈 컬럼을 그대로 뽑는 쿼리입니다.
+
+WITH done_works AS (
+  SELECT *
+  FROM work_orders
+  WHERE status = 'DONE'
+    AND completed_at >= :date_from
+    AND completed_at <  :date_to
+)
+SELECT
+  w.work_code,
+  l.name AS location_name,
+  c.name AS category_name,
+  w.title,
+  u.name AS assignee_name,
+  w.completed_at::date AS completed_date
+FROM done_works w
+LEFT JOIN locations l ON l.id = w.location_id
+LEFT JOIN categories c ON c.id = w.category_id
+LEFT JOIN users u ON u.id = w.assigned_to
+ORDER BY w.completed_at DESC, w.work_code DESC
+LIMIT 30;
+
+월간 작업 실적 보고서 A4 템플릿 (HTML/PDF) v1.0
+
+목표: 화면이 아니라 출력물이 주인공. A4 1장에 “요약 → 집계 → 근거”가 끝나야 합니다.
+구성: Header(기본정보) → KPI 요약 → 분류/위치/담당자 → 구매 연계 → 주요 작업 TOP 리스트 → 특이사항
+
+아래는 그대로 저장해서 인쇄(PDF 저장) 가능한 단일 HTML 템플릿입니다.
+
+1) 템플릿 파일: report_work_monthly_a4.html
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>월간 작업 실적 보고서 (A4)</title>
+  <style>
+    /* ===== Print setup ===== */
+    @page { size: A4; margin: 12mm; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo",
+                   "Segoe UI", Roboto, Helvetica, Arial, "Noto Sans KR", sans-serif;
+      color: #111;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    /* ===== Layout ===== */
+    .wrap { width: 100%; }
+    .title-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: end;
+      border-bottom: 2px solid #111;
+      padding-bottom: 8px;
+      margin-bottom: 10px;
+    }
+    .h1 { font-size: 18px; font-weight: 900; letter-spacing: -0.3px; }
+    .meta {
+      text-align: right;
+      font-size: 11px;
+      color: #333;
+    }
+    .meta div { margin: 1px 0; }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    .box {
+      border: 1px solid #222;
+      border-radius: 6px;
+      padding: 8px;
+    }
+    .box-title {
+      font-weight: 900;
+      font-size: 12px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+    }
+    .box-sub { font-size: 11px; color: #444; font-weight: 600; }
+
+    /* ===== KPI tiles ===== */
+    .kpi {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .kpi .tile {
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 8px;
+      min-height: 54px;
+    }
+    .kpi .label { font-size: 10.5px; color: #444; font-weight: 700; }
+    .kpi .value { font-size: 18px; font-weight: 900; margin-top: 2px; }
+    .kpi .unit  { font-size: 10px; color: #444; font-weight: 700; margin-left: 3px; }
+
+    /* ===== Tables ===== */
+    table { border-collapse: collapse; width: 100%; }
+    th, td {
+      border: 1px solid #222;
+      padding: 4px 6px;
+      vertical-align: top;
+    }
+    th {
+      background: #f2f2f2;
+      font-weight: 900;
+      font-size: 11px;
+      text-align: left;
+    }
+    td { font-size: 11px; }
+    .right { text-align: right; }
+    .center { text-align: center; }
+
+    /* ===== Footer note ===== */
+    .foot {
+      margin-top: 8px;
+      font-size: 10.5px;
+      color: #444;
+      display: flex;
+      justify-content: space-between;
+      border-top: 1px dashed #888;
+      padding-top: 6px;
+    }
+
+    /* ===== Keep 1 page ===== */
+    .no-break { break-inside: avoid; page-break-inside: avoid; }
+    .mt-8 { margin-top: 8px; }
+    .mt-10 { margin-top: 10px; }
+    .muted { color: #555; }
+    .tag {
+      display: inline-block;
+      border: 1px solid #333;
+      border-radius: 999px;
+      padding: 1px 6px;
+      font-size: 10px;
+      font-weight: 800;
+      margin-left: 6px;
+    }
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+
+  <!-- ===== Header ===== -->
+  <div class="title-row">
+    <div>
+      <div class="h1">월간 작업 실적 보고서 <span class="tag">내부용</span></div>
+      <div class="muted" style="margin-top:2px;">
+        보고기간: <b>{{period_label}}</b>  ({{date_from}} ~ {{date_to_exclusive}}) / 작성부서: {{dept_name}}
+      </div>
+    </div>
+    <div class="meta">
+      <div>단지명: <b>{{site_name}}</b></div>
+      <div>작성일: {{generated_at}}</div>
+      <div>승인: 관리소장 {{approver_name}}</div>
+    </div>
+  </div>
+
+  <!-- ===== KPI ===== -->
+  <div class="kpi no-break">
+    <div class="tile">
+      <div class="label">총 완료 작업</div>
+      <div class="value">{{kpi.total_done}}<span class="unit">건</span></div>
+    </div>
+    <div class="tile">
+      <div class="label">점검 발생 작업</div>
+      <div class="value">{{kpi.from_inspection}}<span class="unit">건</span></div>
+    </div>
+    <div class="tile">
+      <div class="label">민원 발생 작업</div>
+      <div class="value">{{kpi.from_complaint}}<span class="unit">건</span></div>
+    </div>
+    <div class="tile">
+      <div class="label">긴급 작업</div>
+      <div class="value">{{kpi.emergency_cnt}}<span class="unit">건</span></div>
+    </div>
+  </div>
+
+  <div class="grid-3 no-break">
+    <div class="box">
+      <div class="box-title">리드타임(생성→완료) <span class="box-sub">평균</span></div>
+      <div style="font-size:18px; font-weight:900;">{{kpi.avg_lead_days}}<span class="unit">일</span></div>
+      <div class="muted" style="margin-top:4px;">완료일 기준 집계</div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">반려 작업 <span class="box-sub">기간 내 1회 이상</span></div>
+      <div style="font-size:18px; font-weight:900;">{{kpi.rejected_work_cnt}}<span class="unit">건</span></div>
+      <div class="muted" style="margin-top:4px;">REVIEW/APPROVE 반려 이벤트 기준</div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">재작업 <span class="box-sub">반려 후 진행 복귀</span></div>
+      <div style="font-size:18px; font-weight:900;">{{kpi.rework_cnt}}<span class="unit">건</span></div>
+      <div class="muted" style="margin-top:4px;">STATUS_CHANGE → IN_PROGRESS</div>
+    </div>
+  </div>
+
+  <!-- ===== Aggregations ===== -->
+  <div class="grid-2 mt-10">
+    <div class="box no-break">
+      <div class="box-title">작업 유형별 실적</div>
+      <table>
+        <thead>
+          <tr><th>유형</th><th class="right">건수</th></tr>
+        </thead>
+        <tbody>
+          {{#each by_source_type}}
+          <tr>
+            <td>{{label}}</td>
+            <td class="right">{{cnt}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box no-break">
+      <div class="box-title">설비 분류별 실적</div>
+      <table>
+        <thead>
+          <tr><th>분류</th><th class="right">건수</th></tr>
+        </thead>
+        <tbody>
+          {{#each by_category}}
+          <tr>
+            <td>{{category_name}}</td>
+            <td class="right">{{cnt}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid-2 mt-10">
+    <div class="box no-break">
+      <div class="box-title">위치별 실적 <span class="box-sub">공용부</span></div>
+      <table>
+        <thead>
+          <tr><th>위치</th><th class="right">건수</th></tr>
+        </thead>
+        <tbody>
+          {{#each by_common_location}}
+          <tr>
+            <td>{{location_name}}</td>
+            <td class="right">{{cnt}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box no-break">
+      <div class="box-title">담당자별 실적</div>
+      <table>
+        <thead>
+          <tr><th>담당</th><th class="right">완료</th><th class="right">평균 처리일</th></tr>
+        </thead>
+        <tbody>
+          {{#each by_assignee}}
+          <tr>
+            <td>{{assignee_name}}</td>
+            <td class="right">{{done_cnt}}</td>
+            <td class="right">{{avg_lead_days}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ===== Procurement link ===== -->
+  <div class="box mt-10 no-break">
+    <div class="box-title">구매 연계 실적</div>
+    <table>
+      <thead>
+        <tr>
+          <th>구분</th>
+          <th class="right">값</th>
+          <th>비고</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>구매 연계 완료 작업</td>
+          <td class="right">{{proc.done_with_pr_cnt}} 건</td>
+          <td>PR 연결 기준(취소 제외)</td>
+        </tr>
+        <tr>
+          <td>발주 금액 합계</td>
+          <td class="right">{{proc.total_po_amount}} 원</td>
+          <td>보고기간 내 PO 발주일 기준</td>
+        </tr>
+        <tr>
+          <td>상위 구매 품목(Top3)</td>
+          <td class="right">{{proc.top_items_amount_sum}} 원</td>
+          <td class="muted">{{proc.top_items_labels}}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ===== Evidence list ===== -->
+  <div class="box mt-10">
+    <div class="box-title">주요 작업 상세 (최근 완료 Top {{top_works_limit}})</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 11%;">작업코드</th>
+          <th style="width: 14%;">위치</th>
+          <th style="width: 10%;">분류</th>
+          <th>작업내용 요약</th>
+          <th style="width: 10%;">담당</th>
+          <th style="width: 10%;">완료일</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each top_works}}
+        <tr>
+          <td>{{work_code}}</td>
+          <td>{{location_name}}</td>
+          <td>{{category_name}}</td>
+          <td>{{title}}</td>
+          <td class="center">{{assignee_name}}</td>
+          <td class="center">{{completed_date}}</td>
+        </tr>
+        {{/each}}
+      </tbody>
+    </table>
+
+    <div class="muted" style="margin-top:6px;">
+      ※ 각 작업은 시스템에서 사진/측정값/이력(Event)으로 역추적 가능해야 함.
+    </div>
+  </div>
+
+  <!-- ===== Notes ===== -->
+  <div class="grid-2 mt-10 no-break">
+    <div class="box">
+      <div class="box-title">특이사항</div>
+      <div style="min-height: 72px; white-space: pre-wrap;">{{notes.special}}</div>
+    </div>
+    <div class="box">
+      <div class="box-title">다음 달 중점 관리</div>
+      <div style="min-height: 72px; white-space: pre-wrap;">{{notes.next_focus}}</div>
+    </div>
+  </div>
+
+  <!-- ===== Footer ===== -->
+  <div class="foot">
+    <div>집계 기준: status=DONE & completed_at(완료일) / 반려·재작업은 events 기반</div>
+    <div>문서번호: {{doc_no}}</div>
+  </div>
+
+</div>
+</body>
+</html>
+
+
+2) 템플릿 데이터 계약(렌더링 입력 JSON 예시)
+
+렌더링 엔진(서버/파이썬/노드/템플릿)을 무엇을 쓰든, 아래 키만 맞으면 출력은 고정됩니다.
+{
+  "period_label": "2026년 01월",
+  "date_from": "2026-01-01",
+  "date_to_exclusive": "2026-02-01",
+  "site_name": "○○아파트",
+  "dept_name": "관리사무소",
+  "generated_at": "2026-02-01 09:00",
+  "approver_name": "홍길동",
+  "doc_no": "RPT-WORK-2026-01-0001",
+
+  "kpi": {
+    "total_done": 128,
+    "from_inspection": 42,
+    "from_complaint": 63,
+    "emergency_cnt": 9,
+    "avg_lead_days": "1.8",
+    "rejected_work_cnt": 6,
+    "rework_cnt": 3
+  },
+
+  "by_source_type": [
+    {"label": "점검 후 조치", "cnt": 42},
+    {"label": "민원 조치", "cnt": 63},
+    {"label": "정기 정비", "cnt": 18},
+    {"label": "긴급 조치", "cnt": 5}
+  ],
+
+  "by_category": [
+    {"category_name": "전기", "cnt": 38},
+    {"category_name": "소방", "cnt": 21},
+    {"category_name": "승강기", "cnt": 12},
+    {"category_name": "기계/설비", "cnt": 44},
+    {"category_name": "건축", "cnt": 9},
+    {"category_name": "통신", "cnt": 4}
+  ],
+
+  "by_common_location": [
+    {"location_name": "전기실", "cnt": 11},
+    {"location_name": "펌프실", "cnt": 9},
+    {"location_name": "저수조실", "cnt": 4},
+    {"location_name": "열교환기실", "cnt": 7},
+    {"location_name": "승강기기계실", "cnt": 3},
+    {"location_name": "창고1", "cnt": 2},
+    {"location_name": "창고2", "cnt": 1},
+    {"location_name": "주차장1", "cnt": 6},
+    {"location_name": "주차장2", "cnt": 5}
+  ],
+
+  "by_assignee": [
+    {"assignee_name": "김○○", "done_cnt": 53, "avg_lead_days": "1.6"},
+    {"assignee_name": "박○○", "done_cnt": 41, "avg_lead_days": "1.9"},
+    {"assignee_name": "이○○", "done_cnt": 34, "avg_lead_days": "2.1"}
+  ],
+
+  "proc": {
+    "done_with_pr_cnt": 17,
+    "total_po_amount": "12,450,000",
+    "top_items_amount_sum": "7,980,000",
+    "top_items_labels": "베어링(2,100,000) / 차단기(3,200,000) / 케이블(2,680,000)"
+  },
+
+  "top_works_limit": 20,
+  "top_works": [
+    {
+      "work_code": "WO-2026-000123",
+      "location_name": "전기실",
+      "category_name": "전기",
+      "title": "수변전실 LBS 접점 발열 점검 후 조치",
+      "assignee_name": "김○○",
+      "completed_date": "2026-01-28"
+    }
+  ],
+
+  "notes": {
+    "special": "- 반복 민원: 주차장1 조명 불량 3회\n- 전기실 발열 관련 주의 작업 증가",
+    "next_focus": "- 전기실/펌프실 월간 점검 강화\n- 구매 리드타임 7일 이상 품목 사전 확보"
+  }
+}
+
+월간 작업 실적 보고서 생성 절차서 v1.0
+
+목표: 수기 작성 금지. “데이터 → 집계 → 문서번호 → A4 PDF”를 월 1회 자동/반자동으로 끝낸다.
+출력물: RPT-WORK-YYYY-MM-####.pdf (A4 1장) + 동일 HTML 보관(감사 대비)
+
+1) 입력/출력 정의
+1.1 입력(데이터 소스)
+
+DB: work_orders, events, locations, categories, users
+
+구매 연계: purchase_requests, purchase_orders, purchase_order_lines
+
+1.2 출력(산출물)
+
+A4 PDF 1장: 월간 작업 실적 보고서
+
+보관용 HTML 1장(옵션)
+
+집계 JSON 1개(옵션: 재생성/추적을 위해 보관 권장)
+
+2) 월간 실행 타이밍(운영 규정)
+
+기준: 매월 1일 오전(또는 2영업일 내) 전월 실적 생성
+
+보고기간 정의:
+
+date_from = 전월 1일 00:00
+
+date_to = 당월 1일 00:00 (미포함)
+
+예: 2026년 1월 보고
+
+date_from=2026-01-01
+
+date_to=2026-02-01
+
+3) 처리 파이프라인(End-to-End)
+Step 0. 사전 체크(데이터 품질)
+
+완료 실적 기준: work_orders.status='DONE' AND completed_at 존재
+
+완료 작업의 필수 조건:
+
+result_note 존재
+
+attachments 최소 1건(정책값)
+
+위 조건 위반 건은:
+
+(권장) 집계 제외 OR
+
+“품질 경고 목록”으로 별도 표시(차후 개선)
+
+Step 1. 기간 파라미터 확정
+
+보고기간 라벨 생성: YYYY년 MM월
+
+doc_month = YYYY-MM
+
+Step 2. 집계 SQL 실행 → 집계 결과 수집
+2.1 KPI 요약
+
+총완료/점검발생/민원발생/긴급/평균리드타임/반려/재작업
+
+2.2 분류/유형/위치/담당자 집계
+
+by_source_type
+
+by_category
+
+by_common_location (공용부만)
+
+by_assignee
+
+2.3 구매 연계 집계
+
+done_with_pr_cnt
+
+total_po_amount(발주일 기준)
+
+top_items(상위 3개 품목 + 금액)
+
+2.4 주요 작업 Top N 목록
+
+top_works_limit 권장 20
+
+완료일 내림차순
+
+주의: 이 단계의 결과는 “문서 생성의 원본 증거”이므로
+가능하면 JSON으로 저장해 재현 가능하게 합니다.
+
+Step 3. 문서번호(doc_no) 발급(규칙 고정)
+3.1 규칙
+
+doc_no = RPT-WORK-YYYY-MM-####
+
+####는 월별 증가
+
+3.2 구현(개념)
+
+DB에 report_runs 테이블(권장)을 두고 월별 시퀀스를 관리
+
+권장 테이블(개념):
+
+report_runs(id, report_type, period_ym, seq, doc_no, generated_at, generated_by, hash, storage_path)
+
+발급 흐름:
+
+period_ym='2026-01'의 마지막 seq 조회
+
++1 해서 doc_no 생성
+
+report_runs에 기록(잠금/트랜잭션 권장)
+
+Step 4. 집계 결과 → 템플릿 데이터(JSON)로 매핑
+
+템플릿 계약(키 구조)을 고정(이미 제공한 JSON 스키마)
+
+숫자 포맷:
+
+금액: 천단위 구분(예: 12,450,000)
+
+평균일수: 소수 1자리(예: 1.8)
+
+필드 매핑 체크리스트:
+
+period_label, site_name, dept_name, generated_at, approver_name, doc_no
+
+kpi.*
+
+by_source_type[], by_category[], by_common_location[], by_assignee[]
+
+proc.*
+
+top_works[]
+
+notes.special, notes.next_focus (초기엔 비워도 됨)
+
+Step 5. HTML 렌더링(A4 1장)
+
+템플릿 파일: report_work_monthly_a4.html
+
+렌더링 엔진은 무엇이든 가능(서버 정책에 맞춤)
+
+결과 파일: RPT-WORK-YYYY-MM-####.html
+
+검증 포인트
+
+A4 1장에 잘 들어오는지(줄바꿈/표 넘침)
+
+표가 깨지지 않는지(특히 Top Works)
+
+Step 6. PDF 생성(출력 확정)
+
+결과 파일: RPT-WORK-YYYY-MM-####.pdf
+
+권장: 서버 렌더러(폰트/레이아웃 고정)
+
+운영 체크
+
+페이지 수 = 1
+
+글자 겹침 없음
+
+문서번호/기간/승인자 표기 정상
+
+Step 7. 보관/배포(내부)
+7.1 보관 위치(권장)
+
+reports/YYYY/MM/
+
+RPT-WORK-2026-01-0001.pdf
+
+RPT-WORK-2026-01-0001.html (옵션)
+
+RPT-WORK-2026-01-0001.json (옵션, 강력 권장)
+
+7.2 시스템 기록(감사 대응)
+
+report_runs.storage_path에 경로 저장
+
+hash(PDF sha256) 저장 권장
+
+4) 실패/예외 처리 규정(현장 현실용)
+4.1 데이터 누락(완료인데 증빙 없음)
+
+집계 제외 + “품질 경고” 목록으로 출력(옵션)
+
+또는 담당자에게 보완 요청(업무 프로세스 개선)
+
+4.2 구매 금액 기준 혼선
+
+본 절차서는 발주(PO.order_date) 기준
+
+검수/정산 기준으로 바꾸려면 Step2의 SQL만 교체하면 됨(정책은 1개로 고정)
+
+4.3 문서번호 충돌
+
+report_runs에 유니크 제약:
+
+(report_type, period_ym, seq) UNIQUE
+
+doc_no UNIQUE
+
+트랜잭션으로 발급 처리
+
+5) 운영 역할 분담(내부용)
+
+시설기사: 완료 입력 품질(사진/결과) 책임
+
+시설과장: 월말 데이터 점검(반려/보류 정리)
+
+관리소장: 승인자(보고서 확정)
+
+경리: 구매 연계 금액/발주 자료 확인(필요 시)
+
+6) 체크리스트(월 1회)
+
+ 전월 기간 파라미터 맞는가
+
+ DONE 작업의 증빙 최소 기준 충족하는가
+
+ 반려/재작업 지표가 events와 일치하는가
+
+ 구매 금액이 발주자료와 상식적으로 일치하는가
+
+ PDF 1페이지로 출력되는가
+
+ report_runs에 기록과 해시가 남았는가
+
+
+ 파이썬 기준 월간 작업 실적 보고서 생성 스크립트 설계 (복사-실행형 v1.0)
+
+출력:
+
+reports/YYYY/MM/RPT-WORK-YYYY-MM-####.pdf
+
+reports/YYYY/MM/RPT-WORK-YYYY-MM-####.html
+
+reports/YYYY/MM/RPT-WORK-YYYY-MM-####.json
+
+전제: DB는 SQLite로 바로 실행 가능하게 잡습니다. (PostgreSQL로 바꿀 때는 sqlite3→psycopg만 교체)
+
+1) 폴더 구조
+ka-part/
+  reportgen/
+    generate_monthly_work_report.py
+    report_runs.sqlite3              # 자동 생성(문서번호/이력 관리)
+    templates/
+      report_work_monthly_a4.html    # 이전에 드린 A4 템플릿(그대로)
+  reports/                           # 자동 생성
+  requirements.txt
+

@@ -1,0 +1,61 @@
+{% extends "ui/base.html" %}
+
+{% block content %}
+  <div>
+    <h1 style="margin:0;font-size:18px;">사용자/역할 관리</h1>
+    <div class="small" style="margin-top:6px;">관리소장/관리자 권한에서만 사용하세요.</div>
+    <div class="small" style="margin-top:6px;">
+      <a href="/ui/admin/notifications?login={{ login }}">카카오 응답 로그 보기</a>
+      <span style="margin:0 6px;">|</span>
+      <a href="/ui/admin/templates?login={{ login }}">알림 템플릿 관리</a>
+    </div>
+  </div>
+
+  <div class="hr"></div>
+
+  <div class="row" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;">
+    <div style="flex:1;min-width:220px;">
+      <label>검색</label><br/>
+      <input id="q" placeholder="이름/아이디/전화번호" style="width:100%;" />
+    </div>
+    <div style="min-width:180px;">
+      <label>역할 필터</label><br/>
+      <select id="roleFilter" style="width:100%;"></select>
+    </div>
+    <div style="min-width:120px;">
+      <label>&nbsp;</label><br/>
+      <button class="pill" id="btnReload">새로고침</button>
+    </div>
+  </div>
+
+  <div class="hr"></div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+    <div>
+      <h3 style="margin:0 0 8px 0;font-size:14px;">사용자 목록</h3>
+      <div id="userList"></div>
+    </div>
+    <div>
+      <h3 style="margin:0 0 8px 0;font-size:14px;">사용자 등록/수정</h3>
+      <div class="small">선택된 사용자를 수정하거나 신규 등록하세요.</div>
+      <div style="margin-top:10px;display:grid;gap:8px;">
+        <input id="formLogin" placeholder="아이디(login)" />
+        <input id="formName" placeholder="이름" />
+        <input id="formPhone" placeholder="전화번호(알림톡)" />
+        <select id="formActive">
+          <option value="1">활성</option>
+          <option value="0">비활성</option>
+        </select>
+        <select id="formVendor"></select>
+        <div id="roleChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        <button class="pill" id="btnSave">저장</button>
+        <div class="small" id="formMsg"></div>
+      </div>
+    </div>
+  </div>
+
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/admin_users.js"></script>
+{% endblock %}

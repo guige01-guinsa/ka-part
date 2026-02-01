@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{{ title or "ka-part" }}</title>
+
+  <link rel="stylesheet" href="/static/app.css" />
+
+  <style>
+    :root{
+      --bg:#0b1220; --panel:#111a2b; --panel2:#0f1726;
+      --text:#e5e7eb; --muted:#94a3b8; --line:#25324a;
+      --btn:#2563eb; --danger:#dc2626; --ok:#16a34a; --warn:#f59e0b;
+    }
+    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",sans-serif;}
+    a{color:inherit;text-decoration:none}
+    .wrap{max-width:1024px;margin:18px auto;padding:0 16px;}
+    .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25);}
+    .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;}
+    .brand{display:flex;gap:10px;align-items:center;}
+    .logo{width:34px;height:34px;border-radius:12px;background:rgba(37,99,235,.25);border:1px solid rgba(37,99,235,.45);display:flex;align-items:center;justify-content:center;font-weight:900;}
+    .brand .t{font-weight:900;}
+    .brand .s{color:var(--muted);font-size:12px;margin-top:2px;}
+    .nav{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+    .pill{background:transparent;border:1px solid var(--line);color:var(--text);border-radius:999px;padding:8px 12px;font-weight:800;cursor:pointer;}
+    .pill.active{background:rgba(37,99,235,.22);border-color:rgba(37,99,235,.6);}
+    .right{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+    .meBox{display:flex;flex-direction:column;gap:6px;min-width:260px;}
+    label{font-size:12px;color:var(--muted);}
+    input{background:#0b1528;color:var(--text);border:1px solid var(--line);border-radius:12px;padding:10px 12px;outline:none;}
+    input::placeholder{color:#64748b;}
+    .small{font-size:12px;color:var(--muted);}
+    .hr{height:1px;background:var(--line);margin:12px 0;}
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">KA</div>
+        <div>
+          <div class="t">ka-part</div>
+          <div class="s">관리 현장 기록 자동화</div>
+        </div>
+      </div>
+
+      <div class="nav" id="topNav">
+        <a class="pill {{ 'active' if active=='works' else '' }}" href="/ui/works?login={{ login }}">작업</a>
+        <a class="pill {{ 'active' if active=='monthly' else '' }}" href="/ui/monthly_work?login={{ login }}">월간보고</a>
+
+        <a class="pill {{ 'active' if active=='admin' else '' }}" href="/ui/admin/users?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN,관리소장">관리</a>
+        <a class="pill" href="/ui/admin/notifications?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN,관리소장">알림로그</a>
+        <a class="pill" href="/ui/admin/templates?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN,관리소장">템플릿</a>
+        <a class="pill {{ 'active' if active=='vendor' else '' }}" href="/ui/vendor?login={{ login }}" data-roles="VENDOR,외주업체">외주포털</a>
+
+        {% if features and features.inspections %}
+          <a class="pill {{ 'active' if active=='inspections' else '' }}" href="/ui/inspections?login={{ login }}">점검</a>
+        {% endif %}
+
+        {% if features and features.meters %}
+          <a class="pill {{ 'active' if active=='meters' else '' }}" href="/ui/meters?login={{ login }}">계측</a>
+        {% endif %}
+      </div>
+
+      <div class="right">
+        <div class="meBox">
+          <label>인증 헤더 (X-User-Login)</label>
+          <input id="login" placeholder="admin / chief / user1 / clerk" value="{{ login }}" />
+          <div class="small" id="meLine">/api/me 확인 중...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const el = document.getElementById("login");
+      if(!el) return;
+      el.addEventListener("keydown", (e)=>{
+        if(e.key !== "Enter") return;
+        const login = (el.value || "").trim() || "admin";
+        const u = new URL(location.href);
+        u.searchParams.set("login", login);
+        location.href = u.toString();
+      });
+    })();
+  </script>
+
+  {% block scripts %}{% endblock %}
+
+  <script>
+    (function(){
+      const login = new URL(location.href).searchParams.get("login") || "admin";
+      fetch(`/api/me?login=${encodeURIComponent(login)}`)
+        .then(r=>r.json())
+        .then(res=>{
+          const roles = (res.user && res.user.roles) ? res.user.roles : [];
+          const set = new Set(roles);
+          document.querySelectorAll('[data-roles]').forEach(el=>{
+            const allowed = (el.getAttribute('data-roles')||'').split(',').map(s=>s.trim()).filter(Boolean);
+            if(allowed.length && !allowed.some(r=>set.has(r))){
+              el.style.display = 'none';
+            }
+          });
+          const meLine = document.getElementById('meLine');
+          if(meLine){
+            meLine.textContent = `roles: ${roles.join(', ') || '-'}`;
+          }
+        })
+        .catch(()=>{});
+    })();
+  </script>
+</body>
+</html>

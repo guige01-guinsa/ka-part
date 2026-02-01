@@ -1,0 +1,17 @@
+{% extends "ui/base.html" %}
+
+{% block content %}
+  <h1 style="margin:0;font-size:18px;">모듈이 꺼져 있습니다</h1>
+  <div class="small" style="margin-top:8px;">
+    이 화면은 서버에서 기능 플래그가 OFF로 판단되어 비활성화되었습니다.
+  </div>
+
+  <div class="hr"></div>
+
+  <div class="small" style="line-height:1.7;">
+    켜려면 PowerShell에서 아래처럼 실행하세요.
+    <pre style="background:rgba(0,0,0,.25);border:1px solid #25324a;border-radius:12px;padding:12px;overflow:auto;margin-top:10px;">
+$env:{{ feature_name }}="1"
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000</pre>
+  </div>
+{% endblock %}
