@@ -9,7 +9,8 @@
 
   function getWorkIdFromPath() {
     // /ui/works/{id}
-    const m = location.pathname.match(/\/ui\/works\/(\d+)/);
+    let m = location.pathname.match(/\/ui\/works\/(\d+)/);
+    if (!m) m = location.pathname.match(/\/ui\/work\/(\d+)/);
     return m ? parseInt(m[1], 10) : null;
   }
 
@@ -78,9 +79,9 @@
   // --------------------
   function canUploadAttachment(me, work) {
     if (!me || !work) return false;
-    if (work.status === "DONE") return !!me.is_admin; // DONE: admin만
-    // 그 외: 현장(시설기사/시설과장/관리소장) 업로드 허용
-    return me.is_admin || roleHas(me, "시설기사") || roleHas(me, "시설과장") || roleHas(me, "관리소장");
+    if (work.status === "DONE") return !!me.is_admin;
+    const roles = me.roles || [];
+    return me.is_admin || roles.includes("TECH") || roles.includes("STAFF") || roles.includes("LEAD") || roles.includes("FACILITY_MANAGER") || roles.includes("CHIEF") || roles.includes("MANAGER");
   }
 
   function canDeleteAttachment(me, work) {
@@ -105,12 +106,15 @@
     // 시스템 전체 가능한 상태(서버가 허용하는 것 중 UI 노출)
     // NEW -> ASSIGNED -> IN_PROGRESS -> REVIEW -> APPROVED -> DONE
     const map = {
-      "NEW": ["ASSIGNED"],
-      "ASSIGNED": ["IN_PROGRESS"],
-      "IN_PROGRESS": ["REVIEW"],
-      "REVIEW": ["APPROVED"],
-      "APPROVED": ["DONE"],
+      "NEW": ["ASSIGNED", "IN_PROGRESS", "HOLD", "CANCELED"],
+      "ASSIGNED": ["IN_PROGRESS", "REVIEW", "HOLD", "CANCELED"],
+      "IN_PROGRESS": ["REVIEW", "HOLD", "CANCELED"],
+      "REVIEW": ["APPROVED", "REJECTED", "IN_PROGRESS"],
+      "APPROVED": ["DONE", "REJECTED"],
+      "REJECTED": ["IN_PROGRESS", "CANCELED"],
+      "HOLD": ["IN_PROGRESS", "CANCELED"],
       "DONE": [],
+      "CANCELED": [],
     };
 
     const nexts = map[cur] || [];
@@ -120,7 +124,7 @@
 
     // 시설기사: 현장 진행까지만(승인/종결은 관리자급)
     if (roleHas(me, "시설기사")) {
-      return nexts.filter(s => s === "IN_PROGRESS" || s === "REVIEW");
+      return nexts.filter(s => s === "IN_PROGRESS" || s === "REVIEW" || s === "HOLD");
     }
 
     // 경리: 전이 없음
@@ -258,6 +262,8 @@
 
     const saveBtn = qs("#btnSave");
     if (saveBtn) saveBtn.disabled = ro;
+    const delBtn = qs("#btnDelete");
+    if (delBtn) delBtn.disabled = !(me && (me.is_admin));
 
     // 첨부 업로드: DONE+비관리자면 차단, 그 외 권한 기반
     const up = qs("#attFile");
@@ -303,7 +309,7 @@
     const note = (qs("#transitionNote") && qs("#transitionNote").value) ? qs("#transitionNote").value : "";
     const body = { to_status: toStatus, note };
 
-    return await apiFetch(`/api/works/${workId}/transition`, {
+    return await apiFetch(`/api/works/${workId}/status`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -329,7 +335,12 @@
     return await apiFetch(`/api/attachments/${attId}`, { method: "DELETE" });
   }
 
-  // --------------------
+  
+  async function doDeleteWork(workId) {
+    return await apiFetch(`/api/works/${workId}`, { method: "DELETE" });
+  }
+
+// --------------------
   // main load
   // --------------------
   async function load() {
@@ -365,6 +376,19 @@
         try {
           await doPatchWork(workId);
           await load(); // 갱신
+        } catch (e) {
+          alert(e.message || String(e));
+        }
+      };
+    }
+
+    const delBtn = qs("#btnDelete");
+    if (delBtn) {
+      delBtn.onclick = async () => {
+        if (!confirm("??? ??(CANCELED) ??????")) return;
+        try {
+          await doDeleteWork(workId);
+          window.location.href = `/ui/works?login=${encodeURIComponent(getLogin() || "admin")}`;
         } catch (e) {
           alert(e.message || String(e));
         }

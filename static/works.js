@@ -24,6 +24,13 @@
   const elSUrgent = $("#sUrgent");
   const elSDone = $("#sDone");
 
+  const elNewTitle = $("#newTitle");
+  const elNewCategory = $("#newCategory");
+  const elNewLocation = $("#newLocation");
+  const elNewPriority = $("#newPriority");
+  const elCreate = $("#btnCreate");
+  const elCreateMsg = $("#createMsg");
+
   let state = {
     mode: "all",      // ✅ 기본 ALL
     q: "",
@@ -63,6 +70,22 @@
 
   async function apiGet(url) {
     const res = await fetch(url, { headers: headerLogin() });
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch (e) {}
+    if (!res.ok) {
+      const errMsg = data?.error || data?.detail || text || `HTTP ${res.status}`;
+      throw new Error(errMsg);
+    }
+    return data ?? {};
+  }
+
+  async function apiPost(url, body) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { ...headerLogin(), "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
     const text = await res.text();
     let data = null;
     try { data = JSON.parse(text); } catch (e) {}
@@ -148,7 +171,7 @@
       card.addEventListener("click", () => {
         const id = card.getAttribute("data-id");
         const login = encodeURIComponent((elLogin.value || "admin").trim() || "admin");
-        window.location.href = `/ui/work/${id}?login=${login}`;
+        window.location.href = `/ui/works/${id}?login=${login}`;
       });
     });
   }
@@ -248,6 +271,33 @@
 
     // reload
     elReload.addEventListener("click", refresh);
+
+    // create
+    if (elCreate) {
+      elCreate.addEventListener("click", async () => {
+        if (elCreateMsg) elCreateMsg.textContent = "";
+        try {
+          const title = (elNewTitle.value || "").trim();
+          const category_id = parseInt(elNewCategory.value || "0", 10);
+          const location_id = parseInt(elNewLocation.value || "0", 10);
+          const priority = parseInt(elNewPriority.value || "3", 10);
+          if (!title || !category_id || !location_id) {
+            throw new Error("제목/분류ID/위치ID를 입력하세요.");
+          }
+          await apiPost("/api/works", {
+            title,
+            category_id,
+            location_id,
+            priority,
+          });
+          elNewTitle.value = "";
+          if (elCreateMsg) elCreateMsg.textContent = "생성 완료";
+          await refresh();
+        } catch (e) {
+          if (elCreateMsg) elCreateMsg.textContent = String(e.message || e);
+        }
+      });
+    }
 
     // search inputs
     let t = null;

@@ -40,6 +40,22 @@ async def ui_works(request: Request):
     )
 
 
+@router.get("/works/{work_id}", response_class=HTMLResponse)
+async def ui_work_detail(request: Request, work_id: int):
+    login = login_from_query(request)
+    return templates.TemplateResponse(
+        "ui/work_detail.html",
+        {
+            "request": request,
+            "title": "작업 상세",
+            "active": "works",
+            "login": login,
+            "work_id": work_id,
+            "features": feature_flags(),
+        },
+    )
+
+
 @router.get("/monthly_work", response_class=HTMLResponse)
 async def ui_monthly(request: Request):
     login = login_from_query(request)

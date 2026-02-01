@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db import db_conn
 from app.auth import get_current_user
@@ -159,7 +159,7 @@ def _select_work_base(db) -> str:
     return select_sql
 
 
-def _build_where(db, mode: str, q: str, user: Dict[str, Any]) -> Tuple[str, List[Any]]:
+def _build_where(db, mode: str, q: str, status: str, user: Dict[str, Any]) -> Tuple[str, List[Any]]:
     clauses: List[str] = []
     params: List[Any] = []
 
@@ -211,6 +211,11 @@ def _build_where(db, mode: str, q: str, user: Dict[str, Any]) -> Tuple[str, List
 
         clauses.append("(" + " OR ".join(ors) + ")")
 
+    st = (status or "").strip().upper()
+    if st:
+        clauses.append("wo.status = ?")
+        params.append(st)
+
     # Role-based visibility
     if _is_resident(user):
         if _has_col(db, "work_orders", "requested_by"):
@@ -229,9 +234,9 @@ def _build_where(db, mode: str, q: str, user: Dict[str, Any]) -> Tuple[str, List
     return where, params
 
 
-def _list_works(db, mode: str, q: str, limit: int, user: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _list_works(db, mode: str, q: str, status: str, limit: int, user: Dict[str, Any]) -> List[Dict[str, Any]]:
     select_sql = _select_work_base(db)
-    where, params = _build_where(db, mode=mode, q=q, user=user)
+    where, params = _build_where(db, mode=mode, q=q, status=status, user=user)
 
     order = "wo.id DESC"
     if _has_col(db, "work_orders", "created_at"):
@@ -247,7 +252,7 @@ def _list_works(db, mode: str, q: str, limit: int, user: Dict[str, Any]) -> List
 
 def _count_works(db, mode: str, user: Dict[str, Any]) -> int:
     select_sql = _select_work_base(db)
-    where, params = _build_where(db, mode=mode, q="", user=user)
+    where, params = _build_where(db, mode=mode, q="", status="", user=user)
     sql = f"SELECT COUNT(1) AS n FROM ({select_sql} {where}) t"
     cur = db.execute(sql, tuple(params))
     r = cur.fetchone()
@@ -260,6 +265,23 @@ def _get_work_row(db, work_id: int) -> Optional[Dict[str, Any]]:
     cur = db.execute(sql, (work_id,))
     row = cur.fetchone()
     return dict(row) if row else None
+
+
+def _next_work_code(db) -> str:
+    y = date.today().strftime("%Y")
+    key = f"WO-{y}"
+    db.execute(
+        "INSERT OR IGNORE INTO code_sequences(key,last_seq,updated_at) VALUES(?,0,datetime('now'))",
+        (key,),
+    )
+    row = db.execute("SELECT last_seq FROM code_sequences WHERE key=?", (key,)).fetchone()
+    last_seq = int(row["last_seq"]) if row else 0
+    new_seq = last_seq + 1
+    db.execute(
+        "UPDATE code_sequences SET last_seq=?, updated_at=datetime('now') WHERE key=?",
+        (new_seq, key),
+    )
+    return f"WO-{y}-{new_seq:06d}"
 
 
 def _can_view_work(user: Dict[str, Any], row: Dict[str, Any]) -> bool:
@@ -292,6 +314,17 @@ class WorkOutsourceIn(BaseModel):
     note: Optional[str] = None
 
 
+class WorkCreateIn(BaseModel):
+    title: str = Field(min_length=2, max_length=120)
+    description: Optional[str] = None
+    category_id: int
+    location_id: int
+    priority: int = Field(default=3, ge=1, le=5)
+    is_emergency: bool = False
+    assigned_to: Optional[int] = None
+    source_type: str = "OTHER"
+
+
 # ---------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------
@@ -302,12 +335,13 @@ def works_list(
     request: Request,
     mode: str = Query("all", pattern="^(all|today|open|urgent|done)$"),
     q: str = Query("", description="search keyword"),
+    status: str = Query("", description="status filter"),
     limit: int = Query(200, ge=1, le=1000),
 ):
     user = get_current_user(request)
 
     with db_conn() as db:
-        items = _list_works(db, mode=mode, q=q, limit=limit, user=user)
+        items = _list_works(db, mode=mode, q=q, status=status, limit=limit, user=user)
 
         counts = {
             "today": _count_works(db, "today", user),
@@ -337,7 +371,89 @@ def work_get(request: Request, work_id: int):
         if not _can_view_work(user, row):
             raise HTTPException(status_code=403, detail="forbidden")
 
+        # attachments
+        if _table_exists(db, "attachments"):
+            cur = db.execute(
+                """
+                SELECT id, file_name, file_path, mime_type, uploaded_at AS created_at
+                FROM attachments
+                WHERE entity_type='WORK_ORDER' AND entity_id=?
+                ORDER BY id DESC
+                """,
+                (work_id,),
+            )
+            row["attachments"] = [dict(r) for r in cur.fetchall()]
+        else:
+            row["attachments"] = []
+
+        # events
+        if _table_exists(db, "events"):
+            cur = db.execute(
+                """
+                SELECT id, event_type, from_status, to_status, note, created_at
+                FROM events
+                WHERE entity_type='WORK_ORDER' AND entity_id=?
+                ORDER BY id ASC
+                """,
+                (work_id,),
+            )
+            row["events"] = [dict(r) for r in cur.fetchall()]
+        else:
+            row["events"] = []
+
     return {"ok": True, "work": row}
+
+
+@router.post("/works")
+def work_create(request: Request, body: WorkCreateIn):
+    user = get_current_user(request)
+    if not _is_staff(user):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    st = (body.source_type or "OTHER").strip().upper()
+    if st not in {"INSPECTION", "COMPLAINT", "MAINTENANCE", "OTHER"}:
+        st = "OTHER"
+
+    with db_conn() as db:
+        work_code = _next_work_code(db)
+        db.execute(
+            """
+            INSERT INTO work_orders
+              (work_code, source_type, category_id, location_id, title, description,
+               priority, is_emergency, status, requested_by, assigned_to,
+               created_at, updated_at, urgent)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?, ?, 'NEW', ?, ?, datetime('now'), datetime('now'), ?)
+            """,
+            (
+                work_code,
+                st,
+                body.category_id,
+                body.location_id,
+                body.title.strip(),
+                (body.description or "").strip(),
+                int(body.priority),
+                1 if body.is_emergency else 0,
+                int(user["id"]),
+                body.assigned_to,
+                1 if body.is_emergency else 0,
+            ),
+        )
+        cur = db.execute("SELECT last_insert_rowid() AS id")
+        work_id = int(cur.fetchone()["id"])
+
+        _insert_event(
+            db,
+            entity_type="WORK_ORDER",
+            entity_id=work_id,
+            event_type="CREATE",
+            actor_id=int(user["id"]),
+            actor_login=user.get("login"),
+            note=st,
+        )
+        db.commit()
+
+    return {"ok": True, "work_id": work_id, "work_code": work_code}
 
 
 @router.patch("/works/{work_id}")
@@ -384,6 +500,7 @@ def work_status_change(request: Request, work_id: int, to_status: Dict[str, str]
     user = get_current_user(request)
 
     next_status = (to_status.get("to_status") or "").strip().upper()
+    note = (to_status.get("note") or "").strip()
     allowed_status = {
         "NEW",
         "ASSIGNED",
@@ -451,6 +568,7 @@ def work_status_change(request: Request, work_id: int, to_status: Dict[str, str]
             actor_login=user.get("login"),
             from_status=cur_status,
             to_status=next_status,
+            note=note,
         )
 
         db.commit()
@@ -464,6 +582,43 @@ def work_status_change(request: Request, work_id: int, to_status: Dict[str, str]
     )
 
     return {"ok": True, "from": cur_status, "to": next_status}
+
+
+@router.post("/works/{work_id}/transition")
+def work_transition_alias(request: Request, work_id: int, to_status: Dict[str, str]):
+    # backward-compat for UI
+    return work_status_change(request, work_id, to_status)
+
+
+@router.delete("/works/{work_id}")
+def work_delete(request: Request, work_id: int):
+    user = get_current_user(request)
+    if not _is_manager(user):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    with db_conn() as db:
+        row = _get_work_row(db, work_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Work not found")
+
+        cur_status = (row.get("status") or "").upper()
+        db.execute(
+            "UPDATE work_orders SET status='CANCELED', updated_at=datetime('now') WHERE id=?",
+            (work_id,),
+        )
+        _insert_event(
+            db,
+            entity_type="WORK_ORDER",
+            entity_id=work_id,
+            event_type="CANCEL",
+            actor_id=int(user["id"]),
+            actor_login=user.get("login"),
+            from_status=cur_status,
+            to_status="CANCELED",
+        )
+        db.commit()
+
+    return {"ok": True, "from": cur_status, "to": "CANCELED"}
 
 
 @router.post("/works/{work_id}/comment")
