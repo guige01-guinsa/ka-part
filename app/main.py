@@ -78,6 +78,79 @@ def _safe_migrate(conn: sqlite3.Connection, path: Path) -> None:
         raise
 
 
+def _ensure_bootstrap(conn: sqlite3.Connection) -> None:
+    # Idempotent bootstrap for default roles/users.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          code TEXT NOT NULL UNIQUE,
+          name TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_roles (
+          user_id INTEGER NOT NULL,
+          role_id INTEGER NOT NULL,
+          PRIMARY KEY (user_id, role_id)
+        )
+        """
+    )
+
+    roles = [
+        ("CHIEF", "관리소장"),
+        ("MANAGER", "시설과장"),
+        ("STAFF", "담당자"),
+        ("TECH", "시설기사"),
+        ("RESIDENT", "입주민"),
+        ("VENDOR", "외주업체"),
+        ("ADMIN", "관리자"),
+    ]
+    for code, name in roles:
+        conn.execute(
+            "INSERT OR IGNORE INTO roles(code, name) VALUES(?, ?)",
+            (code, name),
+        )
+
+    # Ensure default users
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO users(name, login, phone, is_active, created_at, updated_at)
+        VALUES('관리자', 'admin', NULL, 1, datetime('now'), datetime('now'))
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO users(name, login, phone, is_active, created_at, updated_at)
+        VALUES('담당자', 'user1', NULL, 1, datetime('now'), datetime('now'))
+        """
+    )
+
+    admin_id = conn.execute("SELECT id FROM users WHERE login='admin'").fetchone()
+    user1_id = conn.execute("SELECT id FROM users WHERE login='user1'").fetchone()
+    role_id = lambda code: conn.execute("SELECT id FROM roles WHERE code=?", (code,)).fetchone()
+
+    if admin_id:
+        for rc in ("ADMIN", "CHIEF", "MANAGER"):
+            r = role_id(rc)
+            if r:
+                conn.execute(
+                    "INSERT OR IGNORE INTO user_roles(user_id, role_id) VALUES(?, ?)",
+                    (admin_id["id"], r["id"]),
+                )
+
+    if user1_id:
+        for rc in ("STAFF", "TECH"):
+            r = role_id(rc)
+            if r:
+                conn.execute(
+                    "INSERT OR IGNORE INTO user_roles(user_id, role_id) VALUES(?, ?)",
+                    (user1_id["id"], r["id"]),
+                )
+
+
 @app.on_event("startup")
 def init_db_if_missing():
     """
@@ -104,5 +177,8 @@ def init_db_if_missing():
                 for p in sorted(mig_dir.glob("*.sql")):
                     _safe_migrate(conn, p)
             conn.commit()
+        # Always ensure default roles/users exist
+        _ensure_bootstrap(conn)
+        conn.commit()
     finally:
         conn.close()

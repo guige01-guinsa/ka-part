@@ -438,29 +438,43 @@ def work_create(request: Request, body: WorkCreateIn):
 
     with db_conn() as db:
         work_code = _next_work_code(db)
-        db.execute(
-            """
-            INSERT INTO work_orders
-              (work_code, source_type, category_id, location_id, title, description,
-               priority, is_emergency, status, requested_by, assigned_to,
-               created_at, updated_at, urgent)
-            VALUES
-              (?, ?, ?, ?, ?, ?, ?, ?, 'NEW', ?, ?, datetime('now'), datetime('now'), ?)
-            """,
-            (
-                work_code,
-                st,
-                body.category_id,
-                body.location_id,
-                body.title.strip(),
-                (body.description or "").strip(),
-                int(body.priority),
-                1 if body.is_emergency else 0,
-                int(user["id"]),
-                body.assigned_to,
-                1 if body.is_emergency else 0,
-            ),
-        )
+        cols = [
+            "work_code",
+            "source_type",
+            "category_id",
+            "location_id",
+            "title",
+            "description",
+            "priority",
+            "is_emergency",
+            "status",
+            "requested_by",
+            "assigned_to",
+        ]
+        vals = [
+            work_code,
+            st,
+            body.category_id,
+            body.location_id,
+            body.title.strip(),
+            (body.description or "").strip(),
+            int(body.priority),
+            1 if body.is_emergency else 0,
+            "NEW",
+            int(user["id"]),
+            body.assigned_to,
+        ]
+
+        sql_cols = cols + ["created_at", "updated_at"]
+        sql_vals = ["?"] * len(cols) + ["datetime('now')", "datetime('now')"]
+
+        if _has_col(db, "work_orders", "urgent"):
+            sql_cols.append("urgent")
+            sql_vals.append("?")
+            vals.append(1 if body.is_emergency else 0)
+
+        sql = f"INSERT INTO work_orders ({', '.join(sql_cols)}) VALUES ({', '.join(sql_vals)})"
+        db.execute(sql, tuple(vals))
         cur = db.execute("SELECT last_insert_rowid() AS id")
         work_id = int(cur.fetchone()["id"])
 
