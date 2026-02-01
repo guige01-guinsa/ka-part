@@ -453,9 +453,9 @@
       };
     }
 
-    const loginEl = qs("#login");
-    if (loginEl) {
-      loginEl.addEventListener("change", async () => {
+    const loginInput = qs("#login");
+    if (loginInput) {
+      loginInput.addEventListener("change", async () => {
         try {
           await load();
         } catch (e) {
