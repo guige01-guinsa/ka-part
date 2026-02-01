@@ -1,0 +1,40 @@
+﻿{% extends "ui/base.html" %}
+
+{% block content %}
+  <div>
+    <h1 style="margin:0;font-size:18px;">분류/위치 관리</h1>
+    <div class="small" style="margin-top:6px;">작업 생성 시 사용하는 분류/위치를 관리합니다.</div>
+  </div>
+
+  <div class="hr"></div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+    <div>
+      <h3 style="margin:0 0 8px 0;font-size:14px;">분류(카테고리)</h3>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <input id="catCode" placeholder="코드 (예: ELEC)" />
+        <input id="catName" placeholder="이름 (예: 전기)" />
+        <button class="pill" id="btnCatAdd">추가</button>
+      </div>
+      <div id="catList"></div>
+    </div>
+
+    <div>
+      <h3 style="margin:0 0 8px 0;font-size:14px;">위치</h3>
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+        <input id="locCode" placeholder="코드 (예: LOC_ELECROOM)" />
+        <input id="locName" placeholder="이름 (예: 전기실)" />
+        <select id="locType">
+          <option value="COMMON">공용</option>
+          <option value="HOUSEHOLD">세대</option>
+        </select>
+        <button class="pill" id="btnLocAdd">추가</button>
+      </div>
+      <div id="locList"></div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="/static/admin_masters.js"></script>
+{% endblock %}

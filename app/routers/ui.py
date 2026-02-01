@@ -1,4 +1,4 @@
-import os
+﻿import os
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -21,7 +21,7 @@ def feature_flags() -> dict:
 
 
 def login_from_query(request: Request) -> str:
-    # UI는 querystring login을 받아서, JS가 X-User-Login 헤더로 호출
+    # UI querystring login -> JS가 X-User-Login 헤더로 호출
     return (request.query_params.get("login") or "admin").strip() or "admin"
 
 
@@ -63,7 +63,7 @@ async def ui_monthly(request: Request):
         "ui/monthly_work.html",
         {
             "request": request,
-            "title": "월간",
+            "title": "월간보고",
             "active": "monthly",
             "login": login,
             "features": feature_flags(),
@@ -73,7 +73,7 @@ async def ui_monthly(request: Request):
 
 @router.get("/inspections", response_class=HTMLResponse)
 async def ui_inspections(request: Request):
-    # FEATURE_INSPECTIONS=0이면 메뉴도 없고, 직접 들어오면 안내 화면
+    # FEATURE_INSPECTIONS=0이면 메뉴는 숨김, 직접 접근 시 안내 화면
     login = login_from_query(request)
     feats = feature_flags()
     if not feats["inspections"]:
@@ -81,7 +81,7 @@ async def ui_inspections(request: Request):
             "ui/feature_off.html",
             {
                 "request": request,
-                "title": "점검(OFF)",
+                "title": "점검 (OFF)",
                 "active": "inspections",
                 "login": login,
                 "features": feats,
@@ -110,7 +110,7 @@ async def ui_meters(request: Request):
             "ui/feature_off.html",
             {
                 "request": request,
-                "title": "검침(OFF)",
+                "title": "검침 (OFF)",
                 "active": "meters",
                 "login": login,
                 "features": feats,
@@ -137,7 +137,7 @@ async def ui_admin_users(request: Request):
         "ui/admin_users.html",
         {
             "request": request,
-            "title": "관리",
+            "title": "관리자",
             "active": "admin",
             "login": login,
             "features": feature_flags(),
@@ -168,6 +168,21 @@ async def ui_admin_templates(request: Request):
         {
             "request": request,
             "title": "템플릿",
+            "active": "admin",
+            "login": login,
+            "features": feature_flags(),
+        },
+    )
+
+
+@router.get("/admin/masters", response_class=HTMLResponse)
+async def ui_admin_masters(request: Request):
+    login = login_from_query(request)
+    return templates.TemplateResponse(
+        "ui/admin_masters.html",
+        {
+            "request": request,
+            "title": "분류/위치",
             "active": "admin",
             "login": login,
             "features": feature_flags(),

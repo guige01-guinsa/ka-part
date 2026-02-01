@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
@@ -50,17 +50,18 @@
         <a class="pill {{ 'active' if active=='works' else '' }}" href="/ui/works?login={{ login }}">작업</a>
         <a class="pill {{ 'active' if active=='monthly' else '' }}" href="/ui/monthly_work?login={{ login }}">월간보고</a>
 
-        <a class="pill {{ 'active' if active=='admin' else '' }}" href="/ui/admin/users?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN,관리소장">관리</a>
-        <a class="pill" href="/ui/admin/notifications?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN,관리소장">알림로그</a>
-        <a class="pill" href="/ui/admin/templates?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN,관리소장">템플릿</a>
-        <a class="pill {{ 'active' if active=='vendor' else '' }}" href="/ui/vendor?login={{ login }}" data-roles="VENDOR,외주업체">외주포털</a>
+        <a class="pill {{ 'active' if active=='admin' else '' }}" href="/ui/admin/users?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN">관리자</a>
+        <a class="pill" href="/ui/admin/notifications?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN">알림로그</a>
+        <a class="pill" href="/ui/admin/templates?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN">템플릿</a>
+        <a class="pill" href="/ui/admin/masters?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN">분류/위치</a>
+        <a class="pill {{ 'active' if active=='vendor' else '' }}" href="/ui/vendor?login={{ login }}" data-roles="VENDOR">외주포털</a>
 
         {% if features and features.inspections %}
           <a class="pill {{ 'active' if active=='inspections' else '' }}" href="/ui/inspections?login={{ login }}">점검</a>
         {% endif %}
 
         {% if features and features.meters %}
-          <a class="pill {{ 'active' if active=='meters' else '' }}" href="/ui/meters?login={{ login }}">계측</a>
+          <a class="pill {{ 'active' if active=='meters' else '' }}" href="/ui/meters?login={{ login }}">검침</a>
         {% endif %}
       </div>
 

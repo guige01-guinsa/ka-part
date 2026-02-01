@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import List, Optional
 import json
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 def _require_admin(user: dict) -> None:
     roles = set(user.get("roles") or [])
-    if not (user.get("is_admin") or ("CHIEF" in roles) or ("MANAGER" in roles) or ("관리소장" in roles)):
+    if not (user.get("is_admin") or ("CHIEF" in roles) or ("MANAGER" in roles) or ("ADMIN" in roles)):
         raise HTTPException(status_code=403, detail="forbidden")
 
 
@@ -41,6 +41,25 @@ class VendorCreateIn(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     is_active: int = 1
+
+
+class CategoryCreateIn(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=60)
+
+
+class CategoryPatchIn(BaseModel):
+    name: Optional[str] = None
+
+
+class LocationCreateIn(BaseModel):
+    code: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=80)
+    type: str = "COMMON"
+
+
+class LocationPatchIn(BaseModel):
+    name: Optional[str] = None
 
 
 @router.get("/roles")
@@ -214,6 +233,99 @@ def vendor_create(request: Request, body: VendorCreateIn):
     return {"ok": True, "id": vid}
 
 
+@router.get("/categories")
+def categories_list(request: Request):
+    user = get_current_user(request)
+    _require_admin(user)
+    with db_conn() as db:
+        rows = db.execute("SELECT id, code, name FROM categories ORDER BY id ASC").fetchall()
+    return {"ok": True, "items": [dict(r) for r in rows]}
+
+
+@router.post("/categories")
+def category_create(request: Request, body: CategoryCreateIn):
+    user = get_current_user(request)
+    _require_admin(user)
+    with db_conn() as db:
+        db.execute(
+            "INSERT INTO categories(code, name) VALUES(?, ?)",
+            (body.code.strip(), body.name.strip()),
+        )
+        cid = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+        db.commit()
+    return {"ok": True, "id": cid}
+
+
+@router.patch("/categories/{cat_id}")
+def category_patch(request: Request, cat_id: int, body: CategoryPatchIn):
+    user = get_current_user(request)
+    _require_admin(user)
+    if body.name is None:
+        return {"ok": True, "updated": False}
+    with db_conn() as db:
+        db.execute("UPDATE categories SET name=? WHERE id=?", (body.name.strip(), cat_id))
+        db.commit()
+    return {"ok": True, "updated": True}
+
+
+@router.delete("/categories/{cat_id}")
+def category_delete(request: Request, cat_id: int):
+    user = get_current_user(request)
+    _require_admin(user)
+    with db_conn() as db:
+        db.execute("DELETE FROM categories WHERE id=?", (cat_id,))
+        db.commit()
+    return {"ok": True}
+
+
+@router.get("/locations")
+def locations_list(request: Request):
+    user = get_current_user(request)
+    _require_admin(user)
+    with db_conn() as db:
+        rows = db.execute("SELECT id, code, name, type FROM locations ORDER BY id ASC").fetchall()
+    return {"ok": True, "items": [dict(r) for r in rows]}
+
+
+@router.post("/locations")
+def location_create(request: Request, body: LocationCreateIn):
+    user = get_current_user(request)
+    _require_admin(user)
+    typ = (body.type or "COMMON").strip().upper()
+    if typ not in ("COMMON", "HOUSEHOLD"):
+        typ = "COMMON"
+    with db_conn() as db:
+        db.execute(
+            "INSERT INTO locations(type, code, name, is_active) VALUES(?, ?, ?, 1)",
+            (typ, body.code.strip(), body.name.strip()),
+        )
+        lid = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+        db.commit()
+    return {"ok": True, "id": lid}
+
+
+@router.patch("/locations/{loc_id}")
+def location_patch(request: Request, loc_id: int, body: LocationPatchIn):
+    user = get_current_user(request)
+    _require_admin(user)
+    if body.name is None:
+        return {"ok": True, "updated": False}
+    with db_conn() as db:
+        db.execute("UPDATE locations SET name=? WHERE id=?", (body.name.strip(), loc_id))
+        db.commit()
+    return {"ok": True, "updated": True}
+
+
+@router.delete("/locations/{loc_id}")
+def location_delete(request: Request, loc_id: int):
+    user = get_current_user(request)
+    _require_admin(user)
+    with db_conn() as db:
+        db.execute("DELETE FROM locations WHERE id=?", (loc_id,))
+        db.commit()
+    return {"ok": True}
+
+
 @router.get("/notification-templates")
 def templates_list(request: Request):
     user = get_current_user(request)
@@ -333,3 +445,4 @@ def notification_resend(request: Request, queue_id: int):
         db.commit()
 
     return {"ok": ok, "error": err}
+
