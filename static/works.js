@@ -69,7 +69,16 @@
   }
 
   async function apiGet(url) {
-    const res = await fetch(url, { headers: headerLogin() });
+    const login = (elLogin.value || "").trim() || "admin";
+    let finalUrl = url;
+    if (login) {
+      try {
+        const u = new URL(url, location.origin);
+        if (!u.searchParams.get("login")) u.searchParams.set("login", login);
+        finalUrl = u.pathname + u.search + u.hash;
+      } catch (_) {}
+    }
+    const res = await fetch(finalUrl, { headers: headerLogin() });
     const text = await res.text();
     let data = null;
     try { data = JSON.parse(text); } catch (e) {}
@@ -81,7 +90,16 @@
   }
 
   async function apiPost(url, body) {
-    const res = await fetch(url, {
+    const login = (elLogin.value || "").trim() || "admin";
+    let finalUrl = url;
+    if (login) {
+      try {
+        const u = new URL(url, location.origin);
+        if (!u.searchParams.get("login")) u.searchParams.set("login", login);
+        finalUrl = u.pathname + u.search + u.hash;
+      } catch (_) {}
+    }
+    const res = await fetch(finalUrl, {
       method: "POST",
       headers: { ...headerLogin(), "Content-Type": "application/json" },
       body: JSON.stringify(body || {}),

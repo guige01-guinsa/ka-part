@@ -30,10 +30,22 @@
     const headers = new Headers(opts.headers || {});
     if (login) headers.set("X-User-Login", login);
 
+    // Also pass login via query to survive cross-origin redirects.
+    let finalUrl = url;
+    if (login) {
+      try {
+        const u = new URL(url, location.origin);
+        if (!u.searchParams.get("login")) {
+          u.searchParams.set("login", login);
+        }
+        finalUrl = u.pathname + u.search + u.hash;
+      } catch (_) {}
+    }
+
     // JSON default accept
     if (!headers.has("Accept")) headers.set("Accept", "application/json");
 
-    const res = await fetch(url, { ...opts, headers });
+    const res = await fetch(finalUrl, { ...opts, headers });
     let data = null;
 
     const ct = res.headers.get("content-type") || "";
@@ -341,6 +353,10 @@
     }
 
     const me = await apiFetch("/api/me");
+    const loginEl = qs("#login");
+    if (loginEl && (!loginEl.value || !loginEl.value.trim()) && me?.login) {
+      loginEl.value = me.login;
+    }
     const meEl = qs("#me");
     if (meEl) {
       const r = (me.roles || []).join(", ");
@@ -448,3 +464,4 @@
     });
   });
 })();
+
