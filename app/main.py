@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 
@@ -21,6 +22,15 @@ STATIC_DIR = BASE_DIR / "static"
 FAVICON_PATH = STATIC_DIR / "favicon.ico"              # 있으면 제공
 
 app = FastAPI(title="ka-part", version="0.1.0")
+
+# Allow cross-origin calls between ka-part.com and www.ka-part.com
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://ka-part.com", "https://www.ka-part.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # static (절대경로로 고정해서 작업폴더가 달라도 안전)
 if STATIC_DIR.exists():
