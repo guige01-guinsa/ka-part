@@ -86,6 +86,35 @@
       headers: { ...headerLogin(), "Content-Type": "application/json" },
       body: JSON.stringify(body || {}),
     });
+
+  async function loadMasterData() {
+    try {
+      const cats = await apiGet("/api/master/categories");
+      const locs = await apiGet("/api/master/locations");
+
+      if (elNewCategory) {
+        elNewCategory.innerHTML = "";
+        (cats.items || []).forEach((c) => {
+          const opt = document.createElement("option");
+          opt.value = c.id;
+          opt.textContent = `${c.name} (#${c.id})`;
+          elNewCategory.appendChild(opt);
+        });
+      }
+
+      if (elNewLocation) {
+        elNewLocation.innerHTML = "";
+        (locs.items || []).forEach((l) => {
+          const opt = document.createElement("option");
+          opt.value = l.id;
+          opt.textContent = `${l.name} (#${l.id})`;
+          elNewLocation.appendChild(opt);
+        });
+      }
+    } catch (e) {
+      if (elCreateMsg) elCreateMsg.textContent = "??/?? ?? ?? ??";
+    }
+  }
     const text = await res.text();
     let data = null;
     try { data = JSON.parse(text); } catch (e) {}
@@ -319,6 +348,7 @@
     // ✅ 첫 진입에서 TODAY로 시작하지 않는다: ALL 기본
     setActivePill("ALL");
     await loadMe();
+    await loadMasterData();
     await refresh();
   }
 

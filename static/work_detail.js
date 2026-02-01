@@ -74,6 +74,11 @@
     return roles.includes(roleName);
   }
 
+  function roleHasAny(me, list) {
+    const roles = me && me.roles ? me.roles : [];
+    return list.some(r => roles.includes(r));
+  }
+
   // --------------------
   // permission model (UI side)
   // --------------------
@@ -81,7 +86,7 @@
     if (!me || !work) return false;
     if (work.status === "DONE") return !!me.is_admin;
     const roles = me.roles || [];
-    return me.is_admin || roles.includes("TECH") || roles.includes("STAFF") || roles.includes("LEAD") || roles.includes("FACILITY_MANAGER") || roles.includes("CHIEF") || roles.includes("MANAGER");
+    return me.is_admin || roleHasAny(me, ["TECH","STAFF","LEAD","FACILITY_MANAGER","CHIEF","MANAGER","????","????","????","???"]);
   }
 
   function canDeleteAttachment(me, work) {

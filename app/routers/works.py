@@ -13,6 +13,28 @@ from app.notify import notify_kakao_event
 
 router = APIRouter(prefix="/api", tags=["works"])
 
+
+@router.get("/master/categories")
+def master_categories(request: Request):
+    user = get_current_user(request)
+    if not _is_staff(user):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    with db_conn() as db:
+        rows = db.execute("SELECT id, code, name FROM categories ORDER BY id ASC").fetchall()
+    return {"ok": True, "items": [dict(r) for r in rows]}
+
+
+@router.get("/master/locations")
+def master_locations(request: Request):
+    user = get_current_user(request)
+    if not _is_staff(user):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    with db_conn() as db:
+        rows = db.execute("SELECT id, code, name, type FROM locations WHERE is_active=1 ORDER BY id ASC").fetchall()
+    return {"ok": True, "items": [dict(r) for r in rows]}
+
 # ---------------------------------------------------------------------
 # Role helpers
 # ---------------------------------------------------------------------
