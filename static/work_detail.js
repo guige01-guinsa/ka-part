@@ -360,15 +360,16 @@
       return;
     }
 
-    const me = await apiFetch(apiUrl("/api/me"));
+    const meRes = await apiFetch(apiUrl("/api/me"));
+    const me = meRes && meRes.user ? { ...meRes.user, is_admin: !!(meRes.is_admin ?? meRes.user.is_admin) } : meRes;
     const loginEl = qs("#login");
     if (loginEl && (!loginEl.value || !loginEl.value.trim()) && me?.login) {
       loginEl.value = me.login;
     }
     const meEl = qs("#me");
     if (meEl) {
-      const r = (me.roles || []).join(", ");
-      meEl.textContent = `${fmt(me.name)} (${fmt(me.login)}) · roles=[${r}] · is_admin=${!!me.is_admin}`;
+      const r = (me?.roles || []).join(", ");
+      meEl.textContent = `${fmt(me?.name)} (${fmt(me?.login)}) · roles=[${r}] · is_admin=${!!me?.is_admin}`;
     }
 
     const w = await apiFetch(apiUrl(`/api/works/${workId}`));

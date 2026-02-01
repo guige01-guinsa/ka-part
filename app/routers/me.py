@@ -15,11 +15,14 @@ async def me(request: Request):
 
     return {
         "ok": True,
+        "is_admin": bool(user.get("is_admin")),
+        "roles": roles,
         "user": {
             "id": user.get("id"),
             "login": user.get("login"),
             "name": user.get("name"),
             "role": user.get("role", "user"),
             "roles": roles,
+            "is_admin": bool(user.get("is_admin")),
         },
     }
