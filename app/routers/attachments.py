@@ -387,8 +387,12 @@ async def attachments_file(request: Request, attachment_id: int):
         raise HTTPException(status_code=404, detail="File missing on disk")
 
     row_dict = dict(row)
+    media_type = row_dict.get("mime_type") or "application/octet-stream"
+    filename = row_dict.get("file_name") or f"attachment_{attachment_id}"
+    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
     return FileResponse(
         str(p),
-        media_type=(row_dict.get("mime_type") or "application/octet-stream"),
-        filename=(row_dict.get("file_name") or f"attachment_{attachment_id}"),
+        media_type=media_type,
+        filename=filename,
+        headers=headers,
     )

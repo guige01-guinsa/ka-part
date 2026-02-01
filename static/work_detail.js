@@ -224,7 +224,7 @@
               ${createdAt ? `등록: ${createdAt} · ` : ""}${mime ? `type=${mime} · ` : ""}${path ? `path=${path}` : ""}
             </div>
             <div style="margin-top:6px;">
-              <a class="btn" href="${fileLink}" target="_blank" rel="noopener">열기</a>
+              <a class="btn" href="${fileLink}" target="_blank" rel="noopener">보기</a>
             </div>
           </div>
           <div style="flex:0 0 auto; display:flex; gap:6px;">
