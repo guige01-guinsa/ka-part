@@ -12,5 +12,11 @@ __pycache__/
 uploads/
 ops/e2e_screens/
 ops/e2e_run.py
+ops/*.pdf
+ops/*.log
+ops/after.txt
 
 tools/caddy/
+db_objects.txt
+db_schema_snapshot.sql
+tree_snapshot.txt
