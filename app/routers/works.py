@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -493,10 +494,30 @@ def work_create(request: Request, body: WorkCreateIn):
 
 
 @router.patch("/works/{work_id}")
-def work_patch(request: Request, work_id: int, body: WorkPatchIn):
+async def work_patch(request: Request, work_id: int, body: Optional[WorkPatchIn] = None):
     user = get_current_user(request)
     if not _is_staff(user):
         raise HTTPException(status_code=403, detail="forbidden")
+
+    # Fallback: some clients send malformed JSON; try raw/form parsing
+    if body is None:
+        data = None
+        try:
+            raw = await request.body()
+            if raw:
+                data = json.loads(raw.decode("utf-8"))
+        except Exception:
+            data = None
+        if data is None:
+            try:
+                form = await request.form()
+                data = dict(form)
+            except Exception:
+                data = {}
+        try:
+            body = WorkPatchIn(**(data or {}))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"invalid body: {e}")
 
     with db_conn() as db:
         # Ensure columns exist for legacy DBs
