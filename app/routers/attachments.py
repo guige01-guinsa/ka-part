@@ -127,7 +127,21 @@ async def attachments_list(
         base = ["id", "entity_type", "entity_id", "file_name", "file_path"]
         optional = ["mime_type", "created_at", "created_by", "deleted_at", "deleted_by"]
 
-        select_cols = [c for c in base if c in cols] + [c for c in optional if c in cols]
+        select_cols = [c for c in base if c in cols]
+        # normalize created_at/created_by from uploaded_* columns when needed
+        if "created_at" in cols:
+            select_cols.append("created_at")
+        elif "uploaded_at" in cols:
+            select_cols.append("uploaded_at AS created_at")
+
+        if "created_by" in cols:
+            select_cols.append("created_by")
+        elif "uploaded_by" in cols:
+            select_cols.append("uploaded_by AS created_by")
+
+        for c in ("mime_type", "deleted_at", "deleted_by"):
+            if c in cols:
+                select_cols.append(c)
 
         where = "WHERE entity_type=? AND entity_id=?"
         if "deleted_at" in cols:
@@ -136,6 +150,8 @@ async def attachments_list(
         order_by = "ORDER BY id DESC"
         if "created_at" in cols:
             order_by = "ORDER BY created_at DESC, id DESC"
+        elif "uploaded_at" in cols:
+            order_by = "ORDER BY uploaded_at DESC, id DESC"
 
         sql = f"""
             SELECT {", ".join(select_cols)}
@@ -200,21 +216,26 @@ async def attachments_create(
             fields.append("mime_type")
             vals.append(file.content_type or "application/octet-stream")
 
-        # created_at/created_by는 DB 스키마에 있을 때만 기록
+        # created_at/created_by (legacy) or uploaded_at/uploaded_by (schema)
         if "created_at" in cols:
             fields.append("created_at")
-            vals.append(None)  # 아래 SQL에서 datetime('now')로 대체
+            vals.append(None)
+        if "uploaded_at" in cols:
+            fields.append("uploaded_at")
+            vals.append(None)
 
         if "created_by" in cols:
             fields.append("created_by")
-            # created_by가 user_id 정수라고 가정(프로젝트 흐름상 가장 합리적)
+            vals.append(user.get("id") or _get_user_id(db, user.get("login", "")) or 0)
+        if "uploaded_by" in cols:
+            fields.append("uploaded_by")
             vals.append(user.get("id") or _get_user_id(db, user.get("login", "")) or 0)
 
-        # created_at을 datetime('now')로 넣기 위해 placeholder 조정
+        # created_at/uploaded_at은 datetime('now')로 넣기 위해 placeholder 조정
         placeholders = []
         final_vals = []
         for f, v in zip(fields, vals):
-            if f == "created_at" and v is None:
+            if f in ("created_at", "uploaded_at") and v is None:
                 placeholders.append("datetime('now')")
             else:
                 placeholders.append("?")
