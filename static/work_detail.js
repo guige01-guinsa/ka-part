@@ -1,4 +1,4 @@
-// static/work_detail.js
+﻿// static/work_detail.js
 (() => {
   "use strict";
 
@@ -15,7 +15,7 @@
   }
 
   function getLogin() {
-    // 1) input#login 값 우선
+    // 1) input#login 우선
     const el = qs("#login");
     const v = el && el.value ? el.value.trim() : "";
     if (v) return v;
@@ -85,15 +85,12 @@
   function canUploadAttachment(me, work) {
     if (!me || !work) return false;
     if (work.status === "DONE") return !!me.is_admin;
-    const roles = me.roles || [];
-    return me.is_admin || roleHasAny(me, ["TECH","STAFF","LEAD","FACILITY_MANAGER","CHIEF","MANAGER","????","????","????","???"]);
+    return !!me.is_admin || roleHasAny(me, ["TECH","STAFF","LEAD","FACILITY_MANAGER","CHIEF","MANAGER","ADMIN"]);
   }
 
   function canDeleteAttachment(me, work) {
     if (!me || !work) return false;
-    // 서버에서 DONE+admin만 강제함. UI도 동일하게.
     if (work.status === "DONE") return !!me.is_admin;
-    // 삭제는 관리자급(=승인권한)만: 관리소장/시설과장
     return !!me.is_admin;
   }
 
@@ -104,12 +101,9 @@
     return false;
   }
 
-  // 전이 버튼 노출 정책(보수적으로)
   function allowedTransitions(me, work) {
     const cur = work.status;
 
-    // 시스템 전체 가능한 상태(서버가 허용하는 것 중 UI 노출)
-    // NEW -> ASSIGNED -> IN_PROGRESS -> REVIEW -> APPROVED -> DONE
     const map = {
       "NEW": ["ASSIGNED", "IN_PROGRESS", "HOLD", "CANCELED"],
       "ASSIGNED": ["IN_PROGRESS", "REVIEW", "HOLD", "CANCELED"],
@@ -124,15 +118,12 @@
 
     const nexts = map[cur] || [];
 
-    // 관리자급(관리소장+시설과장 => is_admin=True): 모두 표시
-    if (me.is_admin) return nexts;
+    if (me.is_admin || roleHasAny(me, ["CHIEF","MANAGER","ADMIN"])) return nexts;
 
-    // 시설기사: 현장 진행까지만(승인/종결은 관리자급)
-    if (roleHas(me, "시설기사")) {
-      return nexts.filter(s => s === "IN_PROGRESS" || s === "REVIEW" || s === "HOLD");
+    if (roleHasAny(me, ["TECH","STAFF","LEAD","FACILITY_MANAGER"])) {
+      return nexts.filter(s => s === "IN_PROGRESS" || s === "REVIEW" || s === "HOLD" || s === "CANCELED");
     }
 
-    // 경리: 전이 없음
     return [];
   }
 
@@ -140,7 +131,6 @@
   // rendering
   // --------------------
   function renderWork(work) {
-    // 프로젝트마다 DOM이 다를 수 있어, 존재하는 것만 채웁니다.
     setStatusBadge(qs("#workStatus"), work.status);
 
     const titleEl = qs("#workTitle");
@@ -191,14 +181,13 @@
         ? `<button class="btn danger" data-act="att-del" data-id="${id}">삭제</button>`
         : "";
 
-      // 파일 다운로드 엔드포인트가 있다면 연결(있을 때만)
       const fileLink = `/api/attachments/file/${id}`;
       return `
         <div class="card" style="display:flex; gap:10px; align-items:center; justify-content:space-between; margin:8px 0;">
           <div style="min-width:0;">
             <div style="font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${fn}</div>
             <div class="muted" style="font-size:12px;">
-              ${createdAt ? `⏱ ${createdAt} · ` : ""}${mime ? `type=${mime} · ` : ""}${path ? `path=${path}` : ""}
+              ${createdAt ? `등록: ${createdAt} · ` : ""}${mime ? `type=${mime} · ` : ""}${path ? `path=${path}` : ""}
             </div>
             <div style="margin-top:6px;">
               <a class="btn" href="${fileLink}" target="_blank" rel="noopener">열기</a>
@@ -270,17 +259,14 @@
     const delBtn = qs("#btnDelete");
     if (delBtn) delBtn.disabled = !(me && (me.is_admin));
 
-    // 첨부 업로드: DONE+비관리자면 차단, 그 외 권한 기반
     const up = qs("#attFile");
     const upBtn = qs("#btnUpload");
     const upAllowed = canUploadAttachment(me, work) && !ro;
     if (up) up.disabled = !upAllowed;
     if (upBtn) upBtn.disabled = !upAllowed;
 
-    // 전이 버튼 영역: read-only면 숨김(또는 비활성)
     const trans = qs("#transitions");
     if (trans && ro) {
-      // 읽기전용은 “조작 불가”가 보이게: disabled 처리
       trans.querySelectorAll("button").forEach(b => (b.disabled = true));
     }
 
@@ -302,7 +288,6 @@
     if (noteEl) body.result_note = noteEl.value || "";
     if (urgentEl) body.urgent = !!urgentEl.checked;
 
-    // PATCH /api/works/{id}
     return await apiFetch(`/api/works/${workId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -340,12 +325,11 @@
     return await apiFetch(`/api/attachments/${attId}`, { method: "DELETE" });
   }
 
-  
   async function doDeleteWork(workId) {
     return await apiFetch(`/api/works/${workId}`, { method: "DELETE" });
   }
 
-// --------------------
+  // --------------------
   // main load
   // --------------------
   async function load() {
@@ -356,7 +340,6 @@
       return;
     }
 
-    // /api/me
     const me = await apiFetch("/api/me");
     const meEl = qs("#me");
     if (meEl) {
@@ -364,9 +347,8 @@
       meEl.textContent = `${fmt(me.name)} (${fmt(me.login)}) · roles=[${r}] · is_admin=${!!me.is_admin}`;
     }
 
-    // /api/works/{id}
     const w = await apiFetch(`/api/works/${workId}`);
-    const work = w.work ? w.work : w; // 응답 포맷 차이 대응
+    const work = w.work ? w.work : w;
 
     renderWork(work);
     renderTransitionButtons(me, work);
@@ -374,13 +356,12 @@
     renderEvents(work);
     applyReadOnly(me, work);
 
-    // bind actions
     const saveBtn = qs("#btnSave");
     if (saveBtn) {
       saveBtn.onclick = async () => {
         try {
           await doPatchWork(workId);
-          await load(); // 갱신
+          await load();
         } catch (e) {
           alert(e.message || String(e));
         }
@@ -390,7 +371,7 @@
     const delBtn = qs("#btnDelete");
     if (delBtn) {
       delBtn.onclick = async () => {
-        if (!confirm("??? ??(CANCELED) ??????")) return;
+        if (!confirm("삭제(취소) 하시겠습니까?")) return;
         try {
           await doDeleteWork(workId);
           window.location.href = `/ui/works?login=${encodeURIComponent(getLogin() || "admin")}`;
@@ -437,7 +418,7 @@
         if (!btn) return;
         const id = parseInt(btn.getAttribute("data-id"), 10);
         if (!id) return;
-        if (!confirm("첨부를 삭제(소프트삭제)할까요?")) return;
+        if (!confirm("첨부를 삭제(소프트 삭제)할까요?")) return;
 
         try {
           await doDeleteAttachment(id);
@@ -448,7 +429,6 @@
       };
     }
 
-    // login 변경 즉시 반영
     const loginEl = qs("#login");
     if (loginEl) {
       loginEl.addEventListener("change", async () => {
