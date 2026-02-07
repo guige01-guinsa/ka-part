@@ -141,7 +141,7 @@ def _require_admin(request: Request) -> Tuple[Dict[str, Any], str]:
 @router.get("/health")
 def health():
     report = schema_alignment_report()
-    return {"ok": True, "version": "2.8.0", "schema_alignment_ok": report.get("ok", False)}
+    return {"ok": True, "version": "2.8.1", "schema_alignment_ok": report.get("ok", False)}
 
 
 @router.get("/schema")

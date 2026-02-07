@@ -27,8 +27,6 @@ SCHEMA_DEFS = {
         "title": "홈",
         "fields": [
             {"k": "complex_name", "label": "단지명(표시)", "type": "text", "placeholder": "예: OO아파트"},
-            {"k": "login", "label": "로그인", "type": "text", "placeholder": "예: admin"},
-            {"k": "manager", "label": "담당자", "type": "text", "placeholder": "예: 전기과장"},
             {"k": "work_type", "label": "업무구분", "type": "select", "options": WORK_TYPES},
             {"k": "important_work", "label": "중요작업(요약)", "type": "textarea", "placeholder": "핵심 작업 요약"},
             {"k": "note", "label": "비고", "type": "textarea", "placeholder": "특이사항"},
