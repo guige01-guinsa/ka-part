@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <title>수변전실</title>
+  <link rel="manifest" href="/pwa/manifest.webmanifest?v=1">
+  <link rel="stylesheet" href="/pwa/styles.css?v=20260207g">
+</head>
+<body>
+  <header class="top">
+    <div class="title">수변전실</div>
+
+    <div class="actions">
+      <button id="btnPrev" class="btn ghost" title="이전 날짜">◀</button>
+      <button id="btnLoad" class="btn">기간조회</button>
+      <button id="btnNext" class="btn ghost" title="다음 날짜">▶</button>
+      <button id="btnSave" class="btn primary">저장</button>
+      <button id="btnDelete" class="btn danger">삭제</button>
+      <button id="btnExport" class="btn">엑셀</button>
+      <button id="btnPdf" class="btn">PDF</button>
+      <button id="btnExit" class="btn danger">종료</button>
+    </div>
+
+    <div class="filters">
+      <input id="siteName" type="hidden" />
+
+            <label class="field">
+        <span>시작</span>
+        <input id="dateStart" type="date" />
+      </label>
+
+      <label class="field">
+        <span>종료</span>
+        <input id="dateEnd" type="date" />
+      </label>
+
+      <div class="hint">기간조회: 시작~종료 범위에서 기록 있는 날짜를 찾아 불러옵니다. 저장/삭제/PDF는 현재 표시 날짜 기준, 엑셀은 기간 출력.</div>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <!-- buttons injected -->
+  </nav>
+
+  <main id="panels" class="panels">
+    <!-- panels injected -->
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/pwa/app.js?v=20260207g"></script>
+</body>
+</html>
