@@ -191,9 +191,11 @@
 
   function shortLabel(tabKey, field) {
     if (tabKey === "tr450" || tabKey === "tr400") {
-      if (field.k.endsWith("_V")) return "V";
-      if (field.k.endsWith("_A")) return "A";
-      if (field.k.endsWith("_KW")) return "kW";
+      const m = /_(L[1-3])_/.exec(field.k || "");
+      const phase = m ? `${m[1]}-` : "";
+      if (field.k.endsWith("_V")) return `${phase}V`;
+      if (field.k.endsWith("_A")) return `${phase}A`;
+      if (field.k.endsWith("_KW")) return `${phase}KW`;
       if (field.k.endsWith("_temp")) return "온도";
     }
     return field.label || field.k;
