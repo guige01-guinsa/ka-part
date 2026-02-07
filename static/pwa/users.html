@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>사용자관리</title>
-  <link rel="stylesheet" href="/pwa/users.css?v=20260207a" />
+  <title>사용자 관리</title>
+  <link rel="stylesheet" href="/pwa/users.css?v=20260207b" />
 </head>
 <body>
   <header class="top">
-    <div class="title">아파트 사용자관리</div>
+    <div class="title">아파트 사용자 관리</div>
     <div class="actions">
-      <a class="btn" href="/pwa/">점검화면으로</a>
+      <a class="btn" href="/pwa/">메인으로</a>
       <button id="btnReload" class="btn" type="button">새로고침</button>
+      <button id="btnLogout" class="btn" type="button">로그아웃</button>
     </div>
     <div class="meta" id="metaLine">로딩 중...</div>
   </header>
@@ -21,8 +22,8 @@
       <h2 id="formTitle">사용자 등록</h2>
       <div class="grid">
         <label class="field">
-          <span>아이디(login_id)</span>
-          <input id="loginId" type="text" placeholder="예: admin01" />
+          <span>아이디 (login_id)</span>
+          <input id="loginId" type="text" placeholder="예: staff01" />
         </label>
         <label class="field">
           <span>이름</span>
@@ -36,15 +37,25 @@
           <span>연락처</span>
           <input id="userPhone" type="text" placeholder="예: 010-1234-5678" />
         </label>
+        <label class="field">
+          <span>비밀번호 (신규/변경)</span>
+          <input id="userPassword" type="password" placeholder="8자 이상 입력 시 변경" />
+        </label>
       </div>
       <label class="field">
         <span>비고</span>
         <textarea id="userNote" placeholder="메모"></textarea>
       </label>
-      <label class="checkline">
-        <input id="isActive" type="checkbox" checked />
-        <span>활성 사용자</span>
-      </label>
+      <div class="checks">
+        <label class="checkline">
+          <input id="isAdmin" type="checkbox" />
+          <span>관리자 권한</span>
+        </label>
+        <label class="checkline">
+          <input id="isActive" type="checkbox" checked />
+          <span>활성 사용자</span>
+        </label>
+      </div>
       <div class="actions">
         <button id="btnSaveUser" class="btn primary" type="button">저장</button>
         <button id="btnReset" class="btn" type="button">초기화</button>
@@ -58,6 +69,7 @@
     </section>
   </main>
 
-  <script src="/pwa/users.js?v=20260207a"></script>
+  <script src="/pwa/auth.js?v=20260207i"></script>
+  <script src="/pwa/users.js?v=20260207b"></script>
 </body>
 </html>

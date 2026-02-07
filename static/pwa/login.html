@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>로그인</title>
+  <link rel="stylesheet" href="/pwa/login.css?v=20260207a" />
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <h1>아파트 시설관리 로그인</h1>
+      <p class="sub">일반 직원/관리자 계정으로 접속합니다.</p>
+      <label class="field">
+        <span>아이디</span>
+        <input id="loginId" type="text" autocomplete="username" placeholder="예: admin01" />
+      </label>
+      <label class="field">
+        <span>비밀번호</span>
+        <input id="password" type="password" autocomplete="current-password" placeholder="8자 이상" />
+      </label>
+      <div class="actions">
+        <button id="btnLogin" class="btn primary" type="button">로그인</button>
+      </div>
+      <div id="loginMsg" class="msg"></div>
+    </section>
+
+    <section id="bootstrapCard" class="card hidden">
+      <h2>최초 관리자 설정</h2>
+      <p class="sub">관리자 계정이 없어서 1회 초기 설정이 필요합니다.</p>
+      <label class="field">
+        <span>관리자 아이디</span>
+        <input id="bsLoginId" type="text" placeholder="예: admin01" />
+      </label>
+      <label class="field">
+        <span>이름</span>
+        <input id="bsName" type="text" placeholder="예: 관리소장" />
+      </label>
+      <label class="field">
+        <span>직책</span>
+        <input id="bsRole" type="text" value="관리소장" />
+      </label>
+      <label class="field">
+        <span>비밀번호</span>
+        <input id="bsPassword" type="password" placeholder="8자 이상" />
+      </label>
+      <label class="field">
+        <span>비밀번호 확인</span>
+        <input id="bsPassword2" type="password" placeholder="비밀번호 재입력" />
+      </label>
+      <div class="actions">
+        <button id="btnBootstrap" class="btn primary" type="button">초기 관리자 생성</button>
+      </div>
+      <div id="bootstrapMsg" class="msg"></div>
+    </section>
+  </main>
+
+  <script src="/pwa/auth.js?v=20260207i"></script>
+  <script src="/pwa/login.js?v=20260207a"></script>
+</body>
+</html>

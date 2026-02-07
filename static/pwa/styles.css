@@ -38,6 +38,22 @@ body {
   letter-spacing: -0.02em;
 }
 
+.userbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.userchip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-soft) 74%, black 26%);
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

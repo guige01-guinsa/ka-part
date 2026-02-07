@@ -1,72 +1,51 @@
-# ka-part (배포용 패키지)
+# ka-part
 
-현장 기록(PWA) + FastAPI + SQLite(ka-part/data/ka.db)로 구성된 경량 운영 앱입니다.
+아파트 수변전실 일지(PWA) + FastAPI + SQLite 프로젝트입니다.
 
-## 1) 실행 (PC / Linux / 서버)
-
+## 실행
 ```bash
 cd ka-part
 python -m venv .venv
-# Windows: .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-- 접속: `http://<서버IP>:8000/`  → 자동으로 `/pwa/`로 리다이렉트
-- PWA: `http://<서버IP>:8000/pwa/`
-
-## 2) 안드로이드(Termux) 실행
-
-```bash
-cd /storage/emulated/0/수변전일지/ka-part
+# Windows
+.venv\Scripts\activate
 pip install -r requirements.txt
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-같은 Wi‑Fi/LTE 환경에서 브라우저로 `http://<폰IP>:8000/` 접속 후 홈화면에 추가(PWA).
+- 메인: `http://localhost:8000/pwa/`
+- 로그인: `http://localhost:8000/pwa/login.html`
 
-## 3) DB 경로 / 구조
+## 배포(Render)
+- Build: `pip install -r requirements.txt`
+- Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 
-- 운영 DB: `ka-part/data/ka.db`
-- 초기 테이블:
-  - sites / entries / entry_values (유연 스키마: 탭/필드 추가 대응)
-  - home_logs / transformer_450_reads / transformer_400_reads / power_meter_reads / facility_tasks / facility_checks (도메인 테이블)
+## 인증/권한
+- 세션 토큰(Bearer) 인증 사용
+- 일반 사용자: 일지 조회/저장
+- 관리자: 사용자 등록/수정/삭제 가능
+- 사용자 관리 화면: `/pwa/users.html` (관리자 전용)
 
-> 현재 앱은 **entry_values** 기반으로 저장/조회가 동작합니다.
-> 도메인 테이블은 보고서/집계 고도화를 위한 기반으로 준비되어 있습니다.
+## 주요 API
+- 인증
+  - `GET /api/auth/bootstrap_status`
+  - `POST /api/auth/bootstrap`
+  - `POST /api/auth/login`
+  - `POST /api/auth/logout`
+  - `GET /api/auth/me`
+  - `POST /api/auth/change_password`
+- 사용자
+  - `GET /api/users`
+  - `POST /api/users`
+  - `PATCH /api/users/{user_id}`
+  - `DELETE /api/users/{user_id}`
+- 일지
+  - `POST /api/save`
+  - `GET /api/load`
+  - `DELETE /api/delete`
+  - `GET /api/list_range`
+  - `GET /api/export`
+  - `GET /api/pdf`
 
-## 4) 스키마/마이그레이션
-
-- 기본 스키마: `sql/schema.sql`
-- 현장 도메인 테이블 추가: `sql/20260206_migration_domain_tables.sql`
-
-수동 실행:
-```bash
-sqlite3 data/ka.db ".read sql/schema.sql"
-sqlite3 data/ka.db ".read sql/20260206_migration_domain_tables.sql"
-```
-
-## 5) 배포 (권장)
-
-### A. Docker
-```bash
-docker build -t ka-part .
-docker run -p 8000:8000 -v $(pwd)/data:/app/data ka-part
-```
-
-### B. Render/Railway 등
-- Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Persistent disk(또는 volume)에 `data/`를 마운트(DB 유지)
-
-## 6) 운영 팁
-- PWA UI가 안 바뀌면: 브라우저 강력 새로고침 / PWA 앱 삭제 후 재설치
-- 엑셀 다운로드 한글 파일명은 `filename*=`로 처리(안전)
-
-## 7) 사용자관리(관리사무소 직원 등록)
-- 화면: `/pwa/users.html`
-- API: `/api/users` (목록/등록/수정/삭제)
-- 권장 인원: 9명 기준으로 화면에 표시
-
-버전: 2026-02-07
+## 참고
+- 운영 DB: `data/ka.db`
+- 스키마 확장과 자동 보정은 `app/db.py`의 `init_db()`/`ensure_domain_tables()`에서 처리합니다.

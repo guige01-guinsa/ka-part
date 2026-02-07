@@ -43,6 +43,7 @@
   let TABS = [];
   let rangeDates = [];
   let rangeIndex = -1;
+  let authUser = null;
 
   function toast(msg) {
     const el = $("#toast");
@@ -60,17 +61,69 @@
   }
 
   async function jfetch(url, opts = {}) {
+    if (!window.KAAuth) throw new Error("auth.js가 로드되지 않았습니다.");
+    return window.KAAuth.requestJson(url, opts);
+  }
+
+  function setCurrentUserChip(user) {
+    const chip = $("#currentUser");
+    if (!chip) return;
+    if (!user) {
+      chip.textContent = "미로그인";
+      return;
+    }
+    const role = user.is_admin ? "관리자" : "일반";
+    chip.textContent = `${user.name || user.login_id} (${role})`;
+  }
+
+  async function ensureAuth() {
+    authUser = await window.KAAuth.requireAuth();
+    setCurrentUserChip(authUser);
+    const btnUsers = $("#btnUsers");
+    if (btnUsers && !authUser.is_admin) btnUsers.style.display = "none";
+  }
+
+  function parseFilename(contentDisposition, fallback) {
+    const value = String(contentDisposition || "");
+    const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(value);
+    if (utf8 && utf8[1]) {
+      try {
+        return decodeURIComponent(utf8[1]);
+      } catch (_e) {}
+    }
+    const plain = /filename=\"?([^\";]+)\"?/i.exec(value);
+    if (plain && plain[1]) return plain[1];
+    return fallback;
+  }
+
+  async function downloadWithAuth(url, fallbackName) {
+    const token = window.KAAuth.getToken();
+    if (!token) {
+      window.KAAuth.redirectLogin();
+      return;
+    }
     const res = await fetch(url, {
-      headers: { "Content-Type": "application/json" },
-      ...opts,
+      headers: { Authorization: `Bearer ${token}` },
     });
+    if (res.status === 401) {
+      window.KAAuth.clearSession();
+      window.KAAuth.redirectLogin();
+      return;
+    }
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
       throw new Error(`${res.status} ${res.statusText} ${txt}`.trim());
     }
-    const ct = res.headers.get("content-type") || "";
-    if (ct.includes("application/json")) return res.json();
-    return res.text();
+    const blob = await res.blob();
+    const filename = parseFilename(res.headers.get("content-disposition"), fallbackName);
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(href);
   }
 
   function getSiteName() {
@@ -503,16 +556,16 @@
     toast("삭제 완료");
   }
 
-  function doExport() {
+  async function doExport() {
     const url = `/api/export?site_name=${encodeURIComponent(getSiteName())}&date_from=${encodeURIComponent(
       getDateStart()
     )}&date_to=${encodeURIComponent(getDateEnd())}`;
-    window.location.href = url;
+    await downloadWithAuth(url, "export.xlsx");
   }
 
-  function doPdf() {
+  async function doPdf() {
     const url = `/api/pdf?site_name=${encodeURIComponent(getSiteName())}&date=${encodeURIComponent(getPickedDate())}`;
-    window.location.href = url;
+    await downloadWithAuth(url, "report.pdf");
   }
 
   function syncStickyOffset() {
@@ -551,21 +604,23 @@
     $("#btnSave")?.addEventListener("click", () => doSave().catch((err) => alert("저장 오류: " + err.message)));
     $("#btnDelete")?.addEventListener("click", () => doDelete().catch((err) => alert("삭제 오류: " + err.message)));
     $("#btnExport")?.addEventListener("click", () => {
-      try {
-        doExport();
-      } catch (e) {
-        alert("엑셀 오류: " + e.message);
-      }
+      doExport().catch((err) => alert("엑셀 오류: " + err.message));
     });
     $("#btnPdf")?.addEventListener("click", () => {
-      try {
-        doPdf();
-      } catch (e) {
-        alert("PDF 오류: " + e.message);
-      }
+      doPdf().catch((err) => alert("PDF 오류: " + err.message));
     });
     $("#btnUsers")?.addEventListener("click", () => {
       window.location.href = "/pwa/users.html";
+    });
+    $("#btnLogout")?.addEventListener("click", () => {
+      const run = async () => {
+        try {
+          await jfetch("/api/auth/logout", { method: "POST" });
+        } catch (_e) {}
+        window.KAAuth.clearSession();
+        window.KAAuth.redirectLogin("/pwa/");
+      };
+      run().catch(() => {});
     });
     $("#btnExit")?.addEventListener("click", () => {
       const ok = confirm("홈 입력값을 비우고 종료할까요?\n(종료 버튼을 누르기 전까지 입력값은 유지됩니다.)");
@@ -578,6 +633,7 @@
   }
 
   async function init() {
+    await ensureAuth();
     const data = await jfetch("/api/schema");
     const schema = data && data.schema ? data.schema : null;
     if (!schema) throw new Error("스키마를 불러오지 못했습니다.");
@@ -591,12 +647,14 @@
     applyHomeDraft(loadHomeDraft());
 
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/pwa/sw.js?v=20260207h").catch(() => {});
+      navigator.serviceWorker.register("/pwa/sw.js?v=20260207i").catch(() => {});
     }
   }
 
   init().catch((err) => {
-    alert("앱 초기화 오류: " + (err && err.message ? err.message : String(err)));
+    const msg = err && err.message ? err.message : String(err);
+    if (msg.includes("로그인이 필요")) return;
+    alert("앱 초기화 오류: " + msg);
   });
 })();
 

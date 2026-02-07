@@ -6,19 +6,10 @@
   let roles = [];
   let editingId = null;
   let recommendedCount = 9;
+  let me = null;
 
   async function jfetch(url, opts = {}) {
-    const res = await fetch(url, {
-      headers: { "Content-Type": "application/json" },
-      ...opts,
-    });
-    const ct = res.headers.get("content-type") || "";
-    const body = ct.includes("application/json") ? await res.json() : await res.text();
-    if (!res.ok) {
-      const msg = typeof body === "string" ? body : body.detail || JSON.stringify(body);
-      throw new Error(msg || `${res.status}`);
-    }
-    return body;
+    return KAAuth.requestJson(url, opts);
   }
 
   function setMsg(msg, isErr = false) {
@@ -35,6 +26,8 @@
     $("#userName").value = "";
     $("#userPhone").value = "";
     $("#userNote").value = "";
+    $("#userPassword").value = "";
+    $("#isAdmin").checked = false;
     $("#isActive").checked = true;
     if (roles.length) $("#userRole").value = roles[0];
     setMsg("");
@@ -47,6 +40,8 @@
     $("#userName").value = user.name || "";
     $("#userPhone").value = user.phone || "";
     $("#userNote").value = user.note || "";
+    $("#userPassword").value = "";
+    $("#isAdmin").checked = !!user.is_admin;
     $("#isActive").checked = !!user.is_active;
     $("#userRole").value = user.role || roles[0] || "";
     setMsg("");
@@ -57,17 +52,19 @@
     if (!el) return;
     const count = users.length;
     const active = users.filter((u) => u.is_active).length;
-    el.textContent = `등록 ${count}명 (활성 ${active}명) / 권장 ${recommendedCount}명`;
+    const adminCount = users.filter((u) => u.is_admin && u.is_active).length;
+    el.textContent = `등록 ${count}명 (활성 ${active}명 / 관리자 ${adminCount}명 / 권장 ${recommendedCount}명)`;
     el.classList.toggle("warn", active > recommendedCount);
   }
 
   function itemHtml(u) {
     const activeText = u.is_active ? "활성" : "비활성";
+    const adminTag = u.is_admin ? "<span class=\"badge\">관리자</span>" : "";
     return `
       <div class="item ${u.is_active ? "" : "inactive"}" data-id="${u.id}">
         <div class="line1">
           <div>
-            <div class="name">${escapeHtml(u.name || "")} <span class="login">(${escapeHtml(u.login_id || "")})</span></div>
+            <div class="name">${escapeHtml(u.name || "")} <span class="login">(${escapeHtml(u.login_id || "")})</span> ${adminTag}</div>
             <div class="line2">${escapeHtml(u.role || "")} / ${escapeHtml(u.phone || "-")} / ${activeText}</div>
           </div>
           <div class="actions">
@@ -122,24 +119,36 @@
   }
 
   function payloadFromForm() {
-    return {
+    const pw = ($("#userPassword").value || "").trim();
+    const payload = {
       login_id: ($("#loginId").value || "").trim(),
       name: ($("#userName").value || "").trim(),
       role: $("#userRole").value || "",
       phone: ($("#userPhone").value || "").trim(),
       note: ($("#userNote").value || "").trim(),
+      is_admin: !!$("#isAdmin").checked,
       is_active: !!$("#isActive").checked,
     };
+    if (pw) payload.password = pw;
+    return payload;
   }
 
   async function saveUser() {
     const body = payloadFromForm();
+    if (editingId == null && !body.password) {
+      setMsg("신규 사용자는 비밀번호를 입력해야 합니다.", true);
+      return;
+    }
+    if (body.password && body.password.length < 8) {
+      setMsg("비밀번호는 8자 이상이어야 합니다.", true);
+      return;
+    }
     if (editingId == null) {
       await jfetch("/api/users", { method: "POST", body: JSON.stringify(body) });
-      setMsg("등록되었습니다.");
+      setMsg("등록했습니다.");
     } else {
       await jfetch(`/api/users/${editingId}`, { method: "PATCH", body: JSON.stringify(body) });
-      setMsg("수정되었습니다.");
+      setMsg("수정했습니다.");
     }
     await loadUsers();
     clearForm();
@@ -148,11 +157,15 @@
   async function removeUser(id) {
     const u = users.find((x) => Number(x.id) === Number(id));
     if (!u) return;
+    if (me && Number(me.id) === Number(id)) {
+      setMsg("현재 로그인한 계정은 삭제할 수 없습니다.", true);
+      return;
+    }
     const ok = confirm(`사용자 '${u.name}'를 삭제할까요?`);
     if (!ok) return;
     await jfetch(`/api/users/${id}`, { method: "DELETE" });
     if (editingId === Number(id)) clearForm();
-    setMsg("삭제되었습니다.");
+    setMsg("삭제했습니다.");
     await loadUsers();
   }
 
@@ -160,6 +173,16 @@
     $("#btnReload").addEventListener("click", () => loadUsers().catch((e) => setMsg(e.message, true)));
     $("#btnReset").addEventListener("click", clearForm);
     $("#btnSaveUser").addEventListener("click", () => saveUser().catch((e) => setMsg(e.message, true)));
+    $("#btnLogout").addEventListener("click", () => {
+      const run = async () => {
+        try {
+          await jfetch("/api/auth/logout", { method: "POST" });
+        } catch (_e) {}
+        KAAuth.clearSession();
+        KAAuth.redirectLogin("/pwa/users.html");
+      };
+      run().catch(() => {});
+    });
 
     $("#userList").addEventListener("click", (e) => {
       const btn = e.target.closest("button[data-action]");
@@ -175,6 +198,12 @@
   }
 
   async function init() {
+    me = await KAAuth.requireAuth();
+    if (!me.is_admin) {
+      alert("관리자만 접근할 수 있습니다.");
+      window.location.href = "/pwa/";
+      return;
+    }
     await loadRoles();
     clearForm();
     await loadUsers();

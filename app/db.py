@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import os
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -251,16 +256,42 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
           role TEXT NOT NULL,
           phone TEXT,
           note TEXT,
+          password_hash TEXT,
+          is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1)),
           is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+          last_login_at TEXT,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
         """
     )
+    _ensure_column(con, "staff_users", "password_hash TEXT")
+    _ensure_column(con, "staff_users", "is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1))")
+    _ensure_column(con, "staff_users", "last_login_at TEXT")
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_staff_users_active
         ON staff_users(is_active, name);
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          revoked_at TEXT,
+          user_agent TEXT,
+          ip_address TEXT
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
+        ON auth_sessions(user_id, revoked_at, expires_at);
         """
     )
 
@@ -523,7 +554,7 @@ def list_staff_users(*, active_only: bool = False) -> List[Dict[str, Any]]:
     con = _connect()
     try:
         sql = """
-            SELECT id, login_id, name, role, phone, note, is_active, created_at, updated_at
+            SELECT id, login_id, name, role, phone, note, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
         """
         params: List[Any] = []
@@ -541,7 +572,7 @@ def get_staff_user(user_id: int) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, is_active, created_at, updated_at
+            SELECT id, login_id, name, role, phone, note, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -559,6 +590,8 @@ def create_staff_user(
     role: str,
     phone: Optional[str] = None,
     note: Optional[str] = None,
+    password_hash: Optional[str] = None,
+    is_admin: int = 0,
     is_active: int = 1,
 ) -> Dict[str, Any]:
     con = _connect()
@@ -566,15 +599,26 @@ def create_staff_user(
         ts = now_iso()
         con.execute(
             """
-            INSERT INTO staff_users(login_id, name, role, phone, note, is_active, created_at, updated_at)
-            VALUES(?,?,?,?,?,?,?,?)
+            INSERT INTO staff_users(login_id, name, role, phone, note, password_hash, is_admin, is_active, created_at, updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
             """,
-            (login_id, name, role, phone, note, int(1 if is_active else 0), ts, ts),
+            (
+                login_id,
+                name,
+                role,
+                phone,
+                note,
+                password_hash,
+                int(1 if is_admin else 0),
+                int(1 if is_active else 0),
+                ts,
+                ts,
+            ),
         )
         con.commit()
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, is_active, created_at, updated_at
+            SELECT id, login_id, name, role, phone, note, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -593,6 +637,7 @@ def update_staff_user(
     role: str,
     phone: Optional[str] = None,
     note: Optional[str] = None,
+    is_admin: int = 0,
     is_active: int = 1,
 ) -> Optional[Dict[str, Any]]:
     con = _connect()
@@ -601,17 +646,27 @@ def update_staff_user(
         cur = con.execute(
             """
             UPDATE staff_users
-            SET login_id=?, name=?, role=?, phone=?, note=?, is_active=?, updated_at=?
+            SET login_id=?, name=?, role=?, phone=?, note=?, is_admin=?, is_active=?, updated_at=?
             WHERE id=?
             """,
-            (login_id, name, role, phone, note, int(1 if is_active else 0), ts, int(user_id)),
+            (
+                login_id,
+                name,
+                role,
+                phone,
+                note,
+                int(1 if is_admin else 0),
+                int(1 if is_active else 0),
+                ts,
+                int(user_id),
+            ),
         )
         con.commit()
         if cur.rowcount == 0:
             return None
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, is_active, created_at, updated_at
+            SELECT id, login_id, name, role, phone, note, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -628,5 +683,202 @@ def delete_staff_user(user_id: int) -> bool:
         cur = con.execute("DELETE FROM staff_users WHERE id=?", (int(user_id),))
         con.commit()
         return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def _b64u_encode(v: bytes) -> str:
+    return base64.urlsafe_b64encode(v).decode("ascii").rstrip("=")
+
+
+def _b64u_decode(v: str) -> bytes:
+    return base64.urlsafe_b64decode(v + "=" * (-len(v) % 4))
+
+
+def hash_password(password: str, *, iterations: int = 310000) -> str:
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations, dklen=32)
+    return f"pbkdf2_sha256${iterations}${_b64u_encode(salt)}${_b64u_encode(dk)}"
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    try:
+        algo, iter_s, salt_b64, hash_b64 = str(password_hash or "").split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        iterations = int(iter_s)
+        salt = _b64u_decode(salt_b64)
+        expected = _b64u_decode(hash_b64)
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations, dklen=len(expected))
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
+
+
+def set_staff_user_password(user_id: int, password: str) -> bool:
+    con = _connect()
+    try:
+        ts = now_iso()
+        pw_hash = hash_password(password)
+        cur = con.execute(
+            "UPDATE staff_users SET password_hash=?, updated_at=? WHERE id=?",
+            (pw_hash, ts, int(user_id)),
+        )
+        con.commit()
+        return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def get_staff_user_by_login(login_id: str) -> Optional[Dict[str, Any]]:
+    con = _connect()
+    try:
+        row = con.execute(
+            """
+            SELECT id, login_id, name, role, phone, note, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
+            FROM staff_users
+            WHERE login_id=?
+            """,
+            (str(login_id or "").strip().lower(),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
+def count_staff_admins(*, active_only: bool = True) -> int:
+    con = _connect()
+    try:
+        sql = "SELECT COUNT(*) AS c FROM staff_users WHERE is_admin=1"
+        if active_only:
+            sql += " AND is_active=1"
+        row = con.execute(sql).fetchone()
+        return int(row["c"] if row else 0)
+    finally:
+        con.close()
+
+
+def mark_staff_user_login(user_id: int) -> None:
+    con = _connect()
+    try:
+        ts = now_iso()
+        con.execute(
+            "UPDATE staff_users SET last_login_at=?, updated_at=? WHERE id=?",
+            (ts, ts, int(user_id)),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_auth_session(
+    user_id: int,
+    *,
+    ttl_hours: int = 12,
+    user_agent: Optional[str] = None,
+    ip_address: Optional[str] = None,
+) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        created_at = now_iso()
+        expires_at = (datetime.now() + timedelta(hours=max(1, int(ttl_hours)))).replace(microsecond=0).isoformat(
+            sep=" "
+        )
+        raw_token = _b64u_encode(os.urandom(32))
+        token_hash = _hash_session_token(raw_token)
+        con.execute(
+            """
+            INSERT INTO auth_sessions(user_id, token_hash, created_at, expires_at, user_agent, ip_address)
+            VALUES(?,?,?,?,?,?)
+            """,
+            (int(user_id), token_hash, created_at, expires_at, user_agent, ip_address),
+        )
+        con.commit()
+        return {"token": raw_token, "expires_at": expires_at}
+    finally:
+        con.close()
+
+
+def revoke_auth_session(token: str) -> bool:
+    con = _connect()
+    try:
+        ts = now_iso()
+        cur = con.execute(
+            "UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
+            (ts, _hash_session_token(token)),
+        )
+        con.commit()
+        return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def revoke_all_user_sessions(user_id: int) -> int:
+    con = _connect()
+    try:
+        ts = now_iso()
+        cur = con.execute(
+            "UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+            (ts, int(user_id)),
+        )
+        con.commit()
+        return int(cur.rowcount)
+    finally:
+        con.close()
+
+
+def get_auth_user_by_token(token: str) -> Optional[Dict[str, Any]]:
+    con = _connect()
+    try:
+        now = now_iso()
+        row = con.execute(
+            """
+            SELECT
+              s.id AS session_id,
+              s.expires_at,
+              u.id,
+              u.login_id,
+              u.name,
+              u.role,
+              u.phone,
+              u.note,
+              u.is_admin,
+              u.is_active,
+              u.created_at,
+              u.updated_at,
+              u.last_login_at
+            FROM auth_sessions s
+            JOIN staff_users u ON u.id = s.user_id
+            WHERE s.token_hash=?
+              AND s.revoked_at IS NULL
+              AND s.expires_at > ?
+            LIMIT 1
+            """,
+            (_hash_session_token(token), now),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        if int(data.get("is_active") or 0) != 1:
+            return None
+        return data
+    finally:
+        con.close()
+
+
+def cleanup_expired_sessions() -> int:
+    con = _connect()
+    try:
+        now = now_iso()
+        cur = con.execute(
+            "DELETE FROM auth_sessions WHERE (expires_at <= ?) OR (revoked_at IS NOT NULL AND revoked_at <= ?)",
+            (now, now),
+        )
+        con.commit()
+        return int(cur.rowcount)
     finally:
         con.close()

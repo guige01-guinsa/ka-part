@@ -5,11 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <title>수변전실</title>
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=1">
-  <link rel="stylesheet" href="/pwa/styles.css?v=20260207g">
+  <link rel="stylesheet" href="/pwa/styles.css?v=20260207i">
 </head>
 <body>
   <header class="top">
     <div class="title">수변전실</div>
+    <div class="userbar">
+      <span id="currentUser" class="userchip">미로그인</span>
+    </div>
 
     <div class="actions">
       <button id="btnPrev" class="btn ghost" title="이전 날짜">◀</button>
@@ -20,6 +23,7 @@
       <button id="btnExport" class="btn">엑셀</button>
       <button id="btnPdf" class="btn">PDF</button>
       <button id="btnUsers" class="btn">사용자관리</button>
+      <button id="btnLogout" class="btn">로그아웃</button>
       <button id="btnExit" class="btn danger">종료</button>
     </div>
 
@@ -50,7 +54,8 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="/pwa/app.js?v=20260207h"></script>
+  <script src="/pwa/auth.js?v=20260207i"></script>
+  <script src="/pwa/app.js?v=20260207i"></script>
 </body>
 </html>
 

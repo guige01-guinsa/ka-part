@@ -107,6 +107,12 @@ h2 { margin: 0 0 10px; font-size: 16px; }
   font-size: 13px;
 }
 
+.checks {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .msg { min-height: 18px; color: #a9d4ff; font-size: 12px; }
 .msg.err { color: #ffb4b4; }
 
@@ -127,6 +133,16 @@ h2 { margin: 0 0 10px; font-size: 16px; }
 }
 .name { font-weight: 800; }
 .login { color: var(--muted); font-size: 12px; }
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary) 70%, var(--line));
+  background: color-mix(in srgb, var(--primary) 20%, var(--bg-soft));
+  font-size: 11px;
+  color: #cde0ff;
+}
 .line2 { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
 
 @media (max-width: 640px) {
