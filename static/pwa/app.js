@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   "use strict";
 
   const $ = (sel) => document.querySelector(sel);
@@ -564,6 +564,9 @@
         alert("PDF 오류: " + e.message);
       }
     });
+    $("#btnUsers")?.addEventListener("click", () => {
+      window.location.href = "/pwa/users.html";
+    });
     $("#btnExit")?.addEventListener("click", () => {
       const ok = confirm("홈 입력값을 비우고 종료할까요?\n(종료 버튼을 누르기 전까지 입력값은 유지됩니다.)");
       if (!ok) return;
@@ -588,7 +591,7 @@
     applyHomeDraft(loadHomeDraft());
 
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/pwa/sw.js?v=20260207g").catch(() => {});
+      navigator.serviceWorker.register("/pwa/sw.js?v=20260207h").catch(() => {});
     }
   }
 
@@ -596,3 +599,4 @@
     alert("앱 초기화 오류: " + (err && err.message ? err.message : String(err)));
   });
 })();
+

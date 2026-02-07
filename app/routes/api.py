@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Body, HTTPException, Query
@@ -8,19 +9,56 @@ from fastapi.responses import StreamingResponse
 
 from ..db import (
     delete_entry,
+    delete_staff_user,
     ensure_site,
+    get_staff_user,
     list_entries,
+    list_staff_users,
     load_entry,
     load_entry_by_id,
     save_tab_values,
     schema_alignment_report,
+    create_staff_user,
     upsert_entry,
     upsert_tab_domain_data,
+    update_staff_user,
 )
 from ..schema_defs import SCHEMA_DEFS, normalize_tabs_payload
 from ..utils import build_excel, build_pdf, safe_ymd, today_ymd
 
 router = APIRouter()
+
+VALID_USER_ROLES = ["관리소장", "과장", "주임", "기사", "행정", "경비", "미화", "기타"]
+
+
+def _clean_login_id(value: Any) -> str:
+    login_id = (str(value or "")).strip().lower()
+    if not re.match(r"^[a-z0-9._-]{2,32}$", login_id):
+        raise HTTPException(status_code=400, detail="login_id must match ^[a-z0-9._-]{2,32}$")
+    return login_id
+
+
+def _clean_name(value: Any) -> str:
+    name = (str(value or "")).strip()
+    if len(name) < 2 or len(name) > 40:
+        raise HTTPException(status_code=400, detail="name length must be 2..40")
+    return name
+
+
+def _clean_role(value: Any) -> str:
+    role = (str(value or "")).strip()
+    if len(role) < 1 or len(role) > 20:
+        raise HTTPException(status_code=400, detail="role length must be 1..20")
+    return role
+
+
+def _clean_optional_text(value: Any, max_len: int) -> str | None:
+    txt = (str(value or "")).strip()
+    if not txt:
+        return None
+    if len(txt) > max_len:
+        raise HTTPException(status_code=400, detail=f"text length must be <= {max_len}")
+    return txt
 
 
 @router.get("/schema")
@@ -31,12 +69,91 @@ def api_schema():
 @router.get("/health")
 def health():
     report = schema_alignment_report()
-    return {"ok": True, "version": "2.6.0", "schema_alignment_ok": report.get("ok", False)}
+    return {"ok": True, "version": "2.7.0", "schema_alignment_ok": report.get("ok", False)}
 
 
 @router.get("/schema_alignment")
 def api_schema_alignment():
     return schema_alignment_report()
+
+
+@router.get("/user_roles")
+def api_user_roles():
+    roles = ["관리소장", "과장", "주임", "기사", "행정", "경비", "미화", "기타"]
+    return {"ok": True, "roles": roles, "recommended_staff_count": 9}
+
+
+@router.get("/users")
+def api_users(active_only: int = Query(default=0)):
+    users = list_staff_users(active_only=bool(active_only))
+    return {"ok": True, "recommended_staff_count": 9, "count": len(users), "users": users}
+
+
+@router.post("/users")
+def api_users_create(payload: Dict[str, Any] = Body(...)):
+    login_id = _clean_login_id(payload.get("login_id"))
+    name = _clean_name(payload.get("name"))
+    role = _clean_role(payload.get("role"))
+    phone = _clean_optional_text(payload.get("phone"), 40)
+    note = _clean_optional_text(payload.get("note"), 200)
+    is_active = 1 if bool(payload.get("is_active", True)) else 0
+    try:
+        user = create_staff_user(
+            login_id=login_id,
+            name=name,
+            role=role,
+            phone=phone,
+            note=note,
+            is_active=is_active,
+        )
+    except Exception as e:
+        if "UNIQUE constraint failed" in str(e):
+            raise HTTPException(status_code=409, detail="login_id already exists")
+        raise
+    return {"ok": True, "user": user}
+
+
+@router.patch("/users/{user_id}")
+def api_users_patch(user_id: int, payload: Dict[str, Any] = Body(...)):
+    current = get_staff_user(user_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="user not found")
+    login_id = _clean_login_id(payload.get("login_id", current.get("login_id")))
+    name = _clean_name(payload.get("name", current.get("name")))
+    role = _clean_role(payload.get("role", current.get("role")))
+    phone = _clean_optional_text(
+        payload["phone"] if "phone" in payload else current.get("phone"),
+        40,
+    )
+    note = _clean_optional_text(
+        payload["note"] if "note" in payload else current.get("note"),
+        200,
+    )
+    is_active_raw = payload["is_active"] if "is_active" in payload else current.get("is_active", 1)
+    is_active = 1 if bool(is_active_raw) else 0
+    try:
+        user = update_staff_user(
+            user_id,
+            login_id=login_id,
+            name=name,
+            role=role,
+            phone=phone,
+            note=note,
+            is_active=is_active,
+        )
+    except Exception as e:
+        if "UNIQUE constraint failed" in str(e):
+            raise HTTPException(status_code=409, detail="login_id already exists")
+        raise
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+    return {"ok": True, "user": user}
+
+
+@router.delete("/users/{user_id}")
+def api_users_delete(user_id: int):
+    ok = delete_staff_user(user_id)
+    return {"ok": ok}
 
 
 @router.post("/save")

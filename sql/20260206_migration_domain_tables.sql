@@ -95,4 +95,18 @@ CREATE TABLE IF NOT EXISTS facility_subtasks (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_subtasks_site_date_domain
 ON facility_subtasks(site_name, entry_date, domain_key);
 
+CREATE TABLE IF NOT EXISTS staff_users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login_id TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL,
+  phone TEXT,
+  note TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_staff_users_active
+ON staff_users(is_active, name);
+
 COMMIT;

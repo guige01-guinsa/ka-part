@@ -242,6 +242,27 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         ON facility_subtasks(site_name, entry_date, domain_key);
         """
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS staff_users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          login_id TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          name TEXT NOT NULL,
+          role TEXT NOT NULL,
+          phone TEXT,
+          note TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_staff_users_active
+        ON staff_users(is_active, name);
+        """
+    )
 
 
 def _rename_entry_value_key(con: sqlite3.Connection, tab_key: str, old_key: str, new_key: str) -> None:
@@ -494,5 +515,118 @@ def schema_alignment_report() -> Dict[str, Any]:
 
         ok = len(issues) == 0
         return {"ok": ok, "issue_count": len(issues), "issues": issues}
+    finally:
+        con.close()
+
+
+def list_staff_users(*, active_only: bool = False) -> List[Dict[str, Any]]:
+    con = _connect()
+    try:
+        sql = """
+            SELECT id, login_id, name, role, phone, note, is_active, created_at, updated_at
+            FROM staff_users
+        """
+        params: List[Any] = []
+        if active_only:
+            sql += " WHERE is_active=1"
+        sql += " ORDER BY is_active DESC, name ASC, id ASC"
+        rows = con.execute(sql, tuple(params)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+def get_staff_user(user_id: int) -> Optional[Dict[str, Any]]:
+    con = _connect()
+    try:
+        row = con.execute(
+            """
+            SELECT id, login_id, name, role, phone, note, is_active, created_at, updated_at
+            FROM staff_users
+            WHERE id=?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
+def create_staff_user(
+    *,
+    login_id: str,
+    name: str,
+    role: str,
+    phone: Optional[str] = None,
+    note: Optional[str] = None,
+    is_active: int = 1,
+) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        ts = now_iso()
+        con.execute(
+            """
+            INSERT INTO staff_users(login_id, name, role, phone, note, is_active, created_at, updated_at)
+            VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (login_id, name, role, phone, note, int(1 if is_active else 0), ts, ts),
+        )
+        con.commit()
+        row = con.execute(
+            """
+            SELECT id, login_id, name, role, phone, note, is_active, created_at, updated_at
+            FROM staff_users
+            WHERE login_id=?
+            """,
+            (login_id,),
+        ).fetchone()
+        return dict(row)
+    finally:
+        con.close()
+
+
+def update_staff_user(
+    user_id: int,
+    *,
+    login_id: str,
+    name: str,
+    role: str,
+    phone: Optional[str] = None,
+    note: Optional[str] = None,
+    is_active: int = 1,
+) -> Optional[Dict[str, Any]]:
+    con = _connect()
+    try:
+        ts = now_iso()
+        cur = con.execute(
+            """
+            UPDATE staff_users
+            SET login_id=?, name=?, role=?, phone=?, note=?, is_active=?, updated_at=?
+            WHERE id=?
+            """,
+            (login_id, name, role, phone, note, int(1 if is_active else 0), ts, int(user_id)),
+        )
+        con.commit()
+        if cur.rowcount == 0:
+            return None
+        row = con.execute(
+            """
+            SELECT id, login_id, name, role, phone, note, is_active, created_at, updated_at
+            FROM staff_users
+            WHERE id=?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
+def delete_staff_user(user_id: int) -> bool:
+    con = _connect()
+    try:
+        cur = con.execute("DELETE FROM staff_users WHERE id=?", (int(user_id),))
+        con.commit()
+        return cur.rowcount > 0
     finally:
         con.close()
