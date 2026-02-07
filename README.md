@@ -45,7 +45,14 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
   - `GET /api/list_range`
   - `GET /api/export`
   - `GET /api/pdf`
+- 단지 제원(환경변수)
+  - `GET /api/site_env_template` (관리자)
+  - `GET /api/site_env?site_name=...` (관리자)
+  - `PUT /api/site_env` (관리자, `{site_name, config}`)
+  - `DELETE /api/site_env?site_name=...` (관리자)
+  - `GET /api/site_env_list` (관리자)
 
 ## 참고
 - 운영 DB: `data/ka.db`
 - 스키마 확장과 자동 보정은 `app/db.py`의 `init_db()`/`ensure_domain_tables()`에서 처리합니다.
+- 관리자 제원 설정 화면: `/pwa/spec_env.html`

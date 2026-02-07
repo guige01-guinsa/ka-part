@@ -39,6 +39,8 @@
   };
   const COMPACT_TABS = new Set(["tr450", "tr400", "meter", "facility_check"]);
   const HOME_DRAFT_KEY = "ka_home_draft_v2";
+  const SITE_NAME_KEY = "ka_current_site_name_v1";
+  const DEFAULT_SITE_NAME = "미지정단지";
 
   let TABS = [];
   let rangeDates = [];
@@ -81,6 +83,8 @@
     setCurrentUserChip(authUser);
     const btnUsers = $("#btnUsers");
     if (btnUsers && !authUser.is_admin) btnUsers.style.display = "none";
+    const btnSpec = $("#btnSpecEnv");
+    if (btnSpec && !authUser.is_admin) btnSpec.style.display = "none";
   }
 
   function parseFilename(contentDisposition, fallback) {
@@ -128,7 +132,24 @@
 
   function getSiteName() {
     const el = $("#siteName");
-    return (el && el.value ? el.value : "").trim() || "미지정단지";
+    return (el && el.value ? el.value : "").trim() || DEFAULT_SITE_NAME;
+  }
+
+  function setSiteName(name) {
+    const clean = (name || "").trim() || DEFAULT_SITE_NAME;
+    const el = $("#siteName");
+    if (el) el.value = clean;
+    localStorage.setItem(SITE_NAME_KEY, clean);
+    return clean;
+  }
+
+  function resolveSiteName() {
+    const u = new URL(window.location.href);
+    const q = (u.searchParams.get("site_name") || u.searchParams.get("site") || "").trim();
+    if (q) return setSiteName(q);
+    const stored = (localStorage.getItem(SITE_NAME_KEY) || "").trim();
+    if (stored) return setSiteName(stored);
+    return setSiteName(DEFAULT_SITE_NAME);
   }
 
   function getDateStart() {
@@ -593,6 +614,13 @@
       activateTab(btn.dataset.tab);
     });
 
+    $("#siteName")?.addEventListener("change", () => {
+      const next = setSiteName(getSiteName());
+      const u = new URL(window.location.href);
+      u.searchParams.set("site_name", next);
+      window.location.href = `${u.pathname}?${u.searchParams.toString()}`;
+    });
+
     document.getElementById("panel-home")?.addEventListener("input", (e) => {
       const t = e.target;
       if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) {
@@ -612,7 +640,12 @@
       doPdf().catch((err) => alert("PDF 오류: " + err.message));
     });
     $("#btnUsers")?.addEventListener("click", () => {
-      window.location.href = "/pwa/users.html";
+      const site = getSiteName();
+      window.location.href = `/pwa/users.html?site_name=${encodeURIComponent(site)}`;
+    });
+    $("#btnSpecEnv")?.addEventListener("click", () => {
+      const site = getSiteName();
+      window.location.href = `/pwa/spec_env.html?site_name=${encodeURIComponent(site)}`;
     });
     $("#btnLogout")?.addEventListener("click", () => {
       const run = async () => {
@@ -636,8 +669,10 @@
 
   async function init() {
     await ensureAuth();
-    const data = await jfetch("/api/schema");
+    const siteName = resolveSiteName();
+    const data = await jfetch(`/api/schema?site_name=${encodeURIComponent(siteName)}`);
     const schema = data && data.schema ? data.schema : null;
+    if (data && data.site_name) setSiteName(String(data.site_name));
     if (!schema) throw new Error("스키마를 불러오지 못했습니다.");
     TABS = normalizeTabsFromSchema(schema);
     if (!TABS.length) throw new Error("스키마 탭이 비어있습니다.");
@@ -649,7 +684,7 @@
     applyHomeDraft(loadHomeDraft());
 
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/pwa/sw.js?v=20260207i").catch(() => {});
+      navigator.serviceWorker.register("/pwa/sw.js?v=20260208a").catch(() => {});
     }
   }
 

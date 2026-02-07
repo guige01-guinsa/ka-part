@@ -125,4 +125,14 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
 ON auth_sessions(user_id, revoked_at, expires_at);
 
+CREATE TABLE IF NOT EXISTS site_env_configs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_name TEXT NOT NULL UNIQUE,
+  env_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_site_env_configs_site
+ON site_env_configs(site_name);
+
 COMMIT;

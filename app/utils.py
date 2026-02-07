@@ -32,16 +32,18 @@ def _flatten_tabs(tabs: Dict[str, Dict[str, str]]) -> Dict[str, str]:
     return out
 
 
-def _ordered_export_keys(rows: List[Dict[str, Any]]) -> List[str]:
+def _ordered_export_keys(rows: List[Dict[str, Any]], schema_defs: Dict[str, Dict[str, Any]] | None = None) -> List[str]:
     """Keep export column order stable and schema-driven."""
+    source = schema_defs if isinstance(schema_defs, dict) else SCHEMA_DEFS
     present = set()
     for r in rows:
         flat = _flatten_tabs(r.get("tabs") or {})
         present.update(flat.keys())
 
     ordered: List[str] = []
-    for tab_key in SCHEMA_TAB_ORDER:
-        tab = SCHEMA_DEFS.get(tab_key) or {}
+    tab_order = [t for t in SCHEMA_TAB_ORDER if t in source] + [t for t in source.keys() if t not in SCHEMA_TAB_ORDER]
+    for tab_key in tab_order:
+        tab = source.get(tab_key) or {}
         for f in tab.get("fields") or []:
             key = f"{tab_key}.{f.get('k')}"
             if key in present:
@@ -51,12 +53,19 @@ def _ordered_export_keys(rows: List[Dict[str, Any]]) -> List[str]:
     ordered.extend(sorted(present))
     return ordered
 
-def build_excel(site_name: str, date_from: str, date_to: str, rows: List[Dict[str, Any]]) -> bytes:
+def build_excel(
+    site_name: str,
+    date_from: str,
+    date_to: str,
+    rows: List[Dict[str, Any]],
+    *,
+    schema_defs: Dict[str, Dict[str, Any]] | None = None,
+) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "entries"
 
-    export_keys = _ordered_export_keys(rows)
+    export_keys = _ordered_export_keys(rows, schema_defs=schema_defs)
     flattened = [(r.get("entry_date", ""), _flatten_tabs(r.get("tabs") or {})) for r in rows]
     headers = ["entry_date"] + export_keys
     ws.append(headers)
@@ -80,7 +89,13 @@ def build_excel(site_name: str, date_from: str, date_to: str, rows: List[Dict[st
     wb.save(bio)
     return bio.getvalue()
 
-def build_pdf(site_name: str, date: str, tabs: Dict[str, Dict[str, str]]) -> bytes:
+def build_pdf(
+    site_name: str,
+    date: str,
+    tabs: Dict[str, Dict[str, str]],
+    *,
+    schema_defs: Dict[str, Dict[str, Any]] | None = None,
+) -> bytes:
     from io import BytesIO
     bio = BytesIO()
     c = canvas.Canvas(bio, pagesize=A4)
@@ -97,15 +112,24 @@ def build_pdf(site_name: str, date: str, tabs: Dict[str, Dict[str, str]]) -> byt
     y -= 18
 
     c.setFont("Helvetica", 10)
-    for tab_key in sorted((tabs or {}).keys()):
+    source = schema_defs if isinstance(schema_defs, dict) else SCHEMA_DEFS
+    order_map = {k: i for i, k in enumerate(SCHEMA_TAB_ORDER)}
+    for tab_key in sorted((tabs or {}).keys(), key=lambda x: (order_map.get(x, 999), x)):
         c.setFont("Helvetica-Bold", 11)
-        c.drawString(40, y, f"[{tab_key}]")
+        title = (source.get(tab_key) or {}).get("title") or tab_key
+        c.drawString(40, y, f"[{title}]")
         y -= 14
         c.setFont("Helvetica", 10)
         fields = tabs.get(tab_key) or {}
+        label_map = {
+            str(f.get("k")): str(f.get("label"))
+            for f in ((source.get(tab_key) or {}).get("fields") or [])
+            if isinstance(f, dict) and f.get("k")
+        }
         for k in sorted(fields.keys()):
-            v = str(fields.get(k,""))
-            line = f"- {k}: {v}"
+            v = str(fields.get(k, ""))
+            label = label_map.get(k, k)
+            line = f"- {label}({k}): {v}"
             c.drawString(50, y, line[:120])
             y -= 12
             if y < 60:

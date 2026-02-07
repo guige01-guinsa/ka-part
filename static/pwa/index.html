@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <title>아파트 시설관리</title>
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=2">
-  <link rel="stylesheet" href="/pwa/styles.css?v=20260207i">
+  <link rel="stylesheet" href="/pwa/styles.css?v=20260208a">
 </head>
 <body>
   <header class="top">
@@ -23,12 +23,16 @@
       <button id="btnExport" class="btn">엑셀</button>
       <button id="btnPdf" class="btn">PDF</button>
       <button id="btnUsers" class="btn">사용자관리</button>
+      <button id="btnSpecEnv" class="btn">제원설정</button>
       <button id="btnLogout" class="btn">로그아웃</button>
       <button id="btnExit" class="btn danger">종료</button>
     </div>
 
     <div class="filters">
-      <input id="siteName" type="hidden" />
+      <label class="field">
+        <span>단지명</span>
+        <input id="siteName" type="text" placeholder="예: OO아파트" />
+      </label>
 
             <label class="field">
         <span>시작</span>
@@ -55,7 +59,7 @@
   <div class="toast" id="toast"></div>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/app.js?v=20260207k"></script>
+  <script src="/pwa/app.js?v=20260208a"></script>
 </body>
 </html>
 

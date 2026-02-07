@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta
@@ -294,6 +295,23 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         ON auth_sessions(user_id, revoked_at, expires_at);
         """
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS site_env_configs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_name TEXT NOT NULL UNIQUE,
+          env_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_site_env_configs_site
+        ON site_env_configs(site_name);
+        """
+    )
 
 
 def _rename_entry_value_key(con: sqlite3.Connection, tab_key: str, old_key: str, new_key: str) -> None:
@@ -353,6 +371,99 @@ def ensure_site(name: str) -> int:
         con.close()
 
 
+def get_site_env_config(site_name: str) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        row = con.execute(
+            """
+            SELECT env_json
+            FROM site_env_configs
+            WHERE site_name=?
+            """,
+            (str(site_name or "").strip(),),
+        ).fetchone()
+        if not row:
+            return {}
+        raw = row["env_json"]
+        if raw is None:
+            return {}
+        try:
+            data = json.loads(str(raw))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    finally:
+        con.close()
+
+
+def upsert_site_env_config(site_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        ts = now_iso()
+        clean_site_name = str(site_name or "").strip()
+        env_json = json.dumps(config if isinstance(config, dict) else {}, ensure_ascii=False, separators=(",", ":"))
+        con.execute(
+            """
+            INSERT INTO site_env_configs(site_name, env_json, created_at, updated_at)
+            VALUES(?,?,?,?)
+            ON CONFLICT(site_name) DO UPDATE SET
+              env_json=excluded.env_json,
+              updated_at=excluded.updated_at
+            """,
+            (clean_site_name, env_json, ts, ts),
+        )
+        con.commit()
+        row = con.execute(
+            """
+            SELECT site_name, env_json, created_at, updated_at
+            FROM site_env_configs
+            WHERE site_name=?
+            """,
+            (clean_site_name,),
+        ).fetchone()
+        out = dict(row) if row else {"site_name": clean_site_name, "env_json": env_json, "created_at": ts, "updated_at": ts}
+        try:
+            out["config"] = json.loads(str(out.get("env_json") or "{}"))
+        except Exception:
+            out["config"] = {}
+        return out
+    finally:
+        con.close()
+
+
+def delete_site_env_config(site_name: str) -> bool:
+    con = _connect()
+    try:
+        cur = con.execute("DELETE FROM site_env_configs WHERE site_name=?", (str(site_name or "").strip(),))
+        con.commit()
+        return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def list_site_env_configs() -> List[Dict[str, Any]]:
+    con = _connect()
+    try:
+        rows = con.execute(
+            """
+            SELECT site_name, env_json, created_at, updated_at
+            FROM site_env_configs
+            ORDER BY site_name ASC
+            """
+        ).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            item = dict(r)
+            try:
+                item["config"] = json.loads(str(item.get("env_json") or "{}"))
+            except Exception:
+                item["config"] = {}
+            out.append(item)
+        return out
+    finally:
+        con.close()
+
+
 def upsert_entry(site_id: int, entry_date: str) -> int:
     con = _connect()
     try:
@@ -386,12 +497,18 @@ def upsert_entry(site_id: int, entry_date: str) -> int:
         con.close()
 
 
-def save_tab_values(entry_id: int, tab_key: str, values: Dict[str, Any]) -> None:
+def save_tab_values(
+    entry_id: int,
+    tab_key: str,
+    values: Dict[str, Any],
+    *,
+    schema_defs: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> None:
     con = _connect()
     try:
         value_col = _entry_values_value_col(con)
         ts = now_iso()
-        clean = canonicalize_tab_fields(tab_key, values)
+        clean = canonicalize_tab_fields(tab_key, values, schema_defs=schema_defs)
         sql = f"""
             INSERT INTO entry_values(entry_id, tab_key, field_key, {value_col}, created_at, updated_at)
             VALUES(?,?,?,?,?,?)
@@ -405,7 +522,12 @@ def save_tab_values(entry_id: int, tab_key: str, values: Dict[str, Any]) -> None
         con.close()
 
 
-def _load_entry_values_for_entry(con: sqlite3.Connection, entry_id: int) -> Dict[str, Dict[str, str]]:
+def _load_entry_values_for_entry(
+    con: sqlite3.Connection,
+    entry_id: int,
+    *,
+    allowed_keys_by_tab: Optional[Dict[str, set[str]]] = None,
+) -> Dict[str, Dict[str, str]]:
     value_col = _entry_values_value_col(con)
     rows = con.execute(
         f"SELECT tab_key, field_key, {value_col} AS value_col FROM entry_values WHERE entry_id=?",
@@ -416,13 +538,22 @@ def _load_entry_values_for_entry(con: sqlite3.Connection, entry_id: int) -> Dict
         tab_key = str(r["tab_key"])
         raw_key = str(r["field_key"])
         key = LEGACY_FIELD_ALIASES.get(tab_key, {}).get(raw_key, raw_key)
-        if tab_key in SCHEMA_DEFS and key not in set(schema_field_keys(tab_key)):
-            continue
+        if isinstance(allowed_keys_by_tab, dict):
+            allowed = set(allowed_keys_by_tab.get(tab_key) or set())
+            if not allowed:
+                continue
+            if key not in allowed:
+                continue
         out.setdefault(tab_key, {})[key] = str(r["value_col"])
     return out
 
 
-def load_entry(site_id: int, entry_date: str) -> Dict[str, Dict[str, str]]:
+def load_entry(
+    site_id: int,
+    entry_date: str,
+    *,
+    allowed_keys_by_tab: Optional[Dict[str, set[str]]] = None,
+) -> Dict[str, Dict[str, str]]:
     con = _connect()
     try:
         row = con.execute(
@@ -431,7 +562,7 @@ def load_entry(site_id: int, entry_date: str) -> Dict[str, Dict[str, str]]:
         ).fetchone()
         if not row:
             return {}
-        return _load_entry_values_for_entry(con, int(row["id"]))
+        return _load_entry_values_for_entry(con, int(row["id"]), allowed_keys_by_tab=allowed_keys_by_tab)
     finally:
         con.close()
 
@@ -469,10 +600,10 @@ def list_entries(site_id: int, date_from: str, date_to: str) -> List[sqlite3.Row
         con.close()
 
 
-def load_entry_by_id(entry_id: int) -> Dict[str, Dict[str, str]]:
+def load_entry_by_id(entry_id: int, *, allowed_keys_by_tab: Optional[Dict[str, set[str]]] = None) -> Dict[str, Dict[str, str]]:
     con = _connect()
     try:
-        return _load_entry_values_for_entry(con, entry_id)
+        return _load_entry_values_for_entry(con, entry_id, allowed_keys_by_tab=allowed_keys_by_tab)
     finally:
         con.close()
 
@@ -487,6 +618,8 @@ def upsert_tab_domain_data(site_name: str, entry_date: str, tab_key: str, fields
 
     numeric_tabs = {"tr450", "tr400", "meter", "facility_check"}
     for form_key, db_col in dict(spec.get("column_map") or {}).items():
+        if form_key not in clean:
+            continue
         raw_val = clean.get(form_key)
         payload[db_col] = _to_float(raw_val) if tab_key in numeric_tabs else _to_text(raw_val)
 

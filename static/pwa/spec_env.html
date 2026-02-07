@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>단지 제원 설정</title>
+  <link rel="stylesheet" href="/pwa/spec_env.css?v=20260208a" />
+</head>
+<body>
+  <header class="top">
+    <div class="title">단지 제원 환경변수 설정</div>
+    <div class="actions">
+      <a class="btn" href="/pwa/">메인으로</a>
+      <button id="btnReload" class="btn" type="button">불러오기</button>
+      <button id="btnSave" class="btn primary" type="button">저장</button>
+      <button id="btnDelete" class="btn danger" type="button">설정삭제</button>
+      <button id="btnPreview" class="btn" type="button">양식미리보기</button>
+      <button id="btnTemplate" class="btn" type="button">템플릿삽입</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="card">
+      <h2>설정 대상 단지</h2>
+      <label class="field">
+        <span>site_name</span>
+        <input id="siteName" type="text" placeholder="예: OO아파트" />
+      </label>
+      <div class="hint">단지명별로 다른 양식이 적용됩니다.</div>
+    </section>
+
+    <section class="card">
+      <h2>환경변수(JSON)</h2>
+      <textarea id="envJson" spellcheck="false"></textarea>
+      <div class="hint">
+        지원 키: <code>hide_tabs</code>, <code>tabs.{tab}.title</code>, <code>hide_fields</code>, <code>field_labels</code>,
+        <code>field_overrides</code>, <code>add_fields</code>, <code>rows</code>
+      </div>
+      <div id="msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>적용 미리보기</h2>
+      <pre id="preview"></pre>
+    </section>
+
+    <section class="card">
+      <h2>설정된 단지 목록</h2>
+      <div id="siteList" class="list"></div>
+    </section>
+  </main>
+
+  <script src="/pwa/auth.js?v=20260207i"></script>
+  <script src="/pwa/spec_env.js?v=20260208a"></script>
+</body>
+</html>

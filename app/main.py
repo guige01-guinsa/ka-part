@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from .db import init_db
 from .routes.api import router as api_router
 
-app = FastAPI(title="ka-part", version="2.8.1")
+app = FastAPI(title="ka-part", version="2.9.0")
 
 @app.on_event("startup")
 def _startup():

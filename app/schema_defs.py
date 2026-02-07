@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, List
 
 WORK_TYPES = ["일일", "주간", "월간", "정기", "기타일상"]
@@ -21,6 +22,8 @@ SCHEMA_TAB_ORDER = [
     "facility_mechanical",
     "facility_telecom",
 ]
+
+FIELD_TYPE_SET = {"text", "number", "textarea", "select", "date"}
 
 SCHEMA_DEFS = {
     "home": {
@@ -164,6 +167,34 @@ SCHEMA_DEFS = {
     },
 }
 
+SITE_ENV_TEMPLATE: Dict[str, Any] = {
+    "hide_tabs": [],
+    "tabs": {
+        "tr450": {
+            "title": "변압기450",
+            "hide_fields": [],
+            "field_labels": {"lv1_temp": "TR450 온도(℃)"},
+            "field_overrides": {"lv1_temp": {"warn_max": 110}},
+            "add_fields": [
+                {
+                    "k": "lv1_oil_level",
+                    "label": "유면(%)",
+                    "type": "number",
+                    "step": "0.01",
+                    "warn_min": 0,
+                    "warn_max": 100,
+                }
+            ],
+            "rows": [
+                ["lv1_L1_V", "lv1_L1_A", "lv1_L1_KW"],
+                ["lv1_L2_V", "lv1_L2_A", "lv1_L2_KW"],
+                ["lv1_L3_V", "lv1_L3_A", "lv1_L3_KW"],
+                ["lv1_temp", "lv1_oil_level"],
+            ],
+        }
+    },
+}
+
 # Legacy form key aliases -> canonical form keys.
 LEGACY_FIELD_ALIASES: Dict[str, Dict[str, str]] = {
     "meter": {
@@ -279,19 +310,27 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
 }
 
 
-def schema_fields(tab_key: str) -> List[Dict[str, Any]]:
-    return list((SCHEMA_DEFS.get(tab_key) or {}).get("fields") or [])
+def _schema_source(schema_defs: Dict[str, Dict[str, Any]] | None = None) -> Dict[str, Dict[str, Any]]:
+    return schema_defs if isinstance(schema_defs, dict) else SCHEMA_DEFS
 
 
-def schema_field_keys(tab_key: str) -> List[str]:
-    return [str(f.get("k")) for f in schema_fields(tab_key) if f.get("k")]
+def schema_fields(tab_key: str, schema_defs: Dict[str, Dict[str, Any]] | None = None) -> List[Dict[str, Any]]:
+    return list((_schema_source(schema_defs).get(tab_key) or {}).get("fields") or [])
 
 
-def canonicalize_tab_fields(tab_key: str, values: Dict[str, Any] | None) -> Dict[str, Any]:
+def schema_field_keys(tab_key: str, schema_defs: Dict[str, Dict[str, Any]] | None = None) -> List[str]:
+    return [str(f.get("k")) for f in schema_fields(tab_key, schema_defs=schema_defs) if f.get("k")]
+
+
+def canonicalize_tab_fields(
+    tab_key: str,
+    values: Dict[str, Any] | None,
+    schema_defs: Dict[str, Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
     if not isinstance(values, dict):
         return {}
     aliases = LEGACY_FIELD_ALIASES.get(tab_key, {})
-    allowed = set(schema_field_keys(tab_key))
+    allowed = set(schema_field_keys(tab_key, schema_defs=schema_defs))
     out: Dict[str, Any] = {}
     for raw_key, raw_val in values.items():
         key = aliases.get(str(raw_key), str(raw_key))
@@ -300,13 +339,251 @@ def canonicalize_tab_fields(tab_key: str, values: Dict[str, Any] | None) -> Dict
     return out
 
 
-def normalize_tabs_payload(tabs: Dict[str, Any] | None) -> Dict[str, Dict[str, Any]]:
+def normalize_tabs_payload(
+    tabs: Dict[str, Any] | None,
+    schema_defs: Dict[str, Dict[str, Any]] | None = None,
+) -> Dict[str, Dict[str, Any]]:
     if not isinstance(tabs, dict):
         return {}
+    source = _schema_source(schema_defs)
     out: Dict[str, Dict[str, Any]] = {}
     for tab_key, tab_values in tabs.items():
         key = str(tab_key)
-        if key not in SCHEMA_DEFS:
+        if key not in source:
             continue
-        out[key] = canonicalize_tab_fields(key, tab_values if isinstance(tab_values, dict) else {})
+        out[key] = canonicalize_tab_fields(
+            key,
+            tab_values if isinstance(tab_values, dict) else {},
+            schema_defs=source,
+        )
     return out
+
+
+def _clean_field_type(value: Any) -> str:
+    t = str(value or "text").strip().lower()
+    return t if t in FIELD_TYPE_SET else "text"
+
+
+def _clean_field_def(obj: Any) -> Dict[str, Any] | None:
+    if not isinstance(obj, dict):
+        return None
+    key = str(obj.get("k") or "").strip()
+    label = str(obj.get("label") or "").strip()
+    if not key or not label:
+        return None
+    ftype = _clean_field_type(obj.get("type"))
+    out: Dict[str, Any] = {"k": key, "label": label, "type": ftype}
+    for k in ("placeholder", "step", "min", "max", "warn_min", "warn_max"):
+        if k in obj and obj[k] is not None and str(obj[k]).strip() != "":
+            out[k] = obj[k]
+    if ftype == "select":
+        raw_opts = obj.get("options") or []
+        if isinstance(raw_opts, list):
+            opts = [str(x).strip() for x in raw_opts if str(x).strip()]
+            if opts:
+                out["options"] = opts
+    return out
+
+
+def normalize_site_env_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
+    if not isinstance(config, dict):
+        return {}
+    out: Dict[str, Any] = {}
+
+    raw_hide_tabs = config.get("hide_tabs")
+    if isinstance(raw_hide_tabs, list):
+        hide_tabs = []
+        seen = set()
+        for x in raw_hide_tabs:
+            k = str(x or "").strip()
+            if not k or k in seen:
+                continue
+            hide_tabs.append(k)
+            seen.add(k)
+        if hide_tabs:
+            out["hide_tabs"] = hide_tabs
+
+    raw_tabs = config.get("tabs")
+    if isinstance(raw_tabs, dict):
+        clean_tabs: Dict[str, Dict[str, Any]] = {}
+        for raw_tab_key, raw_tab_cfg in raw_tabs.items():
+            tab_key = str(raw_tab_key or "").strip()
+            if not tab_key or not isinstance(raw_tab_cfg, dict):
+                continue
+            tab_cfg: Dict[str, Any] = {}
+
+            if "title" in raw_tab_cfg:
+                title = str(raw_tab_cfg.get("title") or "").strip()
+                if title:
+                    tab_cfg["title"] = title
+
+            if isinstance(raw_tab_cfg.get("hide_fields"), list):
+                vals = []
+                seen = set()
+                for f in raw_tab_cfg["hide_fields"]:
+                    fk = str(f or "").strip()
+                    if not fk or fk in seen:
+                        continue
+                    vals.append(fk)
+                    seen.add(fk)
+                if vals:
+                    tab_cfg["hide_fields"] = vals
+
+            if isinstance(raw_tab_cfg.get("field_labels"), dict):
+                labels: Dict[str, str] = {}
+                for fk, lv in raw_tab_cfg["field_labels"].items():
+                    key = str(fk or "").strip()
+                    val = str(lv or "").strip()
+                    if key and val:
+                        labels[key] = val
+                if labels:
+                    tab_cfg["field_labels"] = labels
+
+            if isinstance(raw_tab_cfg.get("field_overrides"), dict):
+                overs: Dict[str, Dict[str, Any]] = {}
+                for fk, ov in raw_tab_cfg["field_overrides"].items():
+                    key = str(fk or "").strip()
+                    if not key or not isinstance(ov, dict):
+                        continue
+                    clean: Dict[str, Any] = {}
+                    for kk in ("label", "placeholder", "step", "min", "max", "warn_min", "warn_max"):
+                        if kk in ov and ov[kk] is not None and str(ov[kk]).strip() != "":
+                            clean[kk] = ov[kk]
+                    if "type" in ov:
+                        clean["type"] = _clean_field_type(ov.get("type"))
+                    if "options" in ov and isinstance(ov["options"], list):
+                        opts = [str(x).strip() for x in ov["options"] if str(x).strip()]
+                        if opts:
+                            clean["options"] = opts
+                    if clean:
+                        overs[key] = clean
+                if overs:
+                    tab_cfg["field_overrides"] = overs
+
+            if isinstance(raw_tab_cfg.get("add_fields"), list):
+                add_fields = []
+                for x in raw_tab_cfg["add_fields"]:
+                    field = _clean_field_def(x)
+                    if field:
+                        add_fields.append(field)
+                if add_fields:
+                    tab_cfg["add_fields"] = add_fields
+
+            if isinstance(raw_tab_cfg.get("rows"), list):
+                rows: List[List[str]] = []
+                for row in raw_tab_cfg["rows"]:
+                    if not isinstance(row, list):
+                        continue
+                    rr = [str(x or "").strip() for x in row if str(x or "").strip()]
+                    if rr:
+                        rows.append(rr)
+                if rows:
+                    tab_cfg["rows"] = rows
+
+            if tab_cfg:
+                clean_tabs[tab_key] = tab_cfg
+
+        if clean_tabs:
+            out["tabs"] = clean_tabs
+
+    return out
+
+
+def build_effective_schema(
+    *,
+    base_schema: Dict[str, Dict[str, Any]] | None = None,
+    site_env_config: Dict[str, Any] | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    schema = copy.deepcopy(_schema_source(base_schema))
+    config = normalize_site_env_config(site_env_config)
+    if not config:
+        return schema
+
+    for tab_key in config.get("hide_tabs") or []:
+        schema.pop(tab_key, None)
+
+    for tab_key, tab_cfg in (config.get("tabs") or {}).items():
+        tab = schema.get(tab_key)
+        if not tab:
+            tab = {"title": tab_key, "fields": []}
+            schema[tab_key] = tab
+
+        if "title" in tab_cfg:
+            tab["title"] = str(tab_cfg["title"])
+
+        fields = [dict(x) for x in (tab.get("fields") or []) if isinstance(x, dict) and x.get("k")]
+        hide_set = set(tab_cfg.get("hide_fields") or [])
+        if hide_set:
+            fields = [f for f in fields if str(f.get("k")) not in hide_set]
+
+        field_by_key: Dict[str, Dict[str, Any]] = {str(f["k"]): f for f in fields}
+
+        for fk, label in (tab_cfg.get("field_labels") or {}).items():
+            if fk in field_by_key:
+                field_by_key[fk]["label"] = str(label)
+
+        for fk, ov in (tab_cfg.get("field_overrides") or {}).items():
+            if fk not in field_by_key:
+                continue
+            for kk, vv in ov.items():
+                field_by_key[fk][kk] = vv
+
+        for add_field in tab_cfg.get("add_fields") or []:
+            k = str(add_field.get("k") or "").strip()
+            if not k:
+                continue
+            if k in field_by_key:
+                for kk, vv in add_field.items():
+                    if kk == "k":
+                        continue
+                    field_by_key[k][kk] = vv
+            else:
+                newf = dict(add_field)
+                fields.append(newf)
+                field_by_key[k] = newf
+
+        existing_keys = [str(f.get("k")) for f in fields if f.get("k")]
+        key_set = set(existing_keys)
+        rows = tab_cfg.get("rows")
+        if isinstance(rows, list):
+            normalized_rows: List[List[str]] = []
+            used = set()
+            for row in rows:
+                rr: List[str] = []
+                for k in row:
+                    if k in key_set and k not in used:
+                        rr.append(k)
+                        used.add(k)
+                if rr:
+                    normalized_rows.append(rr)
+            for k in existing_keys:
+                if k not in used:
+                    normalized_rows.append([k])
+            tab["rows"] = normalized_rows
+        elif "rows" in tab:
+            normalized_rows = []
+            used = set()
+            for row in (tab.get("rows") or []):
+                rr = []
+                for k in row:
+                    kk = str(k or "")
+                    if kk in key_set and kk not in used:
+                        rr.append(kk)
+                        used.add(kk)
+                if rr:
+                    normalized_rows.append(rr)
+            for k in existing_keys:
+                if k not in used:
+                    normalized_rows.append([k])
+            tab["rows"] = normalized_rows
+
+        tab["fields"] = fields
+
+    to_remove = [k for k, v in schema.items() if not (v.get("fields") or [])]
+    for k in to_remove:
+        schema.pop(k, None)
+    return schema
+
+
+def site_env_template() -> Dict[str, Any]:
+    return copy.deepcopy(SITE_ENV_TEMPLATE)

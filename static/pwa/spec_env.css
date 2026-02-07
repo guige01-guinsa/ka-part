@@ -1,0 +1,126 @@
+:root {
+  --bg: #0f1825;
+  --bg-soft: #152236;
+  --card: #111e2f;
+  --fg: #e7edf7;
+  --muted: #9cb0c9;
+  --line: #2a3b55;
+  --primary: #2d7dff;
+  --danger: #d43d54;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  color: var(--fg);
+  background: radial-gradient(1200px 500px at 50% -100px, #1f3350 0%, var(--bg) 56%);
+  font-family: "Noto Sans KR", "Segoe UI", system-ui, sans-serif;
+}
+
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.title { font-size: 20px; font-weight: 900; margin-bottom: 8px; }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.btn {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-soft);
+  color: var(--fg);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.btn.primary {
+  border-color: color-mix(in srgb, var(--primary) 70%, var(--line));
+  background: color-mix(in srgb, var(--primary) 24%, var(--bg-soft));
+}
+
+.btn.danger {
+  border-color: color-mix(in srgb, var(--danger) 70%, var(--line));
+  background: color-mix(in srgb, var(--danger) 22%, var(--bg-soft));
+}
+
+.main {
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--card) 94%, black 6%);
+}
+
+h2 { margin: 0 0 10px; font-size: 16px; }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.field input,
+textarea {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px;
+  font-size: 14px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg-soft) 84%, black 16%);
+}
+
+textarea {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  font-family: Consolas, "Courier New", monospace;
+}
+
+pre {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-soft) 82%, black 18%);
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  min-height: 120px;
+}
+
+.hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.msg { min-height: 18px; margin-top: 8px; font-size: 12px; color: #a9d4ff; }
+.msg.err { color: #ffb4b4; }
+
+.list {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}

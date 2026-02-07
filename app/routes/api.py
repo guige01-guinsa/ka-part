@@ -16,10 +16,12 @@ from ..db import (
     delete_staff_user,
     ensure_site,
     get_auth_user_by_token,
+    get_site_env_config,
     get_staff_user,
     get_staff_user_by_login,
     hash_password,
     list_entries,
+    list_site_env_configs,
     list_staff_users,
     load_entry,
     load_entry_by_id,
@@ -29,12 +31,21 @@ from ..db import (
     save_tab_values,
     schema_alignment_report,
     set_staff_user_password,
+    upsert_site_env_config,
+    delete_site_env_config,
     update_staff_user,
     upsert_entry,
     upsert_tab_domain_data,
     verify_password,
 )
-from ..schema_defs import SCHEMA_DEFS, normalize_tabs_payload
+from ..schema_defs import (
+    SCHEMA_DEFS,
+    build_effective_schema,
+    normalize_site_env_config,
+    normalize_tabs_payload,
+    schema_field_keys,
+    site_env_template,
+)
 from ..utils import build_excel, build_pdf, safe_ymd, today_ymd
 
 router = APIRouter()
@@ -62,6 +73,17 @@ def _clean_role(value: Any) -> str:
     if len(role) < 1 or len(role) > 20:
         raise HTTPException(status_code=400, detail="role length must be 1..20")
     return role
+
+
+def _clean_site_name(value: Any, *, required: bool = False) -> str:
+    site_name = (str(value or "")).strip()
+    if not site_name:
+        if required:
+            raise HTTPException(status_code=400, detail="site_name is required")
+        return DEFAULT_SITE_NAME
+    if len(site_name) > 80:
+        raise HTTPException(status_code=400, detail="site_name length must be <= 80")
+    return site_name
 
 
 def _clean_password(value: Any, *, required: bool = True) -> str | None:
@@ -111,6 +133,20 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _site_schema_and_env(site_name: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    raw = get_site_env_config(site_name)
+    env_cfg = normalize_site_env_config(raw)
+    schema = build_effective_schema(base_schema=SCHEMA_DEFS, site_env_config=env_cfg)
+    return schema, env_cfg
+
+
+def _schema_allowed_keys(schema: Dict[str, Dict[str, Any]]) -> Dict[str, set[str]]:
+    out: Dict[str, set[str]] = {}
+    for tab_key in schema.keys():
+        out[tab_key] = set(schema_field_keys(tab_key, schema_defs=schema))
+    return out
+
+
 def _extract_access_token(request: Request) -> str:
     auth = (request.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
@@ -141,19 +177,71 @@ def _require_admin(request: Request) -> Tuple[Dict[str, Any], str]:
 @router.get("/health")
 def health():
     report = schema_alignment_report()
-    return {"ok": True, "version": "2.8.1", "schema_alignment_ok": report.get("ok", False)}
+    return {"ok": True, "version": "2.9.0", "schema_alignment_ok": report.get("ok", False)}
 
 
 @router.get("/schema")
-def api_schema(request: Request):
+def api_schema(request: Request, site_name: str = Query(default=DEFAULT_SITE_NAME)):
     _require_auth(request)
-    return {"schema": SCHEMA_DEFS}
+    clean_site_name = _clean_site_name(site_name, required=False)
+    schema, env_cfg = _site_schema_and_env(clean_site_name)
+    return {"schema": schema, "site_name": clean_site_name, "site_env_config": env_cfg}
 
 
 @router.get("/schema_alignment")
 def api_schema_alignment(request: Request):
     _require_admin(request)
     return schema_alignment_report()
+
+
+@router.get("/site_env_template")
+def api_site_env_template(request: Request):
+    _require_admin(request)
+    return {"ok": True, "template": site_env_template()}
+
+
+@router.get("/site_env")
+def api_site_env(request: Request, site_name: str = Query(...)):
+    _require_admin(request)
+    clean_site_name = _clean_site_name(site_name, required=True)
+    schema, env_cfg = _site_schema_and_env(clean_site_name)
+    return {"ok": True, "site_name": clean_site_name, "config": env_cfg, "schema": schema}
+
+
+@router.put("/site_env")
+def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
+    _require_admin(request)
+    clean_site_name = _clean_site_name(payload.get("site_name"), required=True)
+    raw_cfg = payload.get("config", payload.get("env", payload if isinstance(payload, dict) else {}))
+    cfg = normalize_site_env_config(raw_cfg if isinstance(raw_cfg, dict) else {})
+    row = upsert_site_env_config(clean_site_name, cfg)
+    schema, _env_cfg = _site_schema_and_env(clean_site_name)
+    return {
+        "ok": True,
+        "site_name": clean_site_name,
+        "config": cfg,
+        "schema": schema,
+        "updated_at": row.get("updated_at"),
+    }
+
+
+@router.delete("/site_env")
+def api_site_env_delete(request: Request, site_name: str = Query(...)):
+    _require_admin(request)
+    clean_site_name = _clean_site_name(site_name, required=True)
+    ok = delete_site_env_config(clean_site_name)
+    return {"ok": ok, "site_name": clean_site_name}
+
+
+@router.get("/site_env_list")
+def api_site_env_list(request: Request):
+    _require_admin(request)
+    rows = list_site_env_configs()
+    return {
+        "ok": True,
+        "count": len(rows),
+        "items": [{"site_name": r.get("site_name"), "updated_at": r.get("updated_at")} for r in rows],
+    }
 
 
 @router.get("/auth/bootstrap_status")
@@ -392,21 +480,22 @@ def api_users_delete(request: Request, user_id: int):
 @router.post("/save")
 def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
     _require_auth(request)
-    site_name = (payload.get("site_name") or "").strip() or DEFAULT_SITE_NAME
+    site_name = _clean_site_name(payload.get("site_name"), required=False)
     entry_date = safe_ymd(payload.get("date") or "")
 
     raw_tabs = payload.get("tabs") or {}
     if not isinstance(raw_tabs, dict):
         raise HTTPException(status_code=400, detail="tabs must be object")
 
-    tabs = normalize_tabs_payload(raw_tabs)
+    schema, _env_cfg = _site_schema_and_env(site_name)
+    tabs = normalize_tabs_payload(raw_tabs, schema_defs=schema)
     ignored_tabs = sorted(set(str(k) for k in raw_tabs.keys()) - set(tabs.keys()))
 
     site_id = ensure_site(site_name)
     entry_id = upsert_entry(site_id, entry_date)
 
     for tab_key, fields in tabs.items():
-        save_tab_values(entry_id, tab_key, fields)
+        save_tab_values(entry_id, tab_key, fields, schema_defs=schema)
         upsert_tab_domain_data(site_name, entry_date, tab_key, fields)
 
     return {
@@ -421,17 +510,18 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
 @router.get("/load")
 def api_load(request: Request, site_name: str = Query(...), date: str = Query(...)):
     _require_auth(request)
-    site_name = (site_name or "").strip() or DEFAULT_SITE_NAME
+    site_name = _clean_site_name(site_name, required=False)
     entry_date = safe_ymd(date)
     site_id = ensure_site(site_name)
-    tabs = load_entry(site_id, entry_date)
+    schema, _env_cfg = _site_schema_and_env(site_name)
+    tabs = load_entry(site_id, entry_date, allowed_keys_by_tab=_schema_allowed_keys(schema))
     return {"ok": True, "site_name": site_name, "date": entry_date, "tabs": tabs}
 
 
 @router.delete("/delete")
 def api_delete(request: Request, site_name: str = Query(...), date: str = Query(...)):
     _require_auth(request)
-    site_name = (site_name or "").strip() or DEFAULT_SITE_NAME
+    site_name = _clean_site_name(site_name, required=False)
     entry_date = safe_ymd(date)
     site_id = ensure_site(site_name)
     ok = delete_entry(site_id, entry_date)
@@ -446,7 +536,7 @@ def api_list_range(
     date_to: str = Query(default=""),
 ):
     _require_auth(request)
-    site_name = (site_name or "").strip() or DEFAULT_SITE_NAME
+    site_name = _clean_site_name(site_name, required=False)
     df = safe_ymd(date_from) if date_from else today_ymd()
     dt = safe_ymd(date_to) if date_to else today_ymd()
     if df > dt:
@@ -465,19 +555,21 @@ def api_export(
     date_to: str = Query(default=""),
 ):
     _require_auth(request)
-    site_name = (site_name or "").strip() or DEFAULT_SITE_NAME
+    site_name = _clean_site_name(site_name, required=False)
     df = safe_ymd(date_from) if date_from else today_ymd()
     dt = safe_ymd(date_to) if date_to else today_ymd()
     if df > dt:
         df, dt = dt, df
 
     site_id = ensure_site(site_name)
+    schema, _env_cfg = _site_schema_and_env(site_name)
+    allowed = _schema_allowed_keys(schema)
     entries = list_entries(site_id, df, dt)
     rows: List[Dict[str, Any]] = []
     for e in entries:
-        rows.append({"entry_date": e["entry_date"], "tabs": load_entry_by_id(int(e["id"]))})
+        rows.append({"entry_date": e["entry_date"], "tabs": load_entry_by_id(int(e["id"]), allowed_keys_by_tab=allowed)})
 
-    xbytes = build_excel(site_name, df, dt, rows)
+    xbytes = build_excel(site_name, df, dt, rows, schema_defs=schema)
     from urllib.parse import quote
 
     filename = f"전기일지_{site_name}_{df}~{dt}.xlsx"
@@ -493,12 +585,13 @@ def api_export(
 @router.get("/pdf")
 def api_pdf(request: Request, site_name: str = Query(...), date: str = Query(...)):
     _require_auth(request)
-    site_name = (site_name or "").strip() or DEFAULT_SITE_NAME
+    site_name = _clean_site_name(site_name, required=False)
     entry_date = safe_ymd(date)
     site_id = ensure_site(site_name)
-    tabs = load_entry(site_id, entry_date)
+    schema, _env_cfg = _site_schema_and_env(site_name)
+    tabs = load_entry(site_id, entry_date, allowed_keys_by_tab=_schema_allowed_keys(schema))
 
-    pbytes = build_pdf(site_name, entry_date, tabs)
+    pbytes = build_pdf(site_name, entry_date, tabs, schema_defs=schema)
     from urllib.parse import quote
 
     filename = f"전기일지_{site_name}_{entry_date}.pdf"
