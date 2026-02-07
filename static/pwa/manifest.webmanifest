@@ -1,6 +1,6 @@
 {
-  "name": "수변전실 점검",
-  "short_name": "수변전실",
+  "name": "아파트 시설관리",
+  "short_name": "시설관리",
   "start_url": "/pwa/?v=20260205",
   "display": "standalone",
   "background_color": "#0b0f14",
