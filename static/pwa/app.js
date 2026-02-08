@@ -663,7 +663,8 @@
       const ok = confirm("홈 입력값을 비우고 종료할까요?\n(종료 버튼을 누르기 전까지 입력값은 유지됩니다.)");
       if (!ok) return;
       clearHomeDraft();
-      activateTab("home");
+      const homeTab = TABS.find((t) => t.key === "home");
+      activateTab(homeTab ? "home" : TABS[0]?.key || "");
       window.scrollTo(0, 0);
       toast("종료 처리");
     });

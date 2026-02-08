@@ -41,6 +41,8 @@ from ..db import (
 from ..schema_defs import (
     SCHEMA_DEFS,
     build_effective_schema,
+    default_site_env_config,
+    merge_site_env_configs,
     normalize_site_env_config,
     normalize_tabs_payload,
     schema_field_keys,
@@ -136,8 +138,12 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
 
 def _site_schema_and_env(site_name: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
     raw = get_site_env_config(site_name)
-    env_cfg = normalize_site_env_config(raw)
-    schema = build_effective_schema(base_schema=SCHEMA_DEFS, site_env_config=env_cfg)
+    if raw is None:
+        env_cfg = default_site_env_config()
+    else:
+        env_cfg = normalize_site_env_config(raw)
+    effective_cfg = merge_site_env_configs(default_site_env_config(), env_cfg)
+    schema = build_effective_schema(base_schema=SCHEMA_DEFS, site_env_config=effective_cfg)
     return schema, env_cfg
 
 

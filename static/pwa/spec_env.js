@@ -392,7 +392,9 @@
       }
 
       const hiddenKeys = allKeys.filter((k) => !selected.has(k));
-      if (hiddenKeys.length) outTabs[tabKey] = { hide_fields: hiddenKeys };
+      const tabCfg = { title: String((tabDef || {}).title || tabKey) };
+      if (hiddenKeys.length) tabCfg.hide_fields = hiddenKeys;
+      outTabs[tabKey] = tabCfg;
     }
 
     return compactConfig({

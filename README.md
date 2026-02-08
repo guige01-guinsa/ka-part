@@ -58,3 +58,8 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 운영 DB: `data/ka.db`
 - 스키마 확장과 자동 보정은 `app/db.py`의 `init_db()`/`ensure_domain_tables()`에서 처리합니다.
 - 관리자 제원 설정 화면: `/pwa/spec_env.html`
+
+## 문서
+- 사용자/인증 운영: `docs/USERS.md`
+- 단지 제원 설정: `docs/SITE_ENV.md`
+- 시설관리 사용자 매뉴얼: `docs/USER_MANUAL_FACILITY_MANAGER_KO.md`

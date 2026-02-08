@@ -371,7 +371,7 @@ def ensure_site(name: str) -> int:
         con.close()
 
 
-def get_site_env_config(site_name: str) -> Dict[str, Any]:
+def get_site_env_config(site_name: str) -> Dict[str, Any] | None:
     con = _connect()
     try:
         row = con.execute(
@@ -383,7 +383,7 @@ def get_site_env_config(site_name: str) -> Dict[str, Any]:
             (str(site_name or "").strip(),),
         ).fetchone()
         if not row:
-            return {}
+            return None
         raw = row["env_json"]
         if raw is None:
             return {}

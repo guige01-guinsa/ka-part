@@ -23,6 +23,9 @@ SCHEMA_TAB_ORDER = [
     "facility_telecom",
 ]
 
+DEFAULT_PRIMARY_TAB_KEYS = ["tr450", "tr400", "meter", "facility_check"]
+DEFAULT_HIDDEN_TAB_KEYS = ["home", "facility", "facility_fire", "facility_mechanical", "facility_telecom"]
+
 FIELD_TYPE_SET = {"text", "number", "textarea", "select", "date"}
 
 SCHEMA_DEFS = {
@@ -36,7 +39,7 @@ SCHEMA_DEFS = {
         ],
     },
     "tr450": {
-        "title": "변압기450",
+        "title": "세대부분(LV1)",
         "fields": [
             {"k": "lv1_L1_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
             {"k": "lv1_L1_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
@@ -57,7 +60,7 @@ SCHEMA_DEFS = {
         ],
     },
     "tr400": {
-        "title": "변압기400",
+        "title": "공용부(LV2)",
         "fields": [
             {"k": "lv2_L1_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
             {"k": "lv2_L1_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
@@ -167,11 +170,15 @@ SCHEMA_DEFS = {
     },
 }
 
+DEFAULT_SITE_ENV_CONFIG: Dict[str, Any] = {
+    "hide_tabs": list(DEFAULT_HIDDEN_TAB_KEYS),
+}
+
 SITE_ENV_TEMPLATE: Dict[str, Any] = {
     "hide_tabs": [],
     "tabs": {
         "tr450": {
-            "title": "변압기450",
+            "title": "세대부분(LV1)",
             "hide_fields": [],
             "field_labels": {"lv1_temp": "TR450 온도(℃)"},
             "field_overrides": {"lv1_temp": {"warn_max": 110}},
@@ -207,8 +214,8 @@ SITE_ENV_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "config": {
             "hide_tabs": ["facility_telecom"],
             "tabs": {
-                "tr450": {"title": "변압기450", "hide_fields": []},
-                "tr400": {"title": "변압기400", "hide_fields": []},
+                "tr450": {"title": "세대부분(LV1)", "hide_fields": []},
+                "tr400": {"title": "공용부(LV2)", "hide_fields": []},
                 "meter": {"title": "전력량계"},
             },
         },
@@ -532,6 +539,96 @@ def normalize_site_env_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
     return out
 
 
+def default_site_env_config() -> Dict[str, Any]:
+    return normalize_site_env_config(DEFAULT_SITE_ENV_CONFIG)
+
+
+def merge_site_env_configs(
+    base_config: Dict[str, Any] | None,
+    override_config: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    base = normalize_site_env_config(base_config)
+    override = normalize_site_env_config(override_config)
+    if not base:
+        return override
+    if not override:
+        return base
+
+    out: Dict[str, Any] = copy.deepcopy(base)
+
+    hide_tabs: List[str] = []
+    seen_tabs = set()
+    for tab_key in [*(out.get("hide_tabs") or []), *(override.get("hide_tabs") or [])]:
+        k = str(tab_key or "").strip()
+        if not k or k in seen_tabs:
+            continue
+        hide_tabs.append(k)
+        seen_tabs.add(k)
+    if hide_tabs:
+        out["hide_tabs"] = hide_tabs
+    elif "hide_tabs" in out:
+        out.pop("hide_tabs", None)
+
+    merged_tabs: Dict[str, Dict[str, Any]] = copy.deepcopy(out.get("tabs") or {})
+    for tab_key, tab_cfg in (override.get("tabs") or {}).items():
+        cur = copy.deepcopy(merged_tabs.get(tab_key) or {})
+        if "title" in tab_cfg:
+            cur["title"] = str(tab_cfg.get("title") or "").strip()
+
+        if isinstance(tab_cfg.get("hide_fields"), list):
+            vals: List[str] = []
+            seen = set()
+            for fk in [*(cur.get("hide_fields") or []), *(tab_cfg.get("hide_fields") or [])]:
+                key = str(fk or "").strip()
+                if not key or key in seen:
+                    continue
+                vals.append(key)
+                seen.add(key)
+            if vals:
+                cur["hide_fields"] = vals
+            elif "hide_fields" in cur:
+                cur.pop("hide_fields", None)
+
+        if isinstance(tab_cfg.get("field_labels"), dict):
+            cur["field_labels"] = {**(cur.get("field_labels") or {}), **tab_cfg["field_labels"]}
+
+        if isinstance(tab_cfg.get("field_overrides"), dict):
+            merged_overs = copy.deepcopy(cur.get("field_overrides") or {})
+            for fk, ov in tab_cfg["field_overrides"].items():
+                if not isinstance(ov, dict):
+                    continue
+                prior = dict(merged_overs.get(fk) or {})
+                prior.update(ov)
+                if prior:
+                    merged_overs[fk] = prior
+            if merged_overs:
+                cur["field_overrides"] = merged_overs
+
+        if isinstance(tab_cfg.get("add_fields"), list):
+            by_key: Dict[str, Dict[str, Any]] = {}
+            for f in cur.get("add_fields") or []:
+                k = str((f or {}).get("k") or "").strip()
+                if k:
+                    by_key[k] = f
+            for f in tab_cfg["add_fields"]:
+                k = str((f or {}).get("k") or "").strip()
+                if k:
+                    by_key[k] = f
+            if by_key:
+                cur["add_fields"] = list(by_key.values())
+
+        if isinstance(tab_cfg.get("rows"), list):
+            cur["rows"] = copy.deepcopy(tab_cfg["rows"])
+
+        if cur:
+            merged_tabs[tab_key] = cur
+
+    if merged_tabs:
+        out["tabs"] = merged_tabs
+
+    return normalize_site_env_config(out)
+
+
 def build_effective_schema(
     *,
     base_schema: Dict[str, Dict[str, Any]] | None = None,
@@ -542,10 +639,14 @@ def build_effective_schema(
     if not config:
         return schema
 
+    tabs_cfg = config.get("tabs") or {}
     for tab_key in config.get("hide_tabs") or []:
+        # Explicit tab config means caller wants the tab visible/customized.
+        if tab_key in tabs_cfg:
+            continue
         schema.pop(tab_key, None)
 
-    for tab_key, tab_cfg in (config.get("tabs") or {}).items():
+    for tab_key, tab_cfg in tabs_cfg.items():
         tab = schema.get(tab_key)
         if not tab:
             tab = {"title": tab_key, "fields": []}
@@ -625,6 +726,21 @@ def build_effective_schema(
     to_remove = [k for k, v in schema.items() if not (v.get("fields") or [])]
     for k in to_remove:
         schema.pop(k, None)
+    if not schema:
+        source = _schema_source(base_schema)
+        fallback: Dict[str, Dict[str, Any]] = {}
+        for tab_key in DEFAULT_PRIMARY_TAB_KEYS:
+            tab = source.get(tab_key)
+            if not isinstance(tab, dict):
+                continue
+            fields = [dict(x) for x in (tab.get("fields") or []) if isinstance(x, dict) and x.get("k")]
+            if not fields:
+                continue
+            item = copy.deepcopy(tab)
+            item["fields"] = fields
+            fallback[tab_key] = item
+        if fallback:
+            schema = fallback
     return schema
 
 
