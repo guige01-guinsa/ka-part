@@ -331,7 +331,7 @@ def health():
 
 
 @router.get("/schema")
-def api_schema(request: Request, site_name: str = Query(default=DEFAULT_SITE_NAME)):
+def api_schema(request: Request, site_name: str = Query(default="")):
     _user, _token, clean_site_name = _require_site_access(request, site_name, required=False)
     schema, env_cfg = _site_schema_and_env(clean_site_name)
     return {"schema": schema, "site_name": clean_site_name, "site_env_config": env_cfg}
