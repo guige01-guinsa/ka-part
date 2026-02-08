@@ -1,34 +1,55 @@
 # Render 배포 가이드 (ka-part.com)
 
-## 현재 확인된 상태
-- `www.ka-part.com` -> `ka-part.onrender.com`
-- 현재 서비스는 이 저장소 코드와 다른 앱(`/ui/works`)이 구동 중
+## 1) Deploy Hook URL 갱신 (Render 대시보드)
+1. Render Dashboard > 서비스 `ka-part` > `Settings`
+2. `Build & Deploy` 섹션의 `Deploy Hook`에서 `Regenerate hook` 클릭
+3. 새 URL 복사
+4. 기존 URL은 즉시 폐기되므로 더 이상 사용하지 않음
 
-즉, `ka-part.com`에 이 코드를 올리려면 Render 서비스 권한이 필요합니다.
-
-## 방법 1) Render 대시보드에서 수동 배포
-1. Render Dashboard 접속
-2. `ka-part` 서비스 선택
-3. `Manual Deploy` 실행
-4. 배포 완료 후 `https://www.ka-part.com/` 확인
-
-## 방법 2) API로 배포 트리거 (자동)
-이 저장소 루트의 `deploy_render.ps1` 사용:
+## 2) 로컬 환경변수에 새 Hook URL 저장
+PowerShell (현재 세션):
 
 ```powershell
-$env:RENDER_SERVICE_ID="srv-xxxxxxxxxxxx"
-$env:RENDER_API_KEY="rnr_xxxxxxxxxxxx"
+$env:RENDER_DEPLOY_HOOK_URL="https://api.render.com/deploy/srv-xxxx?key=yyyy"
+```
+
+PowerShell (사용자 영구 저장):
+
+```powershell
+[Environment]::SetEnvironmentVariable("RENDER_DEPLOY_HOOK_URL","https://api.render.com/deploy/srv-xxxx?key=yyyy","User")
+```
+
+## 3) 수동 배포 실행 (Hook 방식)
+저장소 루트에서:
+
+```powershell
 powershell -ExecutionPolicy Bypass -File .\deploy_render.ps1
 ```
 
 또는:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\deploy_render.ps1 -ServiceId srv-xxxxxxxxxxxx -ApiKey rnr_xxxxxxxxxxxx
+powershell -ExecutionPolicy Bypass -File .\deploy_render.ps1 -HookUrl "https://api.render.com/deploy/srv-xxxx?key=yyyy"
 ```
 
-## 배포 후 확인
+## 4) API Key 방식(대체/고급)
+Hook 대신 Render API를 써서 배포할 수도 있음:
+
 ```powershell
-curl.exe -I https://www.ka-part.com/
-curl.exe -s https://www.ka-part.com/openapi.json
+$env:RENDER_SERVICE_ID="srv-xxxx"
+$env:RENDER_API_KEY="rnr_xxxx"
+powershell -ExecutionPolicy Bypass -File .\deploy_render.ps1 -Wait
 ```
+
+`-Wait`를 사용하면 배포 상태를 polling해서 완료/실패를 출력함.
+
+## 5) 배포 확인
+```powershell
+curl.exe -s https://www.ka-part.com/api/health
+curl.exe -I https://www.ka-part.com/pwa/
+```
+
+## 보안 메모
+- Deploy Hook URL과 API Key는 비밀값으로 취급
+- Git 저장소, 채팅, 스크린샷에 노출하지 않기
+- 유출 의심 시 즉시 `Regenerate hook` 또는 API Key 재발급

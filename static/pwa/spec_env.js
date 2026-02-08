@@ -18,6 +18,7 @@
   let me = null;
   let templates = [];
   let baseSchema = {};
+  let activeSchema = {};
 
   function setMsg(msg, isErr = false) {
     const el = $("#msg");
@@ -150,6 +151,34 @@
     return cfg;
   }
 
+  function schemaFieldCount(schema) {
+    let count = 0;
+    for (const tabDef of Object.values(schema || {})) {
+      const fields = Array.isArray((tabDef || {}).fields) ? tabDef.fields : [];
+      count += fields.length;
+    }
+    return count;
+  }
+
+  function setActiveSchema(schema, rerenderTemplateScope = true) {
+    activeSchema = schema && typeof schema === "object" ? clone(schema) : {};
+    renderActiveSyncInfo();
+    if (rerenderTemplateScope && templates.length) {
+      updateTemplateDescAndScope();
+      return;
+    }
+    syncTemplateSelectionFromActiveSchema();
+  }
+
+  function renderActiveSyncInfo() {
+    const el = $("#liveSyncInfo");
+    if (!el) return;
+    const site = getSiteName();
+    const tabCount = Object.keys(activeSchema || {}).length;
+    const fieldCount = schemaFieldCount(activeSchema || {});
+    el.textContent = `동기화 기준 단지: ${site || "-"} | 현재 사용 양식: 탭 ${tabCount}개 / 항목 ${fieldCount}개`;
+  }
+
   function applyConfigToSchema(base, cfg) {
     const schema = clone(base || {});
     const config = compactConfig(cfg || {});
@@ -251,7 +280,8 @@
       wrap.innerHTML = '<div class="hint">템플릿이 없습니다.</div>';
       return;
     }
-    const schema = applyConfigToSchema(baseSchema, t.config || {});
+    const scopeBaseSchema = Object.keys(activeSchema || {}).length ? activeSchema : baseSchema;
+    const schema = applyConfigToSchema(scopeBaseSchema, t.config || {});
     const tabs = sortTabKeys(Object.keys(schema));
     if (!tabs.length) {
       wrap.innerHTML = '<div class="hint">선택 가능한 탭이 없습니다.</div>';
@@ -267,7 +297,7 @@
       block.className = "tpl-tab-block";
       block.innerHTML = `
         <label class="tpl-tab-head">
-          <input type="checkbox" class="tpl-tab" data-tab="${escapeHtmlAttr(tabKey)}" checked />
+          <input type="checkbox" class="tpl-tab" data-tab="${escapeHtmlAttr(tabKey)}" />
           <span>${escapeHtml(title)} <code>${escapeHtml(tabKey)}</code></span>
         </label>
         <div class="tpl-fields"></div>
@@ -281,11 +311,12 @@
         item.className = "tpl-field-item";
         item.innerHTML = `<input type="checkbox" class="tpl-field" data-tab="${escapeHtmlAttr(tabKey)}" data-field="${escapeHtmlAttr(
           k
-        )}" checked /><span>${escapeHtml(label)} <code>${escapeHtml(k)}</code></span>`;
+        )}" /><span>${escapeHtml(label)} <code>${escapeHtml(k)}</code></span>`;
         fwrap.appendChild(item);
       }
       wrap.appendChild(block);
     }
+    syncTemplateSelectionFromActiveSchema();
   }
 
   function setTemplateSelectionAll(checked) {
@@ -306,6 +337,36 @@
       f.disabled = !on;
       if (!on) f.checked = false;
     }
+  }
+
+  function syncTemplateSelectionFromActiveSchema() {
+    const tabEls = [...document.querySelectorAll("#templateScopeWrap input.tpl-tab")];
+    const fieldEls = [...document.querySelectorAll("#templateScopeWrap input.tpl-field")];
+    if (!tabEls.length && !fieldEls.length) return;
+
+    if (!Object.keys(activeSchema || {}).length) {
+      setTemplateSelectionAll(false);
+      syncTemplateFieldDisables();
+      return;
+    }
+
+    const activeFieldMap = {};
+    for (const [tabKey, tabDef] of Object.entries(activeSchema || {})) {
+      const fields = Array.isArray((tabDef || {}).fields) ? tabDef.fields : [];
+      activeFieldMap[tabKey] = new Set(fields.map((f) => String((f || {}).k || "").trim()).filter(Boolean));
+    }
+
+    for (const t of tabEls) {
+      const tab = String(t.dataset.tab || "").trim();
+      t.checked = !!activeFieldMap[tab];
+    }
+    for (const f of fieldEls) {
+      const tab = String(f.dataset.tab || "").trim();
+      const key = String(f.dataset.field || "").trim();
+      const set = activeFieldMap[tab];
+      f.checked = !!set && set.has(key);
+    }
+    syncTemplateFieldDisables();
   }
 
   function collectTemplateSelection() {
@@ -481,7 +542,8 @@
       setMsg("최소 1개 탭을 선택하세요.", true);
       return;
     }
-    const templateSchema = applyConfigToSchema(baseSchema, t.config || {});
+    const scopeBaseSchema = Object.keys(activeSchema || {}).length ? activeSchema : baseSchema;
+    const templateSchema = applyConfigToSchema(scopeBaseSchema, t.config || {});
     const filtered = filterTemplateConfigBySelection(t.config || {}, selection);
     const visibility = buildVisibilityConfigBySelection(selection, templateSchema);
     const templateScoped = mergeConfig(filtered, visibility);
@@ -548,6 +610,7 @@
     localStorage.setItem(SITE_KEY, site);
     const data = await jfetch(`/api/site_env?site_name=${encodeURIComponent(site)}`);
     setConfigToEditor(data.config || {});
+    setActiveSchema(data.schema || {});
     renderPreview(data);
     setMsg("환경변수를 불러왔습니다.");
     await loadSiteList().catch(() => {});
@@ -571,8 +634,9 @@
       body: JSON.stringify({ site_name: site, config: cfg }),
     });
     setConfigToEditor(data.config || {});
+    setActiveSchema(data.schema || {});
     renderPreview(data);
-    setMsg("저장되었습니다.");
+    setMsg("저장되었습니다. 현재 사용 중 양식과 동기화되었습니다.");
     await loadSiteList().catch(() => {});
   }
 
@@ -585,8 +649,10 @@
     const ok = confirm(`${site} 단지의 제원설정을 삭제할까요?`);
     if (!ok) return;
     await jfetch(`/api/site_env?site_name=${encodeURIComponent(site)}`, { method: "DELETE" });
-    setConfigToEditor({});
-    $("#preview").textContent = "";
+    const data = await jfetch(`/api/schema?site_name=${encodeURIComponent(site)}`);
+    setConfigToEditor((data && data.site_env_config) || {});
+    setActiveSchema((data && data.schema) || {});
+    renderPreview({ site_name: site, schema: (data && data.schema) || {} });
     setMsg("삭제되었습니다.");
     await loadSiteList().catch(() => {});
   }
@@ -598,6 +664,7 @@
       return;
     }
     const data = await jfetch(`/api/schema?site_name=${encodeURIComponent(site)}`);
+    setActiveSchema(data.schema || {});
     renderPreview({ site_name: site, schema: data.schema || {} });
     setMsg("미리보기를 갱신했습니다.");
   }
@@ -646,8 +713,8 @@
 
     wire();
     await loadBaseSchema();
+    await reloadConfig().catch((e) => setMsg(e.message || String(e), true));
     await loadTemplates();
-    await reloadConfig().catch(() => {});
     await loadSiteList().catch(() => {});
   }
 
