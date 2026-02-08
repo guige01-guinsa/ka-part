@@ -14,7 +14,9 @@ from .schema_defs import (
     LEGACY_FIELD_ALIASES,
     SCHEMA_DEFS,
     TAB_STORAGE_SPECS,
+    build_effective_schema,
     canonicalize_tab_fields,
+    normalize_site_env_config,
     schema_field_keys,
 )
 
@@ -685,6 +687,47 @@ def schema_alignment_report() -> Dict[str, Any]:
     con = _connect()
     try:
         issues: List[str] = []
+        for tab_key, tab_def in SCHEMA_DEFS.items():
+            fields = (tab_def or {}).get("fields")
+            if not isinstance(fields, list) or not fields:
+                issues.append(f"[{tab_key}] schema fields must be a non-empty list")
+                continue
+
+            field_set = set()
+            for idx, field in enumerate(fields, start=1):
+                if not isinstance(field, dict):
+                    issues.append(f"[{tab_key}] field #{idx} is not an object")
+                    continue
+                fkey = str(field.get("k") or "").strip()
+                if not fkey:
+                    issues.append(f"[{tab_key}] field #{idx} has empty key")
+                    continue
+                if fkey in field_set:
+                    issues.append(f"[{tab_key}] duplicate field key '{fkey}'")
+                    continue
+                field_set.add(fkey)
+
+            rows = (tab_def or {}).get("rows")
+            if rows is not None and not isinstance(rows, list):
+                issues.append(f"[{tab_key}] rows must be list")
+            if isinstance(rows, list):
+                used = set()
+                for r_index, row in enumerate(rows, start=1):
+                    if not isinstance(row, list):
+                        issues.append(f"[{tab_key}] row #{r_index} is not a list")
+                        continue
+                    for c_index, raw_key in enumerate(row, start=1):
+                        key = str(raw_key or "").strip()
+                        if not key:
+                            issues.append(f"[{tab_key}] row #{r_index} col #{c_index} is empty")
+                            continue
+                        if key not in field_set:
+                            issues.append(f"[{tab_key}] row key '{key}' is not in fields")
+                            continue
+                        if key in used:
+                            issues.append(f"[{tab_key}] row key '{key}' is duplicated")
+                        used.add(key)
+
         for tab_key, spec in TAB_STORAGE_SPECS.items():
             schema_keys = set(schema_field_keys(tab_key))
             map_keys = set((spec.get("column_map") or {}).keys())
@@ -704,6 +747,29 @@ def schema_alignment_report() -> Dict[str, Any]:
             for col in sorted(required_cols):
                 if col not in cols:
                     issues.append(f"[{tab_key}] table '{table}' missing column '{col}'")
+
+        site_env_rows = con.execute(
+            """
+            SELECT site_name, env_json
+            FROM site_env_configs
+            ORDER BY site_name ASC
+            """
+        ).fetchall()
+        for row in site_env_rows:
+            site_name = str(row["site_name"] or "").strip() or "(empty-site-name)"
+            raw_text = str(row["env_json"] or "").strip()
+            try:
+                raw = json.loads(raw_text) if raw_text else {}
+            except Exception:
+                issues.append(f"[site_env:{site_name}] env_json is not valid json")
+                continue
+            if not isinstance(raw, dict):
+                issues.append(f"[site_env:{site_name}] env_json root must be object")
+                continue
+            normalized = normalize_site_env_config(raw)
+            effective = build_effective_schema(base_schema=SCHEMA_DEFS, site_env_config=normalized)
+            if not effective:
+                issues.append(f"[site_env:{site_name}] effective schema is empty")
 
         ok = len(issues) == 0
         return {"ok": ok, "issue_count": len(issues), "issues": issues}

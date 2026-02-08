@@ -13,7 +13,7 @@
     "facility_mechanical",
     "facility_telecom",
   ];
-  const LOCKED_ROWS = {
+  const FALLBACK_ROWS = {
     tr450: [
       ["lv1_L1_V", "lv1_L1_A", "lv1_L1_KW"],
       ["lv1_L2_V", "lv1_L2_A", "lv1_L2_KW"],
@@ -202,9 +202,9 @@
   }
 
   function inferRows(tab) {
-    const locked = LOCKED_ROWS[tab.key];
-    if (locked) return locked;
     if (Array.isArray(tab.rows) && tab.rows.length) return tab.rows;
+    const fallback = FALLBACK_ROWS[tab.key];
+    if (fallback) return fallback;
     const keys = tab.fields.map((f) => f.k);
     const allNumeric = tab.fields.every((f) => f.type === "number");
     if (COMPACT_TABS.has(tab.key) || (allNumeric && keys.length >= 6)) return chunk(keys, 3);
@@ -214,6 +214,10 @@
 
   function shortLabel(tabKey, field) {
     if (tabKey === "tr450" || tabKey === "tr400") {
+      const custom = String(field.label || "").trim();
+      const normalized = custom.toLowerCase();
+      const defaultLike = new Set(["v", "a", "kw", "온도", "온도(℃)", "온도(°c)"]);
+      if (custom && !defaultLike.has(normalized)) return custom;
       const m = /_(L[1-3])_/.exec(field.k || "");
       const phase = m ? `${m[1]}-` : "";
       if (field.k.endsWith("_V")) return `${phase}V`;
