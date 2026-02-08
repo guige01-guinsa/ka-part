@@ -36,6 +36,15 @@ body {
   gap: 6px;
 }
 
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.grow { flex: 1 1 220px; }
+
 .btn {
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -71,6 +80,7 @@ body {
 }
 
 h2 { margin: 0 0 10px; font-size: 16px; }
+h3 { margin: 12px 0 8px; font-size: 14px; color: var(--muted); }
 
 .field {
   display: flex;
@@ -99,6 +109,109 @@ textarea {
   min-height: 320px;
   resize: vertical;
   font-family: Consolas, "Courier New", monospace;
+}
+
+.rowsbox {
+  min-height: 120px;
+}
+
+.checkgrid {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+.checkitem {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--bg-soft) 70%, black 30%);
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.grid2 {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.mini-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mini-field label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mini-field input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 7px;
+  font-size: 12px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg-soft) 84%, black 16%);
+}
+
+.addfields {
+  display: grid;
+  gap: 8px;
+}
+
+.addrow {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--bg-soft) 74%, black 26%);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+.addrow .btn {
+  align-self: end;
+}
+
+.tpl-scope {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.tpl-tab-block {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--bg-soft) 72%, black 28%);
+}
+
+.tpl-tab-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.tpl-fields {
+  margin-left: 22px;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+.tpl-field-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 pre {

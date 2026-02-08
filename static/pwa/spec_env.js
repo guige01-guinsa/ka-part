@@ -3,15 +3,58 @@
 
   const $ = (s) => document.querySelector(s);
   const SITE_KEY = "ka_current_site_name_v1";
+  const TAB_ORDER = [
+    "home",
+    "tr450",
+    "tr400",
+    "meter",
+    "facility",
+    "facility_check",
+    "facility_fire",
+    "facility_mechanical",
+    "facility_telecom",
+  ];
 
   let me = null;
-  let templateObj = {};
+  let templates = [];
+  let baseSchema = {};
 
   function setMsg(msg, isErr = false) {
     const el = $("#msg");
     if (!el) return;
     el.textContent = msg || "";
     el.classList.toggle("err", !!isErr);
+  }
+
+  function clone(v) {
+    return JSON.parse(JSON.stringify(v || {}));
+  }
+
+  function sortTabKeys(keys) {
+    return [...keys].sort((a, b) => {
+      const ia = TAB_ORDER.indexOf(a);
+      const ib = TAB_ORDER.indexOf(b);
+      const va = ia >= 0 ? ia : 999;
+      const vb = ib >= 0 ? ib : 999;
+      return va - vb || a.localeCompare(b);
+    });
+  }
+
+  function escapeHtml(v) {
+    return String(v)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function escapeHtmlAttr(v) {
+    return String(v)
+      .replaceAll("&", "&amp;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
   }
 
   function getSiteName() {
@@ -27,11 +70,125 @@
   function getConfigFromEditor() {
     const raw = ($("#envJson").value || "").trim();
     if (!raw) return {};
-    return JSON.parse(raw);
+    const v = JSON.parse(raw);
+    return v && typeof v === "object" ? v : {};
   }
 
   function setConfigToEditor(config) {
     $("#envJson").value = JSON.stringify(config || {}, null, 2);
+  }
+
+  function compactConfig(config) {
+    const cfg = clone(config);
+    if (!cfg || typeof cfg !== "object") return {};
+
+    if (Array.isArray(cfg.hide_tabs)) {
+      cfg.hide_tabs = [...new Set(cfg.hide_tabs.map((x) => String(x || "").trim()).filter(Boolean))];
+      if (!cfg.hide_tabs.length) delete cfg.hide_tabs;
+    } else {
+      delete cfg.hide_tabs;
+    }
+
+    if (!cfg.tabs || typeof cfg.tabs !== "object") {
+      delete cfg.tabs;
+      return cfg;
+    }
+
+    for (const [tabKey, rawTab] of Object.entries(cfg.tabs)) {
+      if (!rawTab || typeof rawTab !== "object") {
+        delete cfg.tabs[tabKey];
+        continue;
+      }
+      const t = rawTab;
+      if (typeof t.title === "string") {
+        t.title = t.title.trim();
+        if (!t.title) delete t.title;
+      } else {
+        delete t.title;
+      }
+      if (Array.isArray(t.hide_fields)) {
+        t.hide_fields = [...new Set(t.hide_fields.map((x) => String(x || "").trim()).filter(Boolean))];
+        if (!t.hide_fields.length) delete t.hide_fields;
+      } else {
+        delete t.hide_fields;
+      }
+      if (t.field_labels && typeof t.field_labels === "object") {
+        const o = {};
+        for (const [k, v] of Object.entries(t.field_labels)) {
+          const kk = String(k || "").trim();
+          const vv = String(v || "").trim();
+          if (kk && vv) o[kk] = vv;
+        }
+        if (Object.keys(o).length) t.field_labels = o;
+        else delete t.field_labels;
+      } else {
+        delete t.field_labels;
+      }
+      if (t.field_overrides && typeof t.field_overrides === "object") {
+        if (!Object.keys(t.field_overrides).length) delete t.field_overrides;
+      } else {
+        delete t.field_overrides;
+      }
+      if (Array.isArray(t.add_fields)) {
+        t.add_fields = t.add_fields.filter((x) => x && typeof x === "object" && String(x.k || "").trim());
+        if (!t.add_fields.length) delete t.add_fields;
+      } else {
+        delete t.add_fields;
+      }
+      if (Array.isArray(t.rows)) {
+        t.rows = t.rows
+          .filter((r) => Array.isArray(r))
+          .map((r) => r.map((x) => String(x || "").trim()).filter(Boolean))
+          .filter((r) => r.length);
+        if (!t.rows.length) delete t.rows;
+      } else {
+        delete t.rows;
+      }
+      if (!Object.keys(t).length) delete cfg.tabs[tabKey];
+    }
+    if (!Object.keys(cfg.tabs).length) delete cfg.tabs;
+    return cfg;
+  }
+
+  function applyConfigToSchema(base, cfg) {
+    const schema = clone(base || {});
+    const config = compactConfig(cfg || {});
+
+    const hiddenTabs = new Set((config.hide_tabs || []).map((x) => String(x)));
+    for (const t of hiddenTabs) delete schema[t];
+
+    for (const [tabKey, tabCfg] of Object.entries(config.tabs || {})) {
+      if (!schema[tabKey]) schema[tabKey] = { title: tabKey, fields: [] };
+      const tab = schema[tabKey];
+      if (tabCfg.title) tab.title = String(tabCfg.title);
+
+      let fields = Array.isArray(tab.fields) ? clone(tab.fields) : [];
+      const hideFields = new Set((tabCfg.hide_fields || []).map((x) => String(x)));
+      if (hideFields.size) fields = fields.filter((f) => !hideFields.has(String(f.k)));
+
+      const byKey = {};
+      for (const f of fields) if (f && f.k) byKey[String(f.k)] = f;
+
+      for (const [k, v] of Object.entries(tabCfg.field_labels || {})) {
+        if (byKey[k]) byKey[k].label = String(v);
+      }
+      for (const [k, ov] of Object.entries(tabCfg.field_overrides || {})) {
+        if (byKey[k] && ov && typeof ov === "object") Object.assign(byKey[k], ov);
+      }
+      for (const f of tabCfg.add_fields || []) {
+        if (!f || typeof f !== "object" || !f.k) continue;
+        const k = String(f.k);
+        if (byKey[k]) Object.assign(byKey[k], f);
+        else {
+          const item = clone(f);
+          fields.push(item);
+          byKey[k] = item;
+        }
+      }
+      tab.fields = fields;
+      if (Array.isArray(tabCfg.rows)) tab.rows = clone(tabCfg.rows);
+    }
+    return schema;
   }
 
   function renderPreview(data) {
@@ -43,9 +200,7 @@
       const title = tabDef.title || tabKey;
       const fields = Array.isArray(tabDef.fields) ? tabDef.fields : [];
       lines.push(`- ${tabKey} (${title}): ${fields.length} fields`);
-      for (const f of fields) {
-        lines.push(`  * ${f.k} : ${f.label || f.k} [${f.type || "text"}]`);
-      }
+      for (const f of fields) lines.push(`  * ${f.k} : ${f.label || f.k} [${f.type || "text"}]`);
     }
     $("#preview").textContent = lines.join("\n");
   }
@@ -54,9 +209,250 @@
     return KAAuth.requestJson(url, opts);
   }
 
-  async function loadTemplate() {
-    const data = await jfetch("/api/site_env_template");
-    templateObj = data.template || {};
+  async function loadBaseSchema() {
+    const data = await jfetch("/api/base_schema");
+    baseSchema = (data && data.schema) || {};
+  }
+
+  function getSelectedTemplate() {
+    const key = $("#templateSelect").value;
+    return templates.find((x) => x.key === key) || null;
+  }
+
+  function renderTemplateSelect() {
+    const sel = $("#templateSelect");
+    sel.innerHTML = "";
+    for (const t of templates) {
+      const o = document.createElement("option");
+      o.value = t.key;
+      o.textContent = `${t.name} (${t.key})`;
+      sel.appendChild(o);
+    }
+    if (templates.length) {
+      sel.value = templates[0].key;
+      updateTemplateDescAndScope();
+    }
+  }
+
+  function updateTemplateDescAndScope() {
+    const t = getSelectedTemplate();
+    $("#templateDesc").textContent = t ? t.description || "" : "";
+    renderTemplateScope();
+  }
+
+  function renderTemplateScope() {
+    const wrap = $("#templateScopeWrap");
+    const t = getSelectedTemplate();
+    if (!t) {
+      wrap.innerHTML = '<div class="hint">템플릿이 없습니다.</div>';
+      return;
+    }
+    const schema = applyConfigToSchema(baseSchema, t.config || {});
+    const tabs = sortTabKeys(Object.keys(schema));
+    if (!tabs.length) {
+      wrap.innerHTML = '<div class="hint">선택 가능한 탭이 없습니다.</div>';
+      return;
+    }
+
+    wrap.innerHTML = "";
+    for (const tabKey of tabs) {
+      const tab = schema[tabKey] || {};
+      const title = String(tab.title || tabKey);
+      const fields = Array.isArray(tab.fields) ? tab.fields : [];
+      const block = document.createElement("div");
+      block.className = "tpl-tab-block";
+      block.innerHTML = `
+        <label class="tpl-tab-head">
+          <input type="checkbox" class="tpl-tab" data-tab="${escapeHtmlAttr(tabKey)}" checked />
+          <span>${escapeHtml(title)} <code>${escapeHtml(tabKey)}</code></span>
+        </label>
+        <div class="tpl-fields"></div>
+      `;
+      const fwrap = block.querySelector(".tpl-fields");
+      for (const f of fields) {
+        const k = String(f.k || "").trim();
+        if (!k) continue;
+        const label = String(f.label || k);
+        const item = document.createElement("label");
+        item.className = "tpl-field-item";
+        item.innerHTML = `<input type="checkbox" class="tpl-field" data-tab="${escapeHtmlAttr(tabKey)}" data-field="${escapeHtmlAttr(
+          k
+        )}" checked /><span>${escapeHtml(label)} <code>${escapeHtml(k)}</code></span>`;
+        fwrap.appendChild(item);
+      }
+      wrap.appendChild(block);
+    }
+  }
+
+  function setTemplateSelectionAll(checked) {
+    for (const x of document.querySelectorAll("#templateScopeWrap input.tpl-tab, #templateScopeWrap input.tpl-field")) {
+      x.checked = !!checked;
+      x.disabled = false;
+    }
+  }
+
+  function syncTemplateFieldDisables() {
+    const tabMap = {};
+    for (const t of document.querySelectorAll("#templateScopeWrap input.tpl-tab")) {
+      tabMap[String(t.dataset.tab || "")] = !!t.checked;
+    }
+    for (const f of document.querySelectorAll("#templateScopeWrap input.tpl-field")) {
+      const tab = String(f.dataset.tab || "");
+      const on = !!tabMap[tab];
+      f.disabled = !on;
+      if (!on) f.checked = false;
+    }
+  }
+
+  function collectTemplateSelection() {
+    const tabs = new Set();
+    const fieldsByTab = {};
+    for (const t of document.querySelectorAll("#templateScopeWrap input.tpl-tab")) {
+      const tab = String(t.dataset.tab || "").trim();
+      if (tab && t.checked) tabs.add(tab);
+    }
+    for (const f of document.querySelectorAll("#templateScopeWrap input.tpl-field")) {
+      const tab = String(f.dataset.tab || "").trim();
+      const key = String(f.dataset.field || "").trim();
+      if (!tab || !key || f.disabled || !f.checked) continue;
+      if (!fieldsByTab[tab]) fieldsByTab[tab] = new Set();
+      fieldsByTab[tab].add(key);
+    }
+    return { tabs, fieldsByTab };
+  }
+
+  function filterTemplateConfigBySelection(templateCfg, selection) {
+    const cfg = clone(templateCfg || {});
+    const tabs = selection.tabs;
+    const fieldsByTab = selection.fieldsByTab || {};
+
+    if (Array.isArray(cfg.hide_tabs)) {
+      cfg.hide_tabs = cfg.hide_tabs.filter((t) => tabs.has(String(t)));
+    }
+
+    const outTabs = {};
+    for (const [tabKey, tabCfgRaw] of Object.entries(cfg.tabs || {})) {
+      if (!tabs.has(tabKey)) continue;
+      const tabCfg = clone(tabCfgRaw || {});
+      const fieldSet = fieldsByTab[tabKey] || new Set();
+      const hasSelect = fieldSet.size > 0;
+
+      if (Array.isArray(tabCfg.hide_fields) && hasSelect) {
+        tabCfg.hide_fields = tabCfg.hide_fields.filter((k) => fieldSet.has(String(k)));
+      }
+      if (tabCfg.field_labels && typeof tabCfg.field_labels === "object" && hasSelect) {
+        const o = {};
+        for (const [k, v] of Object.entries(tabCfg.field_labels)) if (fieldSet.has(String(k))) o[k] = v;
+        tabCfg.field_labels = o;
+      }
+      if (tabCfg.field_overrides && typeof tabCfg.field_overrides === "object" && hasSelect) {
+        const o = {};
+        for (const [k, v] of Object.entries(tabCfg.field_overrides)) if (fieldSet.has(String(k))) o[k] = v;
+        tabCfg.field_overrides = o;
+      }
+      if (Array.isArray(tabCfg.add_fields) && hasSelect) {
+        tabCfg.add_fields = tabCfg.add_fields.filter((f) => fieldSet.has(String((f || {}).k || "")));
+      }
+      if (Array.isArray(tabCfg.rows) && hasSelect) {
+        const rows = [];
+        for (const row of tabCfg.rows) {
+          if (!Array.isArray(row)) continue;
+          const rr = row.map((x) => String(x || "")).filter((k) => fieldSet.has(k));
+          if (rr.length) rows.push(rr);
+        }
+        tabCfg.rows = rows;
+      }
+      outTabs[tabKey] = tabCfg;
+    }
+    cfg.tabs = outTabs;
+    return compactConfig(cfg);
+  }
+
+  function mergeConfig(baseCfg, applyCfg) {
+    const out = compactConfig(baseCfg || {});
+    const add = compactConfig(applyCfg || {});
+
+    const hideTabs = new Set([...(out.hide_tabs || []), ...(add.hide_tabs || [])].map((x) => String(x)));
+    if (hideTabs.size) out.hide_tabs = [...hideTabs];
+
+    if (!out.tabs || typeof out.tabs !== "object") out.tabs = {};
+    for (const [tabKey, tabCfg] of Object.entries(add.tabs || {})) {
+      if (!out.tabs[tabKey] || typeof out.tabs[tabKey] !== "object") out.tabs[tabKey] = {};
+      const t = out.tabs[tabKey];
+      if (tabCfg.title !== undefined) t.title = tabCfg.title;
+
+      const setUnion = (k) => {
+        const set = new Set([...(t[k] || []), ...(tabCfg[k] || [])].map((x) => String(x)));
+        if (set.size) t[k] = [...set];
+      };
+      setUnion("hide_fields");
+
+      if (tabCfg.field_labels && typeof tabCfg.field_labels === "object") {
+        t.field_labels = { ...(t.field_labels || {}), ...tabCfg.field_labels };
+      }
+      if (tabCfg.field_overrides && typeof tabCfg.field_overrides === "object") {
+        t.field_overrides = { ...(t.field_overrides || {}), ...tabCfg.field_overrides };
+      }
+      if (Array.isArray(tabCfg.add_fields)) {
+        const map = {};
+        for (const x of t.add_fields || []) {
+          const k = String((x || {}).k || "");
+          if (k) map[k] = x;
+        }
+        for (const x of tabCfg.add_fields) {
+          const k = String((x || {}).k || "");
+          if (k) map[k] = x;
+        }
+        t.add_fields = Object.values(map);
+      }
+      if (Array.isArray(tabCfg.rows)) t.rows = clone(tabCfg.rows);
+    }
+    return compactConfig(out);
+  }
+
+  function applySelectedTemplate() {
+    const t = getSelectedTemplate();
+    if (!t) {
+      setMsg("템플릿을 선택하세요.", true);
+      return;
+    }
+    const selection = collectTemplateSelection();
+    if (!selection.tabs.size) {
+      setMsg("최소 1개 탭을 선택하세요.", true);
+      return;
+    }
+    const filtered = filterTemplateConfigBySelection(t.config || {}, selection);
+    const mode = $("#templateMode").value || "merge";
+
+    let current = {};
+    try {
+      current = compactConfig(getConfigFromEditor());
+    } catch (e) {
+      setMsg(`JSON 파싱 오류: ${e.message}`, true);
+      return;
+    }
+    const next = mode === "replace" ? filtered : mergeConfig(current, filtered);
+    setConfigToEditor(next);
+    setMsg(`템플릿 '${t.name}'을 ${mode === "replace" ? "덮어쓰기" : "병합"} 적용했습니다. 확인 후 저장하세요.`);
+  }
+
+  async function loadTemplates() {
+    let items = [];
+    try {
+      const data = await jfetch("/api/site_env_templates");
+      items = Array.isArray(data.items) ? data.items : [];
+    } catch (_e) {
+      const fallback = await jfetch("/api/site_env_template");
+      items = [{ key: "default", name: "기본", description: "", config: fallback.template || {} }];
+    }
+    templates = items.map((x) => ({
+      key: String(x.key || ""),
+      name: String(x.name || x.key || "template"),
+      description: String(x.description || ""),
+      config: x.config && typeof x.config === "object" ? x.config : {},
+    }));
+    if (!templates.length) templates = [{ key: "blank", name: "빈 템플릿", description: "", config: {} }];
+    renderTemplateSelect();
   }
 
   async function loadSiteList() {
@@ -68,17 +464,13 @@
       return;
     }
     wrap.innerHTML = items
-      .map((x) => `<div>${escapeHtml(x.site_name || "")} <span style="opacity:.75">(${escapeHtml(x.updated_at || "")})</span></div>`)
-      .join("");
-  }
-
-  function escapeHtml(v) {
-    return String(v)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
+      .map(
+        (x) =>
+          `<button class="btn site-item" type="button" data-site="${escapeHtmlAttr(x.site_name || "")}">${escapeHtml(
+            x.site_name || ""
+          )}</button> <span style="opacity:.75">${escapeHtml(x.updated_at || "")}</span>`
+      )
+      .join("<br/>");
   }
 
   async function reloadConfig() {
@@ -103,7 +495,7 @@
     }
     let cfg = {};
     try {
-      cfg = getConfigFromEditor();
+      cfg = compactConfig(getConfigFromEditor());
     } catch (e) {
       setMsg(`JSON 파싱 오류: ${e.message}`, true);
       return;
@@ -149,9 +541,28 @@
     $("#btnSave").addEventListener("click", () => saveConfig().catch((e) => setMsg(e.message || String(e), true)));
     $("#btnDelete").addEventListener("click", () => deleteConfig().catch((e) => setMsg(e.message || String(e), true)));
     $("#btnPreview").addEventListener("click", () => previewSchema().catch((e) => setMsg(e.message || String(e), true)));
-    $("#btnTemplate").addEventListener("click", () => {
-      setConfigToEditor(templateObj || {});
-      setMsg("템플릿을 입력했습니다. 필요 항목만 수정 후 저장하세요.");
+
+    $("#templateSelect").addEventListener("change", updateTemplateDescAndScope);
+    $("#btnTemplateApply").addEventListener("click", applySelectedTemplate);
+    $("#btnTplAllOn").addEventListener("click", () => {
+      setTemplateSelectionAll(true);
+      syncTemplateFieldDisables();
+    });
+    $("#btnTplAllOff").addEventListener("click", () => {
+      setTemplateSelectionAll(false);
+      syncTemplateFieldDisables();
+    });
+    $("#templateScopeWrap").addEventListener("change", (e) => {
+      if (e.target.closest("input.tpl-tab")) syncTemplateFieldDisables();
+    });
+
+    $("#siteList").addEventListener("click", (e) => {
+      const btn = e.target.closest("button.site-item[data-site]");
+      if (!btn) return;
+      const site = String(btn.dataset.site || "").trim();
+      if (!site) return;
+      setSiteName(site);
+      reloadConfig().catch((err) => setMsg(err.message || String(err), true));
     });
   }
 
@@ -166,8 +577,10 @@
     const qSite = (u.searchParams.get("site_name") || "").trim();
     const stored = (localStorage.getItem(SITE_KEY) || "").trim();
     setSiteName(qSite || stored || "미지정단지");
+
     wire();
-    await loadTemplate();
+    await loadBaseSchema();
+    await loadTemplates();
     await reloadConfig().catch(() => {});
     await loadSiteList().catch(() => {});
   }

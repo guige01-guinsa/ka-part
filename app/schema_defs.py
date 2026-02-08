@@ -195,6 +195,49 @@ SITE_ENV_TEMPLATE: Dict[str, Any] = {
     },
 }
 
+SITE_ENV_TEMPLATES: Dict[str, Dict[str, Any]] = {
+    "blank": {
+        "name": "빈 템플릿",
+        "description": "아무 변경 없이 시작합니다.",
+        "config": {},
+    },
+    "electrical_min": {
+        "name": "전기 중심",
+        "description": "시설 하위 탭 일부를 숨기고 전기 탭 위주로 구성합니다.",
+        "config": {
+            "hide_tabs": ["facility_telecom"],
+            "tabs": {
+                "tr450": {"title": "변압기450", "hide_fields": []},
+                "tr400": {"title": "변압기400", "hide_fields": []},
+                "meter": {"title": "전력량계"},
+            },
+        },
+    },
+    "safety_focus": {
+        "name": "안전 점검 강화",
+        "description": "소방/시설검침 항목을 우선으로 확장하는 기본안입니다.",
+        "config": {
+            "tabs": {
+                "facility_check": {
+                    "add_fields": [
+                        {"k": "generator_fuel", "label": "발전기 연료(%)", "type": "number", "step": "0.1", "warn_min": 0, "warn_max": 100}
+                    ],
+                    "rows": [
+                        ["tank_level_1", "tank_level_2"],
+                        ["hydrant_pressure", "sp_pump_pressure"],
+                        ["high_pressure", "low_pressure"],
+                        ["office_pressure", "shop_pressure"],
+                        ["generator_fuel"],
+                    ],
+                },
+                "facility_fire": {
+                    "title": "소방시설관리(강화)",
+                },
+            }
+        },
+    },
+}
+
 # Legacy form key aliases -> canonical form keys.
 LEGACY_FIELD_ALIASES: Dict[str, Dict[str, str]] = {
     "meter": {
@@ -587,3 +630,21 @@ def build_effective_schema(
 
 def site_env_template() -> Dict[str, Any]:
     return copy.deepcopy(SITE_ENV_TEMPLATE)
+
+
+def site_env_templates() -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for key, row in SITE_ENV_TEMPLATES.items():
+        item = {
+            "name": str((row or {}).get("name") or key),
+            "description": str((row or {}).get("description") or ""),
+            "config": normalize_site_env_config((row or {}).get("config") or {}),
+        }
+        out[str(key)] = item
+    if "default" not in out:
+        out["default"] = {
+            "name": "기본 추천",
+            "description": "필드 추가/레이아웃 예시가 포함된 기본 템플릿",
+            "config": site_env_template(),
+        }
+    return out

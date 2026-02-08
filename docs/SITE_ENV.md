@@ -5,6 +5,18 @@
 - 관리자 화면: `/pwa/spec_env.html`
 - 단지별 저장 테이블: `site_env_configs`
 
+## 관리자 사용 절차 (시각 편집기)
+1. `site_name` 입력
+2. 템플릿 선택 후 `템플릿 불러오기`
+3. 체크/선택 방식으로 설정
+- 숨길 탭: 체크박스로 선택
+- 숨길 항목: 탭 선택 후 항목 체크
+- 항목명 변경: 입력칸에서 라벨 변경
+- 추가 항목: 키/라벨/타입/범위 입력
+- 행 레이아웃: 줄 단위(콤마 구분)로 재배치
+4. 필요 시 JSON 직접 수정
+5. `저장`으로 단지별 적용
+
 ## 기본 구조
 ```json
 {
@@ -41,6 +53,10 @@
 - `field_overrides`: 범위/타입/placeholder 등 속성 변경
 - `add_fields`: 신규 필드 추가
 - `rows`: 레이아웃 행 재구성
+
+## 템플릿 API
+- `GET /api/site_env_templates`
+- `GET /api/site_env_template`
 
 ## 주의
 - `add_fields`로 추가한 값은 `entry_values`에 저장됩니다.

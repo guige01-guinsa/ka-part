@@ -45,6 +45,7 @@ from ..schema_defs import (
     normalize_tabs_payload,
     schema_field_keys,
     site_env_template,
+    site_env_templates,
 )
 from ..utils import build_excel, build_pdf, safe_ymd, today_ymd
 
@@ -198,6 +199,28 @@ def api_schema_alignment(request: Request):
 def api_site_env_template(request: Request):
     _require_admin(request)
     return {"ok": True, "template": site_env_template()}
+
+
+@router.get("/site_env_templates")
+def api_site_env_templates(request: Request):
+    _require_admin(request)
+    templates = site_env_templates()
+    items = [
+        {
+            "key": k,
+            "name": v.get("name"),
+            "description": v.get("description"),
+            "config": v.get("config") or {},
+        }
+        for k, v in templates.items()
+    ]
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@router.get("/base_schema")
+def api_base_schema(request: Request):
+    _require_admin(request)
+    return {"ok": True, "schema": SCHEMA_DEFS}
 
 
 @router.get("/site_env")

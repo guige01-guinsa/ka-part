@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>단지 제원 설정</title>
-  <link rel="stylesheet" href="/pwa/spec_env.css?v=20260208a" />
+  <link rel="stylesheet" href="/pwa/spec_env.css?v=20260208c" />
 </head>
 <body>
   <header class="top">
@@ -15,7 +15,6 @@
       <button id="btnSave" class="btn primary" type="button">저장</button>
       <button id="btnDelete" class="btn danger" type="button">설정삭제</button>
       <button id="btnPreview" class="btn" type="button">양식미리보기</button>
-      <button id="btnTemplate" class="btn" type="button">템플릿삽입</button>
     </div>
   </header>
 
@@ -26,7 +25,32 @@
         <span>site_name</span>
         <input id="siteName" type="text" placeholder="예: OO아파트" />
       </label>
-      <div class="hint">단지명별로 다른 양식이 적용됩니다.</div>
+      <div class="hint">관리자가 단지명을 직접 입력/변경합니다.</div>
+    </section>
+
+    <section class="card">
+      <h2>템플릿 선택 / 항목 선택 적용</h2>
+      <div class="row">
+        <label class="field grow">
+          <span>템플릿</span>
+          <select id="templateSelect"></select>
+        </label>
+        <label class="field grow">
+          <span>불러오기 방식</span>
+          <select id="templateMode">
+            <option value="merge">기존 설정 유지 + 병합 (권장)</option>
+            <option value="replace">기존 설정 덮어쓰기</option>
+          </select>
+        </label>
+        <button id="btnTemplateApply" class="btn" type="button">선택 후 불러오기</button>
+      </div>
+      <div id="templateDesc" class="hint"></div>
+      <div class="row">
+        <button id="btnTplAllOn" class="btn" type="button">탭/항목 전체선택</button>
+        <button id="btnTplAllOff" class="btn" type="button">탭/항목 전체해제</button>
+      </div>
+      <div id="templateScopeWrap" class="tpl-scope"></div>
+      <div class="hint">체크한 탭/항목만 JSON에 반영되어 불러와집니다.</div>
     </section>
 
     <section class="card">
@@ -51,6 +75,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/spec_env.js?v=20260208a"></script>
+  <script src="/pwa/spec_env.js?v=20260208c"></script>
 </body>
 </html>
