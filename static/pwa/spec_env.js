@@ -179,6 +179,46 @@
     el.textContent = `동기화 기준 단지: ${site || "-"} | 현재 사용 양식: 탭 ${tabCount}개 / 항목 ${fieldCount}개`;
   }
 
+  function mergeScopeSchemaCatalog(target, source) {
+    if (!target || typeof target !== "object" || !source || typeof source !== "object") return target || {};
+    for (const [tabKey, tabDefRaw] of Object.entries(source)) {
+      const tabDef = tabDefRaw && typeof tabDefRaw === "object" ? tabDefRaw : {};
+      if (!target[tabKey] || typeof target[tabKey] !== "object") {
+        target[tabKey] = { title: String(tabDef.title || tabKey), fields: [] };
+      }
+      const dst = target[tabKey];
+      if (tabDef.title) dst.title = String(tabDef.title);
+      const curFields = Array.isArray(dst.fields) ? dst.fields : [];
+      const byKey = {};
+      for (const f of curFields) {
+        const k = String((f || {}).k || "").trim();
+        if (k) byKey[k] = f;
+      }
+      const srcFields = Array.isArray(tabDef.fields) ? tabDef.fields : [];
+      for (const f of srcFields) {
+        const k = String((f || {}).k || "").trim();
+        if (!k) continue;
+        if (byKey[k]) {
+          Object.assign(byKey[k], f);
+        } else {
+          const item = clone(f);
+          curFields.push(item);
+          byKey[k] = item;
+        }
+      }
+      dst.fields = curFields;
+    }
+    return target;
+  }
+
+  function buildScopeSchema(templateCfg) {
+    const catalog = clone(baseSchema || {});
+    mergeScopeSchemaCatalog(catalog, activeSchema || {});
+    const templated = applyConfigToSchema(baseSchema || {}, templateCfg || {});
+    mergeScopeSchemaCatalog(catalog, templated || {});
+    return catalog;
+  }
+
   function applyConfigToSchema(base, cfg) {
     const schema = clone(base || {});
     const config = compactConfig(cfg || {});
@@ -280,8 +320,7 @@
       wrap.innerHTML = '<div class="hint">템플릿이 없습니다.</div>';
       return;
     }
-    const scopeBaseSchema = Object.keys(activeSchema || {}).length ? activeSchema : baseSchema;
-    const schema = applyConfigToSchema(scopeBaseSchema, t.config || {});
+    const schema = buildScopeSchema(t.config || {});
     const tabs = sortTabKeys(Object.keys(schema));
     if (!tabs.length) {
       wrap.innerHTML = '<div class="hint">선택 가능한 탭이 없습니다.</div>';
@@ -542,8 +581,7 @@
       setMsg("최소 1개 탭을 선택하세요.", true);
       return;
     }
-    const scopeBaseSchema = Object.keys(activeSchema || {}).length ? activeSchema : baseSchema;
-    const templateSchema = applyConfigToSchema(scopeBaseSchema, t.config || {});
+    const templateSchema = buildScopeSchema(t.config || {});
     const filtered = filterTemplateConfigBySelection(t.config || {}, selection);
     const visibility = buildVisibilityConfigBySelection(selection, templateSchema);
     const templateScoped = mergeConfig(filtered, visibility);
