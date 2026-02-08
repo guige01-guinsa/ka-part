@@ -263,7 +263,7 @@ body {
 
 @media (max-width: 760px) {
   .filters {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 2fr 1fr 1fr;
   }
 
   .panel:not(#panel-tr450):not(#panel-tr400):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="3"] {
@@ -273,7 +273,8 @@ body {
 
 @media (max-width: 560px) {
   .filters {
-    grid-template-columns: 1fr;
+    grid-template-columns: 2fr 1fr 1fr;
+    gap: 6px;
   }
 
   .title {
@@ -282,6 +283,15 @@ body {
 
   .btn {
     padding: 7px 9px;
+    font-size: 12px;
+  }
+
+  .filters .field span {
+    font-size: 11px;
+  }
+
+  .filters .field input {
+    padding: 7px 6px;
     font-size: 12px;
   }
 
