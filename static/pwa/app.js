@@ -183,10 +183,12 @@
     for (const key of keys) {
       const def = schema[key];
       if (!def || !Array.isArray(def.fields)) continue;
+      const fields = def.fields.filter((f) => f && String(f.k || "").trim());
+      if (!fields.length) continue;
       tabs.push({
         key,
         title: def.title || key,
-        fields: def.fields,
+        fields,
         rows: Array.isArray(def.rows) ? def.rows : null,
       });
     }

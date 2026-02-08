@@ -188,6 +188,10 @@
       tab.fields = fields;
       if (Array.isArray(tabCfg.rows)) tab.rows = clone(tabCfg.rows);
     }
+    for (const [tabKey, tabDef] of Object.entries(schema)) {
+      const fields = Array.isArray((tabDef || {}).fields) ? tabDef.fields : [];
+      if (!fields.length) delete schema[tabKey];
+    }
     return schema;
   }
 
@@ -366,6 +370,37 @@
     return compactConfig(cfg);
   }
 
+  function buildVisibilityConfigBySelection(selection, scopedSchema) {
+    const tabs = selection.tabs || new Set();
+    const fieldsByTab = selection.fieldsByTab || {};
+    const hideTabs = new Set();
+    const outTabs = {};
+
+    for (const [tabKey, tabDef] of Object.entries(scopedSchema || {})) {
+      const fields = Array.isArray((tabDef || {}).fields) ? tabDef.fields : [];
+      const allKeys = fields.map((f) => String((f || {}).k || "").trim()).filter(Boolean);
+      if (!tabs.has(tabKey)) {
+        hideTabs.add(tabKey);
+        continue;
+      }
+
+      const selected = fieldsByTab[tabKey] || new Set();
+      const visibleKeys = allKeys.filter((k) => selected.has(k));
+      if (!visibleKeys.length) {
+        hideTabs.add(tabKey);
+        continue;
+      }
+
+      const hiddenKeys = allKeys.filter((k) => !selected.has(k));
+      if (hiddenKeys.length) outTabs[tabKey] = { hide_fields: hiddenKeys };
+    }
+
+    return compactConfig({
+      hide_tabs: [...hideTabs],
+      tabs: outTabs,
+    });
+  }
+
   function mergeConfig(baseCfg, applyCfg) {
     const out = compactConfig(baseCfg || {});
     const add = compactConfig(applyCfg || {});
@@ -419,7 +454,10 @@
       setMsg("최소 1개 탭을 선택하세요.", true);
       return;
     }
+    const templateSchema = applyConfigToSchema(baseSchema, t.config || {});
     const filtered = filterTemplateConfigBySelection(t.config || {}, selection);
+    const visibility = buildVisibilityConfigBySelection(selection, templateSchema);
+    const templateScoped = mergeConfig(filtered, visibility);
     const mode = $("#templateMode").value || "merge";
 
     let current = {};
@@ -429,7 +467,7 @@
       setMsg(`JSON 파싱 오류: ${e.message}`, true);
       return;
     }
-    const next = mode === "replace" ? filtered : mergeConfig(current, filtered);
+    const next = mode === "replace" ? templateScoped : mergeConfig(current, templateScoped);
     setConfigToEditor(next);
     const schemaPreview = applyConfigToSchema(baseSchema, next);
     renderPreview({ site_name: getSiteName(), schema: schemaPreview });
