@@ -445,6 +445,31 @@
     return compactConfig(out);
   }
 
+  function mergeConfigWithScope(baseCfg, applyCfg, scopeTabsInput) {
+    const out = compactConfig(baseCfg || {});
+    const add = compactConfig(applyCfg || {});
+    const scopeTabs = new Set(
+      [...(scopeTabsInput || [])]
+        .map((x) => String(x || "").trim())
+        .filter(Boolean)
+    );
+
+    const hideTabs = new Set((out.hide_tabs || []).map((x) => String(x)));
+    for (const tab of scopeTabs) hideTabs.delete(tab);
+    for (const tab of add.hide_tabs || []) hideTabs.add(String(tab));
+    if (hideTabs.size) out.hide_tabs = [...hideTabs];
+    else delete out.hide_tabs;
+
+    if (!out.tabs || typeof out.tabs !== "object") out.tabs = {};
+    for (const tab of scopeTabs) delete out.tabs[tab];
+    for (const [tabKey, tabCfg] of Object.entries(add.tabs || {})) {
+      out.tabs[tabKey] = clone(tabCfg || {});
+    }
+    if (!Object.keys(out.tabs).length) delete out.tabs;
+
+    return compactConfig(out);
+  }
+
   function applySelectedTemplate() {
     const t = getSelectedTemplate();
     if (!t) {
@@ -460,6 +485,7 @@
     const filtered = filterTemplateConfigBySelection(t.config || {}, selection);
     const visibility = buildVisibilityConfigBySelection(selection, templateSchema);
     const templateScoped = mergeConfig(filtered, visibility);
+    const scopeTabs = Object.keys(templateSchema || {});
     const mode = $("#templateMode").value || "merge";
 
     let current = {};
@@ -469,7 +495,7 @@
       setMsg(`JSON 파싱 오류: ${e.message}`, true);
       return;
     }
-    const next = mode === "replace" ? templateScoped : mergeConfig(current, templateScoped);
+    const next = mode === "replace" ? templateScoped : mergeConfigWithScope(current, templateScoped, scopeTabs);
     setConfigToEditor(next);
     const schemaPreview = applyConfigToSchema(baseSchema, next);
     renderPreview({ site_name: getSiteName(), schema: schemaPreview });
