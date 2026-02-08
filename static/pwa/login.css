@@ -74,6 +74,12 @@ h2 {
   background: color-mix(in srgb, var(--bg-soft) 84%, black 16%);
 }
 
+.grid2 {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .actions { display: flex; gap: 8px; margin-top: 6px; }
 
 .btn {
@@ -99,3 +105,20 @@ h2 {
 }
 
 .msg.err { color: var(--error); }
+
+.result {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-soft) 82%, black 18%);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+@media (max-width: 640px) {
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+}

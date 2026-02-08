@@ -269,10 +269,38 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "staff_users", "password_hash TEXT")
     _ensure_column(con, "staff_users", "is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1))")
     _ensure_column(con, "staff_users", "last_login_at TEXT")
+    _ensure_column(con, "staff_users", "site_name TEXT")
+    _ensure_column(con, "staff_users", "address TEXT")
+    _ensure_column(con, "staff_users", "office_phone TEXT")
+    _ensure_column(con, "staff_users", "office_fax TEXT")
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_staff_users_active
         ON staff_users(is_active, name);
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS signup_phone_verifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          phone TEXT NOT NULL,
+          code_hash TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          purpose TEXT NOT NULL DEFAULT 'signup',
+          expires_at TEXT NOT NULL,
+          consumed_at TEXT,
+          issued_login_id TEXT,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          request_ip TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_signup_phone_verifications_phone
+        ON signup_phone_verifications(phone, purpose, consumed_at, created_at);
         """
     )
     con.execute(
@@ -687,7 +715,7 @@ def list_staff_users(*, active_only: bool = False) -> List[Dict[str, Any]]:
     con = _connect()
     try:
         sql = """
-            SELECT id, login_id, name, role, phone, note, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
         """
         params: List[Any] = []
@@ -705,7 +733,7 @@ def get_staff_user(user_id: int) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -722,6 +750,10 @@ def create_staff_user(
     name: str,
     role: str,
     phone: Optional[str] = None,
+    site_name: Optional[str] = None,
+    address: Optional[str] = None,
+    office_phone: Optional[str] = None,
+    office_fax: Optional[str] = None,
     note: Optional[str] = None,
     password_hash: Optional[str] = None,
     is_admin: int = 0,
@@ -732,14 +764,20 @@ def create_staff_user(
         ts = now_iso()
         con.execute(
             """
-            INSERT INTO staff_users(login_id, name, role, phone, note, password_hash, is_admin, is_active, created_at, updated_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO staff_users(
+              login_id, name, role, phone, site_name, address, office_phone, office_fax, note, password_hash, is_admin, is_active, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 login_id,
                 name,
                 role,
                 phone,
+                site_name,
+                address,
+                office_phone,
+                office_fax,
                 note,
                 password_hash,
                 int(1 if is_admin else 0),
@@ -751,7 +789,7 @@ def create_staff_user(
         con.commit()
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -769,6 +807,10 @@ def update_staff_user(
     name: str,
     role: str,
     phone: Optional[str] = None,
+    site_name: Optional[str] = None,
+    address: Optional[str] = None,
+    office_phone: Optional[str] = None,
+    office_fax: Optional[str] = None,
     note: Optional[str] = None,
     is_admin: int = 0,
     is_active: int = 1,
@@ -779,7 +821,7 @@ def update_staff_user(
         cur = con.execute(
             """
             UPDATE staff_users
-            SET login_id=?, name=?, role=?, phone=?, note=?, is_admin=?, is_active=?, updated_at=?
+            SET login_id=?, name=?, role=?, phone=?, site_name=?, address=?, office_phone=?, office_fax=?, note=?, is_admin=?, is_active=?, updated_at=?
             WHERE id=?
             """,
             (
@@ -787,6 +829,10 @@ def update_staff_user(
                 name,
                 role,
                 phone,
+                site_name,
+                address,
+                office_phone,
+                office_fax,
                 note,
                 int(1 if is_admin else 0),
                 int(1 if is_active else 0),
@@ -799,7 +845,7 @@ def update_staff_user(
             return None
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -868,7 +914,7 @@ def get_staff_user_by_login(login_id: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -979,6 +1025,10 @@ def get_auth_user_by_token(token: str) -> Optional[Dict[str, Any]]:
               u.role,
               u.phone,
               u.note,
+              u.site_name,
+              u.address,
+              u.office_phone,
+              u.office_fax,
               u.is_admin,
               u.is_active,
               u.created_at,
@@ -1013,5 +1063,124 @@ def cleanup_expired_sessions() -> int:
         )
         con.commit()
         return int(cur.rowcount)
+    finally:
+        con.close()
+
+
+def get_staff_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    con = _connect()
+    try:
+        row = con.execute(
+            """
+            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
+            FROM staff_users
+            WHERE phone=?
+            ORDER BY is_active DESC, id ASC
+            LIMIT 1
+            """,
+            (str(phone or "").strip(),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
+def create_signup_phone_verification(
+    *,
+    phone: str,
+    code_hash: str,
+    payload: Dict[str, Any],
+    expires_at: str,
+    request_ip: Optional[str] = None,
+) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        ts = now_iso()
+        payload_json = json.dumps(payload if isinstance(payload, dict) else {}, ensure_ascii=False, separators=(",", ":"))
+        con.execute(
+            """
+            UPDATE signup_phone_verifications
+            SET consumed_at=?, updated_at=?
+            WHERE phone=? AND purpose='signup' AND consumed_at IS NULL
+            """,
+            (ts, ts, str(phone or "").strip()),
+        )
+        con.execute(
+            """
+            INSERT INTO signup_phone_verifications(phone, code_hash, payload_json, purpose, expires_at, consumed_at, issued_login_id, attempt_count, request_ip, created_at, updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                str(phone or "").strip(),
+                str(code_hash or ""),
+                payload_json,
+                "signup",
+                str(expires_at or ""),
+                None,
+                None,
+                0,
+                request_ip,
+                ts,
+                ts,
+            ),
+        )
+        con.commit()
+        row = con.execute(
+            """
+            SELECT id, phone, code_hash, payload_json, purpose, expires_at, consumed_at, issued_login_id, attempt_count, request_ip, created_at, updated_at
+            FROM signup_phone_verifications
+            WHERE phone=? AND purpose='signup'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(phone or "").strip(),),
+        ).fetchone()
+        return dict(row) if row else {}
+    finally:
+        con.close()
+
+
+def get_latest_signup_phone_verification(phone: str) -> Optional[Dict[str, Any]]:
+    con = _connect()
+    try:
+        row = con.execute(
+            """
+            SELECT id, phone, code_hash, payload_json, purpose, expires_at, consumed_at, issued_login_id, attempt_count, request_ip, created_at, updated_at
+            FROM signup_phone_verifications
+            WHERE phone=? AND purpose='signup'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(phone or "").strip(),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
+def touch_signup_phone_verification_attempt(verification_id: int, *, success: bool, issued_login_id: Optional[str] = None) -> bool:
+    con = _connect()
+    try:
+        ts = now_iso()
+        if success:
+            cur = con.execute(
+                """
+                UPDATE signup_phone_verifications
+                SET consumed_at=?, issued_login_id=?, updated_at=?
+                WHERE id=? AND consumed_at IS NULL
+                """,
+                (ts, str(issued_login_id or "").strip() or None, ts, int(verification_id)),
+            )
+        else:
+            cur = con.execute(
+                """
+                UPDATE signup_phone_verifications
+                SET attempt_count=COALESCE(attempt_count,0)+1, updated_at=?
+                WHERE id=?
+                """,
+                (ts, int(verification_id)),
+            )
+        con.commit()
+        return cur.rowcount > 0
     finally:
         con.close()

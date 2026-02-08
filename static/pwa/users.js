@@ -25,6 +25,10 @@
     $("#loginId").value = "";
     $("#userName").value = "";
     $("#userPhone").value = "";
+    $("#userSiteName").value = "";
+    $("#userAddress").value = "";
+    $("#userOfficePhone").value = "";
+    $("#userOfficeFax").value = "";
     $("#userNote").value = "";
     $("#userPassword").value = "";
     $("#isAdmin").checked = false;
@@ -39,6 +43,10 @@
     $("#loginId").value = user.login_id || "";
     $("#userName").value = user.name || "";
     $("#userPhone").value = user.phone || "";
+    $("#userSiteName").value = user.site_name || "";
+    $("#userAddress").value = user.address || "";
+    $("#userOfficePhone").value = user.office_phone || "";
+    $("#userOfficeFax").value = user.office_fax || "";
     $("#userNote").value = user.note || "";
     $("#userPassword").value = "";
     $("#isAdmin").checked = !!user.is_admin;
@@ -66,6 +74,10 @@
           <div>
             <div class="name">${escapeHtml(u.name || "")} <span class="login">(${escapeHtml(u.login_id || "")})</span> ${adminTag}</div>
             <div class="line2">${escapeHtml(u.role || "")} / ${escapeHtml(u.phone || "-")} / ${activeText}</div>
+            <div class="line2">${escapeHtml(u.site_name || "-")} / 관리소 ${escapeHtml(u.office_phone || "-")} / FAX ${escapeHtml(
+      u.office_fax || "-"
+    )}</div>
+            <div class="line2">주소: ${escapeHtml(u.address || "-")}</div>
           </div>
           <div class="actions">
             <button class="btn" data-action="edit" data-id="${u.id}" type="button">수정</button>
@@ -125,6 +137,10 @@
       name: ($("#userName").value || "").trim(),
       role: $("#userRole").value || "",
       phone: ($("#userPhone").value || "").trim(),
+      site_name: ($("#userSiteName").value || "").trim(),
+      address: ($("#userAddress").value || "").trim(),
+      office_phone: ($("#userOfficePhone").value || "").trim(),
+      office_fax: ($("#userOfficeFax").value || "").trim(),
       note: ($("#userNote").value || "").trim(),
       is_admin: !!$("#isAdmin").checked,
       is_active: !!$("#isActive").checked,

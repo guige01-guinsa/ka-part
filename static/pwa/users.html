@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>사용자 관리</title>
-  <link rel="stylesheet" href="/pwa/users.css?v=20260207b" />
+  <link rel="stylesheet" href="/pwa/users.css?v=20260208a" />
 </head>
 <body>
   <header class="top">
@@ -38,10 +38,26 @@
           <input id="userPhone" type="text" placeholder="예: 010-1234-5678" />
         </label>
         <label class="field">
+          <span>단지명</span>
+          <input id="userSiteName" type="text" placeholder="예: 아이유파크" />
+        </label>
+        <label class="field">
+          <span>관리소 전화번호</span>
+          <input id="userOfficePhone" type="text" placeholder="예: 02-1234-5678" />
+        </label>
+        <label class="field">
+          <span>관리소 팩스번호</span>
+          <input id="userOfficeFax" type="text" placeholder="예: 02-1234-9876" />
+        </label>
+        <label class="field">
           <span>비밀번호 (신규/변경)</span>
           <input id="userPassword" type="password" placeholder="8자 이상 입력 시 변경" />
         </label>
       </div>
+      <label class="field">
+        <span>주소</span>
+        <input id="userAddress" type="text" placeholder="예: 서울시 강남구 ..." />
+      </label>
       <label class="field">
         <span>비고</span>
         <textarea id="userNote" placeholder="메모"></textarea>
@@ -70,6 +86,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/users.js?v=20260207b"></script>
+  <script src="/pwa/users.js?v=20260208a"></script>
 </body>
 </html>

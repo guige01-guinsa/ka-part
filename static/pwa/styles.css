@@ -88,7 +88,7 @@ body {
 .filters {
   display: grid;
   gap: 8px;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(320px, 2fr) minmax(170px, 1fr) minmax(170px, 1fr);
 }
 
 .field {
@@ -262,12 +262,20 @@ body {
 }
 
 @media (max-width: 760px) {
+  .filters {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .panel:not(#panel-tr450):not(#panel-tr400):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="3"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 560px) {
+  .filters {
+    grid-template-columns: 1fr;
+  }
+
   .title {
     font-size: 17px;
   }

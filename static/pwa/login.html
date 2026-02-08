@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>로그인</title>
-  <link rel="stylesheet" href="/pwa/login.css?v=20260207a" />
+  <link rel="stylesheet" href="/pwa/login.css?v=20260208b" />
 </head>
 <body>
   <main class="wrap">
@@ -23,6 +23,57 @@
         <button id="btnLogin" class="btn primary" type="button">로그인</button>
       </div>
       <div id="loginMsg" class="msg"></div>
+    </section>
+
+    <section id="signupCard" class="card">
+      <h2>신규 사용자 가입</h2>
+      <p class="sub">필수 항목 입력 후 휴대폰 인증을 완료하면 아이디를 발급합니다.</p>
+      <div class="grid2">
+        <label class="field">
+          <span>이름</span>
+          <input id="suName" type="text" placeholder="예: 홍길동" />
+        </label>
+        <label class="field">
+          <span>휴대폰번호</span>
+          <input id="suPhone" type="text" placeholder="예: 010-1234-5678" />
+        </label>
+        <label class="field">
+          <span>단지명</span>
+          <input id="suSiteName" type="text" placeholder="예: 아이유파크" />
+        </label>
+        <label class="field">
+          <span>직위</span>
+          <input id="suRole" type="text" placeholder="예: 기사" />
+        </label>
+      </div>
+      <label class="field">
+        <span>주소</span>
+        <input id="suAddress" type="text" placeholder="예: 서울시 강남구 ... " />
+      </label>
+      <div class="grid2">
+        <label class="field">
+          <span>관리소 전화번호</span>
+          <input id="suOfficePhone" type="text" placeholder="예: 02-1234-5678" />
+        </label>
+        <label class="field">
+          <span>관리소 팩스번호</span>
+          <input id="suOfficeFax" type="text" placeholder="예: 02-1234-9876" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnReqCode" class="btn" type="button">인증번호 받기</button>
+      </div>
+      <div class="grid2">
+        <label class="field">
+          <span>인증번호(6자리)</span>
+          <input id="suCode" type="text" placeholder="문자로 받은 인증번호" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnVerifySignup" class="btn primary" type="button">인증확인 후 아이디 발급</button>
+      </div>
+      <div id="signupMsg" class="msg"></div>
+      <div id="signupResult" class="result hidden"></div>
     </section>
 
     <section id="bootstrapCard" class="card hidden">
@@ -56,6 +107,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/login.js?v=20260207a"></script>
+  <script src="/pwa/login.js?v=20260208b"></script>
 </body>
 </html>

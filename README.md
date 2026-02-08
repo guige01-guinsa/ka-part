@@ -33,6 +33,8 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
   - `POST /api/auth/logout`
   - `GET /api/auth/me`
   - `POST /api/auth/change_password`
+  - `POST /api/auth/signup/request_phone_verification`
+  - `POST /api/auth/signup/verify_phone_and_issue_id`
 - 사용자
   - `GET /api/users`
   - `POST /api/users`

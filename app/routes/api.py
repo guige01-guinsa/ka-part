@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import io
+import json
+import os
 import re
+import secrets
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
@@ -10,13 +16,16 @@ from fastapi.responses import StreamingResponse
 from ..db import (
     cleanup_expired_sessions,
     count_staff_admins,
+    create_signup_phone_verification,
     create_auth_session,
     create_staff_user,
     delete_entry,
     delete_staff_user,
     ensure_site,
     get_auth_user_by_token,
+    get_latest_signup_phone_verification,
     get_site_env_config,
+    get_staff_user_by_phone,
     get_staff_user,
     get_staff_user_by_login,
     hash_password,
@@ -31,6 +40,7 @@ from ..db import (
     save_tab_values,
     schema_alignment_report,
     set_staff_user_password,
+    touch_signup_phone_verification_attempt,
     upsert_site_env_config,
     delete_site_env_config,
     update_staff_user,
@@ -55,6 +65,8 @@ router = APIRouter()
 
 VALID_USER_ROLES = ["관리소장", "과장", "주임", "기사", "행정", "경비", "미화", "기타"]
 DEFAULT_SITE_NAME = "미지정단지"
+PHONE_VERIFY_TTL_MINUTES = 5
+PHONE_VERIFY_MAX_ATTEMPTS = 5
 
 
 def _clean_login_id(value: Any) -> str:
@@ -109,6 +121,105 @@ def _clean_optional_text(value: Any, max_len: int) -> str | None:
     return txt
 
 
+def _clean_required_text(value: Any, max_len: int, field_name: str) -> str:
+    txt = (str(value or "")).strip()
+    if not txt:
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    if len(txt) > max_len:
+        raise HTTPException(status_code=400, detail=f"{field_name} length must be <= {max_len}")
+    return txt
+
+
+def _format_phone_digits(digits: str) -> str:
+    if len(digits) == 11:
+        return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+    if len(digits) == 10 and digits.startswith("02"):
+        return f"{digits[:2]}-{digits[2:6]}-{digits[6:]}"
+    if len(digits) == 10:
+        return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+    if len(digits) == 9 and digits.startswith("02"):
+        return f"{digits[:2]}-{digits[2:5]}-{digits[5:]}"
+    return digits
+
+
+def _normalize_phone(value: Any, *, required: bool, field_name: str) -> str | None:
+    raw = (str(value or "")).strip()
+    if not raw:
+        if required:
+            raise HTTPException(status_code=400, detail=f"{field_name} is required")
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if digits.startswith("82") and len(digits) >= 11:
+        digits = "0" + digits[2:]
+    if len(digits) < 9 or len(digits) > 11:
+        raise HTTPException(status_code=400, detail=f"{field_name} format is invalid")
+    return _format_phone_digits(digits)
+
+
+def _phone_digits(formatted_phone: str) -> str:
+    return re.sub(r"\D", "", str(formatted_phone or ""))
+
+
+def _phone_code_hash(phone: str, code: str) -> str:
+    secret = os.getenv("KA_PHONE_VERIFY_SECRET", "ka-part-dev-secret")
+    src = f"{secret}|{phone}|{code}"
+    import hashlib
+
+    return hashlib.sha256(src.encode("utf-8")).hexdigest()
+
+
+def _send_sms_verification(phone: str, code: str) -> Dict[str, Any]:
+    message = f"[아파트 시설관리] 인증번호 {code} (유효 {PHONE_VERIFY_TTL_MINUTES}분)"
+    webhook = (os.getenv("KA_SMS_WEBHOOK_URL") or "").strip()
+    if not webhook:
+        return {
+            "delivery": "mock",
+            "debug_code": code,
+            "message": "KA_SMS_WEBHOOK_URL 미설정 상태입니다. 현재는 화면에 인증번호를 표시합니다.",
+        }
+
+    payload = json.dumps({"to": phone, "message": message}, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        webhook,
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if int(getattr(resp, "status", 500)) >= 300:
+                raise HTTPException(status_code=502, detail="sms delivery failed")
+    except urllib.error.URLError as e:
+        raise HTTPException(status_code=502, detail=f"sms delivery failed: {e.reason}") from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"sms delivery failed: {e}") from e
+    return {"delivery": "sms"}
+
+
+def _generate_login_id_from_phone(phone: str) -> str:
+    digits = _phone_digits(phone)
+    base = f"u{digits[-8:]}" if digits else "user"
+    base = re.sub(r"[^a-zA-Z0-9._-]", "", base).lower()
+    if len(base) < 2:
+        base = "user00"
+    base = base[:24]
+    candidate = base
+    seq = 0
+    while get_staff_user_by_login(candidate):
+        seq += 1
+        suffix = f".{seq}"
+        candidate = f"{base[: max(2, 32 - len(suffix))]}{suffix}"
+    return candidate
+
+
+def _generate_temp_password(length: int = 10) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    n = max(8, int(length))
+    return "".join(secrets.choice(alphabet) for _ in range(n))
+
+
 def _clean_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return bool(default)
@@ -127,6 +238,10 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "name": user.get("name"),
         "role": user.get("role"),
         "phone": user.get("phone"),
+        "site_name": user.get("site_name"),
+        "address": user.get("address"),
+        "office_phone": user.get("office_phone"),
+        "office_fax": user.get("office_fax"),
         "note": user.get("note"),
         "is_admin": bool(user.get("is_admin")),
         "is_active": bool(user.get("is_active")),
@@ -296,6 +411,10 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
             name=name,
             role=role,
             phone=existing.get("phone"),
+            site_name=existing.get("site_name"),
+            address=existing.get("address"),
+            office_phone=existing.get("office_phone"),
+            office_fax=existing.get("office_fax"),
             note=existing.get("note"),
             is_admin=1,
             is_active=1,
@@ -323,6 +442,130 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
         ip_address=(request.client.host if request.client else None),
     )
     return {"ok": True, "token": session["token"], "expires_at": session["expires_at"], "user": _public_user(user)}
+
+
+@router.post("/auth/signup/request_phone_verification")
+def auth_signup_request_phone_verification(request: Request, payload: Dict[str, Any] = Body(...)):
+    name = _clean_name(payload.get("name"))
+    phone = _normalize_phone(payload.get("phone"), required=True, field_name="phone")
+    site_name = _clean_required_text(payload.get("site_name"), 80, "site_name")
+    role = _clean_role(payload.get("role"))
+    address = _clean_required_text(payload.get("address"), 200, "address")
+    office_phone = _normalize_phone(payload.get("office_phone"), required=True, field_name="office_phone")
+    office_fax = _normalize_phone(payload.get("office_fax"), required=True, field_name="office_fax")
+
+    code = f"{secrets.randbelow(1000000):06d}"
+    code_hash = _phone_code_hash(phone, code)
+    expires_at = (datetime.now() + timedelta(minutes=PHONE_VERIFY_TTL_MINUTES)).replace(microsecond=0).isoformat(sep=" ")
+    profile = {
+        "name": name,
+        "phone": phone,
+        "site_name": site_name,
+        "role": role,
+        "address": address,
+        "office_phone": office_phone,
+        "office_fax": office_fax,
+    }
+
+    create_signup_phone_verification(
+        phone=phone,
+        code_hash=code_hash,
+        payload=profile,
+        expires_at=expires_at,
+        request_ip=(request.client.host if request.client else None),
+    )
+    delivery = _send_sms_verification(phone, code)
+    out = {
+        "ok": True,
+        "phone": phone,
+        "expires_at": expires_at,
+        "expires_in_sec": PHONE_VERIFY_TTL_MINUTES * 60,
+        "delivery": delivery.get("delivery") or "sms",
+        "message": "인증번호를 전송했습니다.",
+    }
+    if delivery.get("message"):
+        out["message"] = str(delivery["message"])
+    if delivery.get("debug_code"):
+        out["debug_code"] = str(delivery["debug_code"])
+    return out
+
+
+@router.post("/auth/signup/verify_phone_and_issue_id")
+def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
+    phone = _normalize_phone(payload.get("phone"), required=True, field_name="phone")
+    code = str(payload.get("code") or "").strip()
+    if not re.match(r"^\d{6}$", code):
+        raise HTTPException(status_code=400, detail="code must be 6 digits")
+
+    row = get_latest_signup_phone_verification(phone)
+    if not row:
+        raise HTTPException(status_code=404, detail="verification request not found")
+    if row.get("consumed_at"):
+        raise HTTPException(status_code=409, detail="verification already used; request a new code")
+    if str(row.get("expires_at") or "") <= datetime.now().replace(microsecond=0).isoformat(sep=" "):
+        raise HTTPException(status_code=410, detail="verification expired; request a new code")
+
+    attempt_count = int(row.get("attempt_count") or 0)
+    if attempt_count >= PHONE_VERIFY_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="too many attempts; request a new code")
+
+    expected = _phone_code_hash(phone, code)
+    if str(row.get("code_hash") or "") != expected:
+        touch_signup_phone_verification_attempt(int(row["id"]), success=False)
+        remain = max(0, PHONE_VERIFY_MAX_ATTEMPTS - (attempt_count + 1))
+        raise HTTPException(status_code=401, detail=f"invalid code; remaining attempts: {remain}")
+
+    existing = get_staff_user_by_phone(phone)
+    if existing:
+        touch_signup_phone_verification_attempt(int(row["id"]), success=True, issued_login_id=str(existing.get("login_id") or ""))
+        return {
+            "ok": True,
+            "already_registered": True,
+            "login_id": existing.get("login_id"),
+            "temporary_password": None,
+            "user": _public_user(existing),
+            "message": "이미 등록된 휴대폰번호입니다. 기존 아이디를 안내합니다.",
+        }
+
+    profile = {}
+    try:
+        profile = json.loads(str(row.get("payload_json") or "{}"))
+    except Exception:
+        profile = {}
+
+    name = _clean_name(profile.get("name"))
+    role = _clean_role(profile.get("role"))
+    site_name = _clean_required_text(profile.get("site_name"), 80, "site_name")
+    address = _clean_required_text(profile.get("address"), 200, "address")
+    office_phone = _normalize_phone(profile.get("office_phone"), required=True, field_name="office_phone")
+    office_fax = _normalize_phone(profile.get("office_fax"), required=True, field_name="office_fax")
+
+    login_id = _generate_login_id_from_phone(phone)
+    temp_password = _generate_temp_password(10)
+    user = create_staff_user(
+        login_id=login_id,
+        name=name,
+        role=role,
+        phone=phone,
+        site_name=site_name,
+        address=address,
+        office_phone=office_phone,
+        office_fax=office_fax,
+        note="자가가입(휴대폰 인증)",
+        password_hash=hash_password(temp_password),
+        is_admin=0,
+        is_active=1,
+    )
+    touch_signup_phone_verification_attempt(int(row["id"]), success=True, issued_login_id=login_id)
+    return {
+        "ok": True,
+        "already_registered": False,
+        "login_id": login_id,
+        "temporary_password": temp_password,
+        "user": _public_user(user),
+        "must_change_password": True,
+        "message": "가입이 완료되었습니다. 발급된 아이디/임시비밀번호로 로그인 후 비밀번호를 변경하세요.",
+    }
 
 
 @router.post("/auth/login")
@@ -405,7 +648,11 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     login_id = _clean_login_id(payload.get("login_id"))
     name = _clean_name(payload.get("name"))
     role = _clean_role(payload.get("role"))
-    phone = _clean_optional_text(payload.get("phone"), 40)
+    phone = _normalize_phone(payload.get("phone"), required=False, field_name="phone")
+    site_name = _clean_optional_text(payload.get("site_name"), 80)
+    address = _clean_optional_text(payload.get("address"), 200)
+    office_phone = _normalize_phone(payload.get("office_phone"), required=False, field_name="office_phone")
+    office_fax = _normalize_phone(payload.get("office_fax"), required=False, field_name="office_fax")
     note = _clean_optional_text(payload.get("note"), 200)
     password = _clean_password(payload.get("password"), required=True)
     is_admin = 1 if _clean_bool(payload.get("is_admin"), default=False) else 0
@@ -416,6 +663,10 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
             name=name,
             role=role,
             phone=phone,
+            site_name=site_name,
+            address=address,
+            office_phone=office_phone,
+            office_fax=office_fax,
             note=note,
             password_hash=hash_password(password),
             is_admin=is_admin,
@@ -438,7 +689,19 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
     login_id = _clean_login_id(payload.get("login_id", current.get("login_id")))
     name = _clean_name(payload.get("name", current.get("name")))
     role = _clean_role(payload.get("role", current.get("role")))
-    phone = _clean_optional_text(payload["phone"] if "phone" in payload else current.get("phone"), 40)
+    phone = _normalize_phone(payload["phone"] if "phone" in payload else current.get("phone"), required=False, field_name="phone")
+    site_name = _clean_optional_text(payload["site_name"] if "site_name" in payload else current.get("site_name"), 80)
+    address = _clean_optional_text(payload["address"] if "address" in payload else current.get("address"), 200)
+    office_phone = _normalize_phone(
+        payload["office_phone"] if "office_phone" in payload else current.get("office_phone"),
+        required=False,
+        field_name="office_phone",
+    )
+    office_fax = _normalize_phone(
+        payload["office_fax"] if "office_fax" in payload else current.get("office_fax"),
+        required=False,
+        field_name="office_fax",
+    )
     note = _clean_optional_text(payload["note"] if "note" in payload else current.get("note"), 200)
 
     is_admin = _clean_bool(payload["is_admin"], default=bool(current.get("is_admin"))) if "is_admin" in payload else bool(
@@ -465,6 +728,10 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
             name=name,
             role=role,
             phone=phone,
+            site_name=site_name,
+            address=address,
+            office_phone=office_phone,
+            office_fax=office_fax,
             note=note,
             is_admin=1 if is_admin else 0,
             is_active=1 if is_active else 0,

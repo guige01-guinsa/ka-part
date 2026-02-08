@@ -30,9 +30,19 @@
 - `POST /api/auth/logout`
 - `GET /api/auth/me`
 - `POST /api/auth/change_password`
+- `POST /api/auth/signup/request_phone_verification`
+- `POST /api/auth/signup/verify_phone_and_issue_id`
 
-## 5) 테이블
+## 5) 신규가입(휴대폰 인증)
+- 로그인 화면(`/pwa/login.html`)에서 신규가입 가능
+- 필수 입력: `이름`, `휴대폰번호`, `단지명`, `직위`, `주소`, `관리소 전화번호`, `관리소 팩스번호`
+- 인증 완료 시 서버가 `아이디(login_id)`를 발급하고 임시비밀번호를 생성
+- 운영 환경에서는 `KA_SMS_WEBHOOK_URL` 설정 시 실제 문자 전송, 미설정 시 화면 안내용 코드(개발모드) 반환
+
+## 6) 테이블
 - `staff_users`
-  - `login_id`, `name`, `role`, `password_hash`, `is_admin`, `is_active`, `last_login_at`
+  - `login_id`, `name`, `role`, `phone`, `site_name`, `address`, `office_phone`, `office_fax`, `password_hash`, `is_admin`, `is_active`, `last_login_at`
 - `auth_sessions`
   - `user_id`, `token_hash`, `expires_at`, `revoked_at`
+- `signup_phone_verifications`
+  - `phone`, `code_hash`, `payload_json`, `expires_at`, `consumed_at`, `issued_login_id`, `attempt_count`
