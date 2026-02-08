@@ -335,25 +335,23 @@
       if (!tabs.has(tabKey)) continue;
       const tabCfg = clone(tabCfgRaw || {});
       const fieldSet = fieldsByTab[tabKey] || new Set();
-      const hasSelect = fieldSet.size > 0;
-
-      if (Array.isArray(tabCfg.hide_fields) && hasSelect) {
+      if (Array.isArray(tabCfg.hide_fields)) {
         tabCfg.hide_fields = tabCfg.hide_fields.filter((k) => fieldSet.has(String(k)));
       }
-      if (tabCfg.field_labels && typeof tabCfg.field_labels === "object" && hasSelect) {
+      if (tabCfg.field_labels && typeof tabCfg.field_labels === "object") {
         const o = {};
         for (const [k, v] of Object.entries(tabCfg.field_labels)) if (fieldSet.has(String(k))) o[k] = v;
         tabCfg.field_labels = o;
       }
-      if (tabCfg.field_overrides && typeof tabCfg.field_overrides === "object" && hasSelect) {
+      if (tabCfg.field_overrides && typeof tabCfg.field_overrides === "object") {
         const o = {};
         for (const [k, v] of Object.entries(tabCfg.field_overrides)) if (fieldSet.has(String(k))) o[k] = v;
         tabCfg.field_overrides = o;
       }
-      if (Array.isArray(tabCfg.add_fields) && hasSelect) {
+      if (Array.isArray(tabCfg.add_fields)) {
         tabCfg.add_fields = tabCfg.add_fields.filter((f) => fieldSet.has(String((f || {}).k || "")));
       }
-      if (Array.isArray(tabCfg.rows) && hasSelect) {
+      if (Array.isArray(tabCfg.rows)) {
         const rows = [];
         for (const row of tabCfg.rows) {
           if (!Array.isArray(row)) continue;
@@ -433,6 +431,8 @@
     }
     const next = mode === "replace" ? filtered : mergeConfig(current, filtered);
     setConfigToEditor(next);
+    const schemaPreview = applyConfigToSchema(baseSchema, next);
+    renderPreview({ site_name: getSiteName(), schema: schemaPreview });
     setMsg(`템플릿 '${t.name}'을 ${mode === "replace" ? "덮어쓰기" : "병합"} 적용했습니다. 확인 후 저장하세요.`);
   }
 
