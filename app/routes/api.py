@@ -296,6 +296,34 @@ def _require_admin(request: Request) -> Tuple[Dict[str, Any], str]:
     return user, token
 
 
+def _normalized_assigned_site_name(user: Dict[str, Any]) -> str:
+    raw_site = (str(user.get("site_name") or "")).strip()
+    if not raw_site:
+        raise HTTPException(status_code=403, detail="소속 단지(site_name)가 지정되지 않았습니다. 관리자에게 문의하세요.")
+    return _clean_site_name(raw_site, required=True)
+
+
+def _resolve_allowed_site_name(user: Dict[str, Any], requested_site_name: Any, *, required: bool = False) -> str:
+    if int(user.get("is_admin") or 0) == 1:
+        return _clean_site_name(requested_site_name, required=required)
+
+    assigned_site = _normalized_assigned_site_name(user)
+    raw_requested = (str(requested_site_name or "")).strip()
+    if not raw_requested:
+        return assigned_site
+
+    requested = _clean_site_name(raw_requested, required=required)
+    if requested != assigned_site:
+        raise HTTPException(status_code=403, detail="소속 단지 데이터만 접근할 수 있습니다.")
+    return assigned_site
+
+
+def _require_site_access(request: Request, requested_site_name: Any, *, required: bool = False) -> Tuple[Dict[str, Any], str, str]:
+    user, token = _require_auth(request)
+    allowed_site_name = _resolve_allowed_site_name(user, requested_site_name, required=required)
+    return user, token, allowed_site_name
+
+
 @router.get("/health")
 def health():
     report = schema_alignment_report()
@@ -304,8 +332,7 @@ def health():
 
 @router.get("/schema")
 def api_schema(request: Request, site_name: str = Query(default=DEFAULT_SITE_NAME)):
-    _require_auth(request)
-    clean_site_name = _clean_site_name(site_name, required=False)
+    _user, _token, clean_site_name = _require_site_access(request, site_name, required=False)
     schema, env_cfg = _site_schema_and_env(clean_site_name)
     return {"schema": schema, "site_name": clean_site_name, "site_env_config": env_cfg}
 
@@ -775,8 +802,7 @@ def api_users_delete(request: Request, user_id: int):
 
 @router.post("/save")
 def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
-    _require_auth(request)
-    site_name = _clean_site_name(payload.get("site_name"), required=False)
+    _user, _token, site_name = _require_site_access(request, payload.get("site_name"), required=False)
     entry_date = safe_ymd(payload.get("date") or "")
 
     raw_tabs = payload.get("tabs") or {}
@@ -805,8 +831,7 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
 
 @router.get("/load")
 def api_load(request: Request, site_name: str = Query(...), date: str = Query(...)):
-    _require_auth(request)
-    site_name = _clean_site_name(site_name, required=False)
+    _user, _token, site_name = _require_site_access(request, site_name, required=True)
     entry_date = safe_ymd(date)
     site_id = ensure_site(site_name)
     schema, _env_cfg = _site_schema_and_env(site_name)
@@ -816,8 +841,7 @@ def api_load(request: Request, site_name: str = Query(...), date: str = Query(..
 
 @router.delete("/delete")
 def api_delete(request: Request, site_name: str = Query(...), date: str = Query(...)):
-    _require_auth(request)
-    site_name = _clean_site_name(site_name, required=False)
+    _user, _token, site_name = _require_site_access(request, site_name, required=True)
     entry_date = safe_ymd(date)
     site_id = ensure_site(site_name)
     ok = delete_entry(site_id, entry_date)
@@ -831,8 +855,7 @@ def api_list_range(
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
 ):
-    _require_auth(request)
-    site_name = _clean_site_name(site_name, required=False)
+    _user, _token, site_name = _require_site_access(request, site_name, required=True)
     df = safe_ymd(date_from) if date_from else today_ymd()
     dt = safe_ymd(date_to) if date_to else today_ymd()
     if df > dt:
@@ -850,8 +873,7 @@ def api_export(
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
 ):
-    _require_auth(request)
-    site_name = _clean_site_name(site_name, required=False)
+    _user, _token, site_name = _require_site_access(request, site_name, required=True)
     df = safe_ymd(date_from) if date_from else today_ymd()
     dt = safe_ymd(date_to) if date_to else today_ymd()
     if df > dt:
@@ -880,8 +902,7 @@ def api_export(
 
 @router.get("/pdf")
 def api_pdf(request: Request, site_name: str = Query(...), date: str = Query(...)):
-    _require_auth(request)
-    site_name = _clean_site_name(site_name, required=False)
+    _user, _token, site_name = _require_site_access(request, site_name, required=True)
     entry_date = safe_ymd(date)
     site_id = ensure_site(site_name)
     schema, _env_cfg = _site_schema_and_env(site_name)

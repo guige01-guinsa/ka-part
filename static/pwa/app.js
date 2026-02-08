@@ -78,6 +78,31 @@
     chip.textContent = `${user.name || user.login_id} (${role})`;
   }
 
+  function assignedSiteNameForUser() {
+    if (!authUser || authUser.is_admin) return "";
+    return String(authUser.site_name || "").trim();
+  }
+
+  function enforceSiteNamePolicy() {
+    const el = $("#siteName");
+    if (!el || !authUser) return;
+    if (authUser.is_admin) {
+      el.readOnly = false;
+      el.removeAttribute("aria-readonly");
+      el.title = "";
+      return;
+    }
+    const assigned = assignedSiteNameForUser();
+    if (!assigned) {
+      throw new Error("계정에 소속 단지가 지정되지 않았습니다. 관리자에게 문의하세요.");
+    }
+    setSiteName(assigned);
+    el.value = assigned;
+    el.readOnly = true;
+    el.setAttribute("aria-readonly", "true");
+    el.title = "소속 단지는 관리자만 변경할 수 있습니다.";
+  }
+
   async function ensureAuth() {
     authUser = await window.KAAuth.requireAuth();
     setCurrentUserChip(authUser);
@@ -85,6 +110,7 @@
     if (btnUsers && !authUser.is_admin) btnUsers.style.display = "none";
     const btnSpec = $("#btnSpecEnv");
     if (btnSpec && !authUser.is_admin) btnSpec.style.display = "none";
+    enforceSiteNamePolicy();
   }
 
   function parseFilename(contentDisposition, fallback) {
@@ -144,6 +170,8 @@
   }
 
   function resolveSiteName() {
+    const assigned = assignedSiteNameForUser();
+    if (assigned) return setSiteName(assigned);
     const u = new URL(window.location.href);
     const q = (u.searchParams.get("site_name") || u.searchParams.get("site") || "").trim();
     if (q) return setSiteName(q);
@@ -621,6 +649,12 @@
     });
 
     $("#siteName")?.addEventListener("change", () => {
+      if (authUser && !authUser.is_admin) {
+        const assigned = assignedSiteNameForUser();
+        if (assigned) setSiteName(assigned);
+        toast("소속 단지는 관리자만 변경할 수 있습니다.");
+        return;
+      }
       const next = setSiteName(getSiteName());
       const u = new URL(window.location.href);
       u.searchParams.set("site_name", next);
