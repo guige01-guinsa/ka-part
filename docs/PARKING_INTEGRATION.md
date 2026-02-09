@@ -21,6 +21,17 @@
   - `PARKING_LOCAL_LOGIN_ENABLED=0` (별도 주차 로그인 비활성, 기본 권장)
   - `PARKING_ROOT_PATH=/parking` (기본 자동 설정)
 
+### 외부 parking_man 서버 연동 모드
+
+주차를 별도 서버(`parking_man`)에서 운영하면 ka-part는 게이트웨이 역할만 수행합니다.
+
+- `ENABLE_PARKING_EMBED=0`
+- `PARKING_BASE_URL=https://<parking-man-domain>`
+- `PARKING_SSO_PATH=/parking/sso` (서버 경로에 따라 `/sso`)
+- `PARKING_CONTEXT_SECRET` must match parking_man `PARKING_CONTEXT_SECRET`
+
+이 모드에서는 `/parking/admin2` 접근도 ka-part가 `/api/parking/context`를 사용해 외부 parking_man으로 자동 전달합니다.
+
 ### 공유 데이터 경계(강제)
 
 두 시스템 간 공유는 아래 두 항목으로 제한됩니다.

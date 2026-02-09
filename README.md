@@ -26,6 +26,12 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 제어 변수: `ENABLE_PARKING_EMBED=1` (기본값)
 - 권장 보안 변수: `PARKING_API_KEY`, `PARKING_SECRET_KEY`
 
+외부 주차 서버(`parking_man`) 연동 모드:
+- `ENABLE_PARKING_EMBED=0`
+- `PARKING_BASE_URL=https://<parking-man-domain>`
+- `PARKING_SSO_PATH=/parking/sso` (환경에 따라 `/sso`)
+- `PARKING_CONTEXT_SECRET`는 parking_man의 `PARKING_CONTEXT_SECRET`와 동일값 사용
+
 공유 경계:
 - 메인 시스템과 주차 시스템은 `site_code`와 `permission_level`만 공유
 - 주차 진입은 `/api/parking/context` 서명 토큰을 통해 수행

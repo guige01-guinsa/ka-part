@@ -84,6 +84,9 @@ PARKING_CONTEXT_SECRET = (
 )
 PARKING_CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
 PARKING_BASE_URL = (os.getenv("PARKING_BASE_URL") or "").strip()
+PARKING_SSO_PATH = (os.getenv("PARKING_SSO_PATH") or "/parking/sso").strip()
+if not PARKING_SSO_PATH.startswith("/"):
+    PARKING_SSO_PATH = f"/{PARKING_SSO_PATH}"
 _parking_ctx_ser = URLSafeTimedSerializer(PARKING_CONTEXT_SECRET, salt="parking-context")
 
 
@@ -530,7 +533,7 @@ def parking_context(request: Request):
         raise HTTPException(status_code=403, detail="site_code is required for parking access")
 
     ctx = _parking_ctx_ser.dumps({"site_code": site_code, "permission_level": permission_level})
-    rel = f"/parking/sso?ctx={urllib.parse.quote(ctx, safe='')}"
+    rel = f"{PARKING_SSO_PATH}?ctx={urllib.parse.quote(ctx, safe='')}"
     parking_url = rel if not PARKING_BASE_URL else f"{PARKING_BASE_URL.rstrip('/')}{rel}"
     return {
         "ok": True,

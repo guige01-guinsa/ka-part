@@ -1,10 +1,11 @@
 import logging
 import os
 import sys
+import json
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .db import init_db
@@ -45,10 +46,72 @@ def _load_env_file_if_exists(path: Path) -> None:
             os.environ.setdefault(key, value)
 
 
+def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
+    quoted_next = json.dumps(next_path)
+    return f"""<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Parking Entry</title>
+</head>
+<body>
+  <p>주차관리 접속 처리 중입니다...</p>
+  <script>
+    (async function () {{
+      const nextPath = {quoted_next};
+      const loginUrl = "/pwa/login.html?next=" + encodeURIComponent(nextPath);
+      let token = "";
+      try {{
+        token = (localStorage.getItem("ka_part_auth_token_v1") || "").trim();
+      }} catch (_e) {{
+        token = "";
+      }}
+      if (!token) {{
+        window.location.replace(loginUrl);
+        return;
+      }}
+      try {{
+        const res = await fetch("/api/parking/context", {{
+          method: "GET",
+          headers: {{ "Authorization": "Bearer " + token }}
+        }});
+        if (!res.ok) {{
+          throw new Error(String(res.status));
+        }}
+        const data = await res.json();
+        window.location.replace((data && data.url) ? String(data.url) : nextPath);
+      }} catch (_e) {{
+        window.location.replace(loginUrl);
+      }}
+    }})();
+  </script>
+</body>
+</html>"""
+
+
+def _register_parking_gateway_routes() -> None:
+    @app.get("/parking")
+    def parking_root():
+        return RedirectResponse(url="/parking/", status_code=302)
+
+    @app.get("/parking/", response_class=HTMLResponse)
+    @app.get("/parking/login", response_class=HTMLResponse)
+    @app.get("/parking/admin2", response_class=HTMLResponse)
+    def parking_entry():
+        return HTMLResponse(_parking_handoff_page("/parking/admin2"), status_code=200)
+
+
 def _mount_parking_if_enabled() -> None:
-    enabled = os.getenv("ENABLE_PARKING_EMBED", "1").strip().lower() not in ("0", "false", "no", "off")
+    parking_base_url = (os.getenv("PARKING_BASE_URL") or "").strip()
+    embed_raw = os.getenv("ENABLE_PARKING_EMBED")
+    if embed_raw is None:
+        enabled = (parking_base_url == "")
+    else:
+        enabled = embed_raw.strip().lower() not in ("0", "false", "no", "off")
     if not enabled:
-        logger.info("Parking embed disabled by ENABLE_PARKING_EMBED")
+        _register_parking_gateway_routes()
+        logger.info("Parking embed disabled; gateway mode enabled (PARKING_BASE_URL=%s)", parking_base_url or "unset")
         return
 
     parking_root = ROOT_DIR / "services" / "parking"
