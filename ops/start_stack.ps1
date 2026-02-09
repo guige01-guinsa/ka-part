@@ -57,6 +57,18 @@ function Set-EnvFromFile {
     }
 }
 
+function Parse-BoolEnabled {
+    param(
+        [string]$Raw,
+        [bool]$Default = $true
+    )
+    if ([string]::IsNullOrWhiteSpace($Raw)) {
+        return $Default
+    }
+    $v = $Raw.Trim().ToLowerInvariant()
+    return ($v -notin @("0", "false", "no", "off"))
+}
+
 $ProjectRoot = Resolve-ProjectRoot $ProjectRoot
 $pidDir = Join-Path $ProjectRoot "ops\pids"
 $logDir = Join-Path $ProjectRoot "ops\logs"
@@ -88,6 +100,13 @@ if (-not $env:PARKING_LOCAL_LOGIN_ENABLED) { $env:PARKING_LOCAL_LOGIN_ENABLED = 
 if (-not $env:PARKING_API_KEY) { $env:PARKING_API_KEY = "change-me" }
 if (-not $env:PARKING_SECRET_KEY) { $env:PARKING_SECRET_KEY = "change-this-secret" }
 if (-not $env:PARKING_CONTEXT_SECRET) { $env:PARKING_CONTEXT_SECRET = $env:PARKING_SECRET_KEY }
+$parkingBaseUrl = [string]($env:PARKING_BASE_URL)
+$embedRaw = [string]($env:ENABLE_PARKING_EMBED)
+if ([string]::IsNullOrWhiteSpace($embedRaw)) {
+    $parkingEmbedEnabled = [string]::IsNullOrWhiteSpace($parkingBaseUrl)
+} else {
+    $parkingEmbedEnabled = Parse-BoolEnabled -Raw $embedRaw -Default $true
+}
 
 $mainVenvPy = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $mainVenvPy)) {
@@ -128,8 +147,17 @@ $caddyProc = Start-Process -FilePath $caddyExe `
     -PassThru
 Set-Content -Path (Join-Path $pidDir "caddy.pid") -Value $caddyProc.Id
 Wait-Http -Url "http://127.0.0.1:8080/pwa/" -TimeoutSeconds 60
-Wait-Http -Url "http://127.0.0.1:8080/parking/health" -TimeoutSeconds 60
+if ($parkingEmbedEnabled) {
+    Wait-Http -Url "http://127.0.0.1:8080/parking/health" -TimeoutSeconds 60
+} else {
+    Wait-Http -Url "http://127.0.0.1:8080/parking/admin2" -TimeoutSeconds 60
+}
 
 Write-Host "Stack started."
 Write-Host "Main app:  http://127.0.0.1:8080/pwa/"
 Write-Host "Parking:   http://127.0.0.1:8080/parking/admin2"
+if ($parkingEmbedEnabled) {
+    Write-Host "Parking mode: embedded"
+} else {
+    Write-Host ("Parking mode: gateway (PARKING_BASE_URL={0})" -f ($parkingBaseUrl -or "unset"))
+}

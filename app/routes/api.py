@@ -87,6 +87,11 @@ PARKING_BASE_URL = (os.getenv("PARKING_BASE_URL") or "").strip()
 PARKING_SSO_PATH = (os.getenv("PARKING_SSO_PATH") or "/parking/sso").strip()
 if not PARKING_SSO_PATH.startswith("/"):
     PARKING_SSO_PATH = f"/{PARKING_SSO_PATH}"
+_embed_raw = os.getenv("ENABLE_PARKING_EMBED")
+if _embed_raw is None:
+    PARKING_EMBED_ENABLED = (PARKING_BASE_URL == "")
+else:
+    PARKING_EMBED_ENABLED = _embed_raw.strip().lower() not in ("0", "false", "no", "off")
 _parking_ctx_ser = URLSafeTimedSerializer(PARKING_CONTEXT_SECRET, salt="parking-context")
 
 
@@ -531,6 +536,8 @@ def parking_context(request: Request):
             set_staff_user_site_code(int(user["id"]), site_code)
     if not site_code:
         raise HTTPException(status_code=403, detail="site_code is required for parking access")
+    if (not PARKING_EMBED_ENABLED) and (not PARKING_BASE_URL):
+        raise HTTPException(status_code=503, detail="parking gateway misconfigured: PARKING_BASE_URL is required")
 
     ctx = _parking_ctx_ser.dumps({"site_code": site_code, "permission_level": permission_level})
     rel = f"{PARKING_SSO_PATH}?ctx={urllib.parse.quote(ctx, safe='')}"

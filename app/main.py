@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import json
+import urllib.parse
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -56,9 +57,11 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
   <title>Parking Entry</title>
 </head>
 <body>
-  <p>주차관리 접속 처리 중입니다...</p>
+  <p id="msg">주차관리 접속 처리 중입니다...</p>
   <script>
     (async function () {{
+      const msgEl = document.getElementById("msg");
+      const setMsg = (txt) => {{ if (msgEl) msgEl.textContent = txt; }};
       const nextPath = {quoted_next};
       const loginUrl = "/pwa/login.html?next=" + encodeURIComponent(nextPath);
       let token = "";
@@ -76,13 +79,19 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
           method: "GET",
           headers: {{ "Authorization": "Bearer " + token }}
         }});
-        if (!res.ok) {{
-          throw new Error(String(res.status));
+        const ct = res.headers.get("content-type") || "";
+        const data = ct.includes("application/json") ? await res.json() : {{}};
+        if (res.status === 401) {{
+          window.location.replace(loginUrl);
+          return;
         }}
-        const data = await res.json();
+        if (!res.ok) {{
+          const detail = data && data.detail ? String(data.detail) : ("HTTP " + String(res.status));
+          throw new Error(detail);
+        }}
         window.location.replace((data && data.url) ? String(data.url) : nextPath);
-      }} catch (_e) {{
-        window.location.replace(loginUrl);
+      }} catch (e) {{
+        setMsg("주차 연동 오류: " + String((e && e.message) || e));
       }}
     }})();
   </script>
@@ -91,6 +100,11 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
 
 
 def _register_parking_gateway_routes() -> None:
+    parking_base_url = (os.getenv("PARKING_BASE_URL") or "").strip()
+    parking_sso_path = (os.getenv("PARKING_SSO_PATH") or "/parking/sso").strip()
+    if not parking_sso_path.startswith("/"):
+        parking_sso_path = f"/{parking_sso_path}"
+
     @app.get("/parking")
     def parking_root():
         return RedirectResponse(url="/parking/", status_code=302)
@@ -100,6 +114,16 @@ def _register_parking_gateway_routes() -> None:
     @app.get("/parking/admin2", response_class=HTMLResponse)
     def parking_entry():
         return HTMLResponse(_parking_handoff_page("/parking/admin2"), status_code=200)
+
+    @app.get("/parking/sso")
+    def parking_sso_bridge(ctx: str):
+        if not parking_base_url:
+            return HTMLResponse(
+                "<h2>주차 연동 설정 오류</h2><p>PARKING_BASE_URL 환경변수를 설정하세요.</p>",
+                status_code=503,
+            )
+        target = f"{parking_base_url.rstrip('/')}{parking_sso_path}?ctx={urllib.parse.quote(ctx, safe='')}"
+        return RedirectResponse(url=target, status_code=302)
 
 
 def _mount_parking_if_enabled() -> None:

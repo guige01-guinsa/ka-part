@@ -31,6 +31,7 @@
 - `PARKING_CONTEXT_SECRET` must match parking_man `PARKING_CONTEXT_SECRET`
 
 이 모드에서는 `/parking/admin2` 접근도 ka-part가 `/api/parking/context`를 사용해 외부 parking_man으로 자동 전달합니다.
+필수 값 누락 시 `/api/parking/context`는 `503`으로 설정 오류를 반환합니다.
 
 ### 공유 데이터 경계(강제)
 

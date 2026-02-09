@@ -31,6 +31,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `PARKING_BASE_URL=https://<parking-man-domain>`
 - `PARKING_SSO_PATH=/parking/sso` (환경에 따라 `/sso`)
 - `PARKING_CONTEXT_SECRET`는 parking_man의 `PARKING_CONTEXT_SECRET`와 동일값 사용
+- 위 값이 누락되면 `/api/parking/context`는 `503`으로 명확한 설정오류를 반환
 
 공유 경계:
 - 메인 시스템과 주차 시스템은 `site_code`와 `permission_level`만 공유
