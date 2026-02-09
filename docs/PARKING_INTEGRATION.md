@@ -18,7 +18,20 @@
   - `ENABLE_PARKING_EMBED=1` (기본값)
   - `PARKING_API_KEY` (필수 변경)
   - `PARKING_SECRET_KEY` (필수 변경)
-  - `PARKING_ROOT_PATH=/parking` (기본 자동 설정)
+- `PARKING_ROOT_PATH=/parking` (기본 자동 설정)
+
+### 공유 데이터 경계(강제)
+
+두 시스템 간 공유는 아래 두 항목으로 제한됩니다.
+
+- `site_code` (아파트 단지코드)
+- `permission_level` (`admin` / `site_admin` / `user`)
+
+구현 방식:
+- `GET /api/parking/context`가 인증 사용자 기준으로 위 2개 값만 포함된 서명 토큰 발급
+- PWA의 `주차관리` 버튼은 해당 토큰으로 `/parking/sso` 접속
+- 주차 서비스는 세션에 `site_code`, 권한 매핑(`admin`/`guard`/`viewer`)만 저장
+- 차량/위반 조회·저장은 `site_code` 스코프 내에서만 처리
 
 ## Start full stack (local)
 

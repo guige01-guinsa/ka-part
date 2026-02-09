@@ -49,5 +49,11 @@ if (-not $env:PARKING_SECRET_KEY) {
 if (-not $env:PARKING_ROOT_PATH) {
     $env:PARKING_ROOT_PATH = "/parking"
 }
+if (-not $env:PARKING_CONTEXT_SECRET) {
+    $env:PARKING_CONTEXT_SECRET = $env:PARKING_SECRET_KEY
+}
+if (-not $env:PARKING_LOCAL_LOGIN_ENABLED) {
+    $env:PARKING_LOCAL_LOGIN_ENABLED = "1"
+}
 
 & $python -m uvicorn app.main:app --host $ListenHost --port $Port --proxy-headers --forwarded-allow-ips "127.0.0.1"

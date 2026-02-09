@@ -1,18 +1,21 @@
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS vehicles (
-  plate TEXT PRIMARY KEY,
+  site_code TEXT NOT NULL,
+  plate TEXT NOT NULL,
   unit TEXT,
   owner_name TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   valid_from TEXT,
   valid_to TEXT,
   note TEXT,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (site_code, plate)
 );
 
 CREATE TABLE IF NOT EXISTS violations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_code TEXT NOT NULL DEFAULT 'COMMON',
   plate TEXT NOT NULL,
   verdict TEXT NOT NULL,
   rule_code TEXT,
@@ -24,9 +27,6 @@ CREATE TABLE IF NOT EXISTS violations (
   lng REAL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
-CREATE INDEX IF NOT EXISTS idx_violations_plate ON violations(plate);
-CREATE INDEX IF NOT EXISTS idx_violations_created_at ON violations(created_at);
 
 CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY,

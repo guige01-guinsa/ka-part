@@ -57,6 +57,7 @@ Render 환경변수에 아래 값을 추가/확인:
 - `PARKING_ROOT_PATH=/parking`
 - `PARKING_API_KEY=<강한 랜덤 문자열>`
 - `PARKING_SECRET_KEY=<강한 랜덤 문자열>`
+- `PARKING_CONTEXT_SECRET=<강한 랜덤 문자열>`  # ka-part -> parking context token 서명키
 
 설정 후 Deploy Hook 또는 재배포를 실행합니다.
 

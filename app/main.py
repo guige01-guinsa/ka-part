@@ -42,6 +42,11 @@ def _mount_parking_if_enabled() -> None:
     os.environ.setdefault("PARKING_ROOT_PATH", "/parking")
     os.environ.setdefault("PARKING_DB_PATH", str(parking_root / "app" / "data" / "parking.db"))
     os.environ.setdefault("PARKING_UPLOAD_DIR", str(parking_root / "app" / "uploads"))
+    os.environ.setdefault("PARKING_LOCAL_LOGIN_ENABLED", "0")
+    os.environ.setdefault(
+        "PARKING_CONTEXT_SECRET",
+        os.getenv("PARKING_SECRET_KEY", os.getenv("KA_PHONE_VERIFY_SECRET", "ka-part-dev-secret")),
+    )
 
     try:
         from services.parking.app.main import app as parking_app

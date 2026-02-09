@@ -805,7 +805,15 @@
       window.location.href = qs ? `/pwa/spec_env.html?${qs}` : "/pwa/spec_env.html";
     });
     $("#btnParking")?.addEventListener("click", () => {
-      window.location.href = "/parking/login";
+      const run = async () => {
+        const data = await jfetch("/api/parking/context");
+        const url = data && data.url ? String(data.url) : "/parking/login";
+        window.location.href = url;
+      };
+      run().catch((err) => {
+        alert("주차관리 접속 오류: " + err.message);
+        window.location.href = "/parking/login";
+      });
     });
     $("#btnLogout")?.addEventListener("click", () => {
       const run = async () => {

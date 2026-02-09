@@ -9,15 +9,21 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, Literal
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-from .db import init_db, seed_demo, seed_users, connect
-from .auth import make_session, pbkdf2_verify, require_role
+from .db import init_db, seed_demo, seed_users, connect, normalize_site_code
+from .auth import make_session, pbkdf2_verify, require_role, read_session
 
 API_KEY = os.getenv("PARKING_API_KEY", "change-me")
 ROOT_PATH = os.getenv("PARKING_ROOT_PATH", "").strip()
 if ROOT_PATH and not ROOT_PATH.startswith("/"):
     ROOT_PATH = f"/{ROOT_PATH}"
 ROOT_PATH = ROOT_PATH.rstrip("/")
+DEFAULT_SITE_CODE = normalize_site_code(os.getenv("PARKING_DEFAULT_SITE_CODE", "COMMON"))
+LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
+CONTEXT_SECRET = os.getenv("PARKING_CONTEXT_SECRET", os.getenv("PARKING_SECRET_KEY", "change-this-secret"))
+CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
+_ctx_ser = URLSafeTimedSerializer(CONTEXT_SECRET, salt="parking-context")
 UPLOAD_DIR = Path(os.getenv("PARKING_UPLOAD_DIR", str(Path(__file__).resolve().parent / "uploads")))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -36,6 +42,26 @@ def require_key(x_api_key: str | None):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+
+def map_permission_to_role(permission_level: str) -> str:
+    raw = (permission_level or "").strip().lower()
+    if raw == "admin":
+        return "admin"
+    if raw == "site_admin":
+        return "guard"
+    if raw == "user":
+        return "viewer"
+    raise HTTPException(status_code=400, detail="Invalid permission_level")
+
+
+def resolve_site_scope(request: Request, x_site_code: str | None = None) -> str:
+    sess = read_session(request)
+    if sess and sess.get("sc"):
+        return normalize_site_code(str(sess["sc"]))
+    if x_site_code:
+        return normalize_site_code(x_site_code)
+    return DEFAULT_SITE_CODE
+
 @app.on_event("startup")
 def _startup():
     init_db()
@@ -51,17 +77,42 @@ def health():
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
+    if not LOCAL_LOGIN_ENABLED:
+        return HTMLResponse(
+            "<h2>Parking Login</h2><p>통합 로그인 전용입니다. 아파트 시설관리에서 '주차관리' 버튼으로 접속하세요.</p>",
+            status_code=200,
+        )
     login_action = app_url("/login")
     return f"<h2>Login</h2><form method='POST' action='{login_action}'><input name='username'/><input name='password' type='password'/><button>Login</button></form>"
 
 @app.post("/login")
 def login_submit(username: str = Form(...), password: str = Form(...)):
+    if not LOCAL_LOGIN_ENABLED:
+        return HTMLResponse("Local login is disabled", status_code=403)
     u = username.strip()
     with connect() as con:
         row = con.execute("SELECT * FROM users WHERE username=?", (u,)).fetchone()
     if not row or not pbkdf2_verify(password, row["pw_hash"]):
         return HTMLResponse("Invalid credentials", status_code=401)
-    token = make_session(u, row["role"])
+    token = make_session(u, row["role"], site_code=DEFAULT_SITE_CODE)
+    resp = RedirectResponse(url=app_url("/admin2"), status_code=302)
+    resp.set_cookie("parking_session", token, httponly=True, samesite="lax", path=ROOT_PATH or "/")
+    return resp
+
+
+@app.get("/sso")
+def sso_login(ctx: str):
+    try:
+        payload = _ctx_ser.loads(ctx, max_age=CONTEXT_MAX_AGE)
+    except SignatureExpired as exc:
+        raise HTTPException(status_code=401, detail="Context token expired") from exc
+    except BadSignature as exc:
+        raise HTTPException(status_code=401, detail="Invalid context token") from exc
+
+    site_code = normalize_site_code(payload.get("site_code"))
+    permission_level = str(payload.get("permission_level") or "").strip().lower()
+    role = map_permission_to_role(permission_level)
+    token = make_session("ka-part-user", role, site_code=site_code)
     resp = RedirectResponse(url=app_url("/admin2"), status_code=302)
     resp.set_cookie("parking_session", token, httponly=True, samesite="lax", path=ROOT_PATH or "/")
     return resp
@@ -73,6 +124,7 @@ def logout():
     return resp
 
 class CheckResponse(BaseModel):
+    site_code: str
     plate: str
     verdict: Literal["OK","UNREGISTERED","BLOCKED","EXPIRED","TEMP"]
     message: str
@@ -83,26 +135,33 @@ class CheckResponse(BaseModel):
     valid_to: Optional[str] = None
 
 @app.get("/api/plates/check", response_model=CheckResponse)
-def check_plate(plate: str, x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+def check_plate(
+    plate: str,
+    request: Request,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    x_site_code: str | None = Header(default=None, alias="X-Site-Code"),
+):
     require_key(x_api_key)
+    site_code = resolve_site_scope(request, x_site_code)
     p = plate.strip().upper()
     with connect() as con:
-        row = con.execute("SELECT * FROM vehicles WHERE plate = ?", (p,)).fetchone()
+        row = con.execute("SELECT * FROM vehicles WHERE site_code = ? AND plate = ?", (site_code, p)).fetchone()
     if not row:
-        return CheckResponse(plate=p, verdict="UNREGISTERED", message="미등록 차량")
+        return CheckResponse(site_code=site_code, plate=p, verdict="UNREGISTERED", message="미등록 차량")
     status = (row["status"] or "active").lower()
     vf, vt = row["valid_from"], row["valid_to"]
     t = today_iso()
     if status == "blocked":
-        return CheckResponse(plate=p, verdict="BLOCKED", message="차단 차량", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
+        return CheckResponse(site_code=site_code, plate=p, verdict="BLOCKED", message="차단 차량", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
     if vt and t > vt:
-        return CheckResponse(plate=p, verdict="EXPIRED", message="기간 만료", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
+        return CheckResponse(site_code=site_code, plate=p, verdict="EXPIRED", message="기간 만료", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
     if status == "temp":
-        return CheckResponse(plate=p, verdict="TEMP", message="임시 등록", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
-    return CheckResponse(plate=p, verdict="OK", message="정상 등록", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
+        return CheckResponse(site_code=site_code, plate=p, verdict="TEMP", message="임시 등록", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
+    return CheckResponse(site_code=site_code, plate=p, verdict="OK", message="정상 등록", unit=row["unit"], owner_name=row["owner_name"], status=status, valid_from=vf, valid_to=vt)
 
 class ViolationOut(BaseModel):
     id: int
+    site_code: str
     plate: str
     verdict: str
     rule_code: Optional[str] = None
@@ -116,6 +175,7 @@ class ViolationOut(BaseModel):
 
 @app.post("/api/violations/upload", response_model=ViolationOut)
 def create_violation_with_photo(
+    request: Request,
     plate: str = Form(...),
     verdict: str = Form(...),
     rule_code: str | None = Form(None),
@@ -126,8 +186,10 @@ def create_violation_with_photo(
     lng: float | None = Form(None),
     photo: UploadFile = File(...),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    x_site_code: str | None = Header(default=None, alias="X-Site-Code"),
 ):
     require_key(x_api_key)
+    site_code = resolve_site_scope(request, x_site_code)
     p = plate.strip().upper()
     ext = os.path.splitext(photo.filename or "")[1].lower() or ".jpg"
     fname = f"{uuid.uuid4().hex}{ext}"
@@ -137,8 +199,8 @@ def create_violation_with_photo(
     rel = app_url(f"/uploads/{fname}")
     with connect() as con:
         cur = con.execute(
-            "INSERT INTO violations (plate, verdict, rule_code, location, memo, inspector, photo_path, lat, lng) VALUES (?,?,?,?,?,?,?,?,?)",
-            (p, verdict, rule_code, location, memo, inspector, rel, lat, lng),
+            "INSERT INTO violations (site_code, plate, verdict, rule_code, location, memo, inspector, photo_path, lat, lng) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (site_code, p, verdict, rule_code, location, memo, inspector, rel, lat, lng),
         )
         vid = cur.lastrowid
         row = con.execute("SELECT * FROM violations WHERE id = ?", (vid,)).fetchone()
@@ -148,13 +210,20 @@ def esc(v): return _html.escape(str(v)) if v is not None else ""
 
 @app.get("/admin2", response_class=HTMLResponse)
 def admin2(request: Request):
-    require_role(request, {"admin","guard","viewer"})
+    s = require_role(request, {"admin","guard","viewer"})
+    site_code = normalize_site_code(s.get("sc"))
     with connect() as con:
-        vs = con.execute("SELECT * FROM vehicles ORDER BY updated_at DESC LIMIT 200").fetchall()
-        logs = con.execute("SELECT * FROM violations ORDER BY created_at DESC LIMIT 100").fetchall()
+        vs = con.execute(
+            "SELECT * FROM vehicles WHERE site_code=? ORDER BY updated_at DESC LIMIT 200",
+            (site_code,),
+        ).fetchall()
+        logs = con.execute(
+            "SELECT * FROM violations WHERE site_code=? ORDER BY created_at DESC LIMIT 100",
+            (site_code,),
+        ).fetchall()
     v_rows = "".join([f"<tr><td>{esc(r['plate'])}</td><td>{esc(r['status'])}</td><td>{esc(r['unit'])}</td><td>{esc(r['owner_name'])}</td></tr>" for r in vs])
     l_rows = "".join([f"<tr><td>{esc(r['created_at'])}</td><td>{esc(r['plate'])}</td><td>{esc(r['verdict'])}</td><td>{esc(r['photo_path'] or '-')}</td></tr>" for r in logs])
     logout_path = app_url("/logout")
-    return f"""<h2>Admin</h2><a href="{logout_path}" onclick="fetch('{logout_path}',{{method:'POST'}});return false;">Logout</a>
+    return f"""<h2>Admin ({esc(site_code)})</h2><a href="{logout_path}" onclick="fetch('{logout_path}',{{method:'POST'}});return false;">Logout</a>
     <h3>Vehicles</h3><table border=1><tr><th>Plate</th><th>Status</th><th>Unit</th><th>Owner</th></tr>{v_rows}</table>
     <h3>Violations</h3><table border=1><tr><th>At</th><th>Plate</th><th>Verdict</th><th>Photo</th></tr>{l_rows}</table>"""

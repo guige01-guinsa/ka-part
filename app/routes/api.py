@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import urllib.parse
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
@@ -12,6 +13,7 @@ from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from itsdangerous import URLSafeTimedSerializer
 
 from ..db import (
     cleanup_expired_sessions,
@@ -75,6 +77,14 @@ VALID_PERMISSION_LEVELS = ["admin", "site_admin", "user"]
 DEFAULT_SITE_NAME = "미지정단지"
 PHONE_VERIFY_TTL_MINUTES = 5
 PHONE_VERIFY_MAX_ATTEMPTS = 5
+PARKING_CONTEXT_SECRET = (
+    os.getenv("PARKING_CONTEXT_SECRET")
+    or os.getenv("PARKING_SECRET_KEY")
+    or os.getenv("KA_PHONE_VERIFY_SECRET", "ka-part-dev-secret")
+)
+PARKING_CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
+PARKING_BASE_URL = (os.getenv("PARKING_BASE_URL") or "").strip()
+_parking_ctx_ser = URLSafeTimedSerializer(PARKING_CONTEXT_SECRET, salt="parking-context")
 
 
 def _clean_login_id(value: Any) -> str:
@@ -504,6 +514,31 @@ def _require_site_access(request: Request, requested_site_name: Any, *, required
 def health():
     report = schema_alignment_report()
     return {"ok": True, "version": "2.9.0", "schema_alignment_ok": report.get("ok", False)}
+
+
+@router.get("/parking/context")
+def parking_context(request: Request):
+    user, _token = _require_auth(request)
+    permission_level = _permission_level_from_user(user)
+    site_code = _clean_site_code(user.get("site_code"), required=False)
+    if not site_code:
+        site_name = _resolve_allowed_site_name(user, "", required=False)
+        site_code = _resolve_site_code_for_site(site_name, "")
+        if int(user.get("id") or 0) > 0 and site_code:
+            set_staff_user_site_code(int(user["id"]), site_code)
+    if not site_code:
+        raise HTTPException(status_code=403, detail="site_code is required for parking access")
+
+    ctx = _parking_ctx_ser.dumps({"site_code": site_code, "permission_level": permission_level})
+    rel = f"/parking/sso?ctx={urllib.parse.quote(ctx, safe='')}"
+    parking_url = rel if not PARKING_BASE_URL else f"{PARKING_BASE_URL.rstrip('/')}{rel}"
+    return {
+        "ok": True,
+        "url": parking_url,
+        "site_code": site_code,
+        "permission_level": permission_level,
+        "expires_in": PARKING_CONTEXT_MAX_AGE,
+    }
 
 
 @router.get("/schema")

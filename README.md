@@ -27,6 +27,11 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 제어 변수: `ENABLE_PARKING_EMBED=1` (기본값)
 - 권장 보안 변수: `PARKING_API_KEY`, `PARKING_SECRET_KEY`
 
+공유 경계:
+- 메인 시스템과 주차 시스템은 `site_code`와 `permission_level`만 공유
+- 주차 진입은 `/api/parking/context` 서명 토큰을 통해 수행
+- 주차 데이터(차량/위반)는 주차 DB 내부에서 `site_code` 기준으로만 조회/저장
+
 전체 스택 실행(메인 + 주차 + Caddy):
 ```powershell
 pwsh -File ops\start_stack.ps1

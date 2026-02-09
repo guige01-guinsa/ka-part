@@ -19,8 +19,11 @@ def pbkdf2_verify(password: str, stored: str) -> bool:
     dk2 = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
     return hmac.compare_digest(dk, dk2)
 
-def make_session(username: str, role: str) -> str:
-    return _ser.dumps({"u": username, "r": role})
+def make_session(username: str, role: str, site_code: str | None = None) -> str:
+    payload = {"u": username, "r": role}
+    if site_code:
+        payload["sc"] = str(site_code).strip().upper()
+    return _ser.dumps(payload)
 
 def read_session(request: Request) -> dict | None:
     token = request.cookies.get("parking_session")
