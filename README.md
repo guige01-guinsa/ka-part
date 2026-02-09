@@ -21,6 +21,12 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 리버스프록시 경로: `/parking/*`
 - 진입 URL(프록시): `http://127.0.0.1:8080/parking/login`
 
+`ka-part.com` 운영 환경(예: Render 단일 프로세스)에서는
+메인 앱이 주차 서비스를 `/parking`으로 자동 마운트합니다.
+- URL: `https://ka-part.com/parking/login`
+- 제어 변수: `ENABLE_PARKING_EMBED=1` (기본값)
+- 권장 보안 변수: `PARKING_API_KEY`, `PARKING_SECRET_KEY`
+
 전체 스택 실행(메인 + 주차 + Caddy):
 ```powershell
 pwsh -File ops\start_stack.ps1

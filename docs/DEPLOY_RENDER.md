@@ -47,7 +47,18 @@ powershell -ExecutionPolicy Bypass -File .\deploy_render.ps1 -Wait
 ```powershell
 curl.exe -s https://www.ka-part.com/api/health
 curl.exe -I https://www.ka-part.com/pwa/
+curl.exe -I https://www.ka-part.com/parking/login
 ```
+
+## 6) 주차 서비스(ka-part.com 내장 마운트) 환경변수
+Render 환경변수에 아래 값을 추가/확인:
+
+- `ENABLE_PARKING_EMBED=1`
+- `PARKING_ROOT_PATH=/parking`
+- `PARKING_API_KEY=<강한 랜덤 문자열>`
+- `PARKING_SECRET_KEY=<강한 랜덤 문자열>`
+
+설정 후 Deploy Hook 또는 재배포를 실행합니다.
 
 ## 보안 메모
 - Deploy Hook URL과 API Key는 비밀값으로 취급
