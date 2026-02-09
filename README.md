@@ -15,15 +15,14 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 메인: `http://localhost:8000/pwa/`
 - 로그인: `http://localhost:8000/pwa/login.html`
 
-## 주차관리 독립 서비스
+## 주차관리 통합 실행
 - 소스 경로: `services/parking`
-- 독립 포트: `127.0.0.1:8011`
-- 리버스프록시 경로: `/parking/*`
-- 진입 URL(프록시): `http://127.0.0.1:8080/parking/login`
+- 실행 방식: 메인 앱(`app.main`)이 주차 앱을 `/parking`으로 자동 마운트
+- 진입 URL: `http://127.0.0.1:8080/parking/admin2`
+- 별도 주차 로그인 없음(메인 시스템 인증 토큰으로 자동 진입)
 
-`ka-part.com` 운영 환경(예: Render 단일 프로세스)에서는
-메인 앱이 주차 서비스를 `/parking`으로 자동 마운트합니다.
-- URL: `https://ka-part.com/parking/login`
+`ka-part.com` 운영 환경도 동일하게 단일 프로세스 모드입니다.
+- URL: `https://ka-part.com/parking/admin2`
 - 제어 변수: `ENABLE_PARKING_EMBED=1` (기본값)
 - 권장 보안 변수: `PARKING_API_KEY`, `PARKING_SECRET_KEY`
 
@@ -32,7 +31,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 주차 진입은 `/api/parking/context` 서명 토큰을 통해 수행
 - 주차 데이터(차량/위반)는 주차 DB 내부에서 `site_code` 기준으로만 조회/저장
 
-전체 스택 실행(메인 + 주차 + Caddy):
+전체 스택 실행(메인 + Caddy):
 ```powershell
 pwsh -File ops\start_stack.ps1
 ```

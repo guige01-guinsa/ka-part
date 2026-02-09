@@ -47,7 +47,7 @@ powershell -ExecutionPolicy Bypass -File .\deploy_render.ps1 -Wait
 ```powershell
 curl.exe -s https://www.ka-part.com/api/health
 curl.exe -I https://www.ka-part.com/pwa/
-curl.exe -I https://www.ka-part.com/parking/login
+curl.exe -I https://www.ka-part.com/parking/admin2
 ```
 
 ## 6) 주차 서비스(ka-part.com 내장 마운트) 환경변수

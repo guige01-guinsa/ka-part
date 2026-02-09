@@ -2,14 +2,7 @@ ka-part.com, www.ka-part.com {
 	encode gzip zstd
 
 	redir /parking /parking/ 308
-
-	handle_path /parking/* {
-		reverse_proxy 127.0.0.1:8011
-	}
-
-	handle {
-		reverse_proxy 127.0.0.1:8000
-	}
+	reverse_proxy 127.0.0.1:8000
 
 	log {
 		output file C:\ka-part\ops\caddy-access.log

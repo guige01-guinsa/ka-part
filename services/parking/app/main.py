@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import date
 from pathlib import Path
 import uuid
@@ -12,7 +13,7 @@ from typing import Optional, Literal
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from .db import init_db, seed_demo, seed_users, connect, normalize_site_code
-from .auth import make_session, pbkdf2_verify, require_role, read_session
+from .auth import make_session, pbkdf2_verify, read_session
 
 API_KEY = os.getenv("PARKING_API_KEY", "change-me")
 ROOT_PATH = os.getenv("PARKING_ROOT_PATH", "").strip()
@@ -37,6 +38,51 @@ def app_url(path: str) -> str:
     if ROOT_PATH:
         return f"{ROOT_PATH}{path}"
     return path
+
+
+def _auto_entry_page(next_path: str) -> str:
+    quoted_next = json.dumps(next_path)
+    return f"""<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Parking Entry</title>
+</head>
+<body>
+  <p>주차관리 접속 처리 중입니다...</p>
+  <script>
+    (async function () {{
+      const nextPath = {quoted_next};
+      const loginUrl = "/pwa/login.html?next=" + encodeURIComponent(nextPath);
+      let token = "";
+      try {{
+        token = (localStorage.getItem("ka_part_auth_token_v1") || "").trim();
+      }} catch (_e) {{
+        token = "";
+      }}
+      if (!token) {{
+        window.location.replace(loginUrl);
+        return;
+      }}
+      try {{
+        const res = await fetch("/api/parking/context", {{
+          method: "GET",
+          headers: {{ "Authorization": "Bearer " + token }}
+        }});
+        if (!res.ok) {{
+          throw new Error(String(res.status));
+        }}
+        const data = await res.json();
+        window.location.replace((data && data.url) ? String(data.url) : "/parking/sso");
+      }} catch (_e) {{
+        window.location.replace(loginUrl);
+      }}
+    }})();
+  </script>
+</body>
+</html>"""
+
 
 def require_key(x_api_key: str | None):
     if x_api_key != API_KEY:
@@ -75,20 +121,21 @@ def today_iso() -> str:
 def health():
     return {"ok": True}
 
+@app.get("/")
+def home():
+    return RedirectResponse(url=app_url("/admin2"), status_code=302)
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
     if not LOCAL_LOGIN_ENABLED:
-        return HTMLResponse(
-            "<h2>Parking Login</h2><p>통합 로그인 전용입니다. 아파트 시설관리에서 '주차관리' 버튼으로 접속하세요.</p>",
-            status_code=200,
-        )
+        return RedirectResponse(url=app_url("/admin2"), status_code=302)
     login_action = app_url("/login")
     return f"<h2>Login</h2><form method='POST' action='{login_action}'><input name='username'/><input name='password' type='password'/><button>Login</button></form>"
 
 @app.post("/login")
 def login_submit(username: str = Form(...), password: str = Form(...)):
     if not LOCAL_LOGIN_ENABLED:
-        return HTMLResponse("Local login is disabled", status_code=403)
+        return RedirectResponse(url=app_url("/admin2"), status_code=302)
     u = username.strip()
     with connect() as con:
         row = con.execute("SELECT * FROM users WHERE username=?", (u,)).fetchone()
@@ -119,7 +166,8 @@ def sso_login(ctx: str):
 
 @app.post("/logout")
 def logout():
-    resp = RedirectResponse(url=app_url("/login"), status_code=302)
+    target = app_url("/login") if LOCAL_LOGIN_ENABLED else "/pwa/"
+    resp = RedirectResponse(url=target, status_code=302)
     resp.delete_cookie("parking_session", path=ROOT_PATH or "/")
     return resp
 
@@ -210,7 +258,15 @@ def esc(v): return _html.escape(str(v)) if v is not None else ""
 
 @app.get("/admin2", response_class=HTMLResponse)
 def admin2(request: Request):
-    s = require_role(request, {"admin","guard","viewer"})
+    s = read_session(request)
+    if not s:
+        if LOCAL_LOGIN_ENABLED:
+            raise HTTPException(status_code=401, detail="Login required")
+        return HTMLResponse(_auto_entry_page(app_url("/admin2")), status_code=200)
+
+    if s.get("r") not in {"admin", "guard", "viewer"}:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     site_code = normalize_site_code(s.get("sc"))
     with connect() as con:
         vs = con.execute(
@@ -224,6 +280,11 @@ def admin2(request: Request):
     v_rows = "".join([f"<tr><td>{esc(r['plate'])}</td><td>{esc(r['status'])}</td><td>{esc(r['unit'])}</td><td>{esc(r['owner_name'])}</td></tr>" for r in vs])
     l_rows = "".join([f"<tr><td>{esc(r['created_at'])}</td><td>{esc(r['plate'])}</td><td>{esc(r['verdict'])}</td><td>{esc(r['photo_path'] or '-')}</td></tr>" for r in logs])
     logout_path = app_url("/logout")
-    return f"""<h2>Admin ({esc(site_code)})</h2><a href="{logout_path}" onclick="fetch('{logout_path}',{{method:'POST'}});return false;">Logout</a>
+    top_link = (
+        f"""<a href="{logout_path}" onclick="fetch('{logout_path}',{{method:'POST'}});return false;">Logout</a>"""
+        if LOCAL_LOGIN_ENABLED
+        else """<a href="/pwa/">시설관리로 돌아가기</a>"""
+    )
+    return f"""<h2>Admin ({esc(site_code)})</h2>{top_link}
     <h3>Vehicles</h3><table border=1><tr><th>Plate</th><th>Status</th><th>Unit</th><th>Owner</th></tr>{v_rows}</table>
     <h3>Violations</h3><table border=1><tr><th>At</th><th>Plate</th><th>Verdict</th><th>Photo</th></tr>{l_rows}</table>"""

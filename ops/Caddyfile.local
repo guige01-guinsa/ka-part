@@ -2,12 +2,5 @@
 	encode gzip zstd
 
 	redir /parking /parking/ 308
-
-	handle_path /parking/* {
-		reverse_proxy 127.0.0.1:8011
-	}
-
-	handle {
-		reverse_proxy 127.0.0.1:8000
-	}
+	reverse_proxy 127.0.0.1:8000
 }

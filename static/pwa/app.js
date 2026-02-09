@@ -807,12 +807,12 @@
     $("#btnParking")?.addEventListener("click", () => {
       const run = async () => {
         const data = await jfetch("/api/parking/context");
-        const url = data && data.url ? String(data.url) : "/parking/login";
+        const url = data && data.url ? String(data.url) : "/parking/admin2";
         window.location.href = url;
       };
       run().catch((err) => {
         alert("주차관리 접속 오류: " + err.message);
-        window.location.href = "/parking/login";
+        window.location.href = "/parking/admin2";
       });
     });
     $("#btnLogout")?.addEventListener("click", () => {
