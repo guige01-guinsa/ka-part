@@ -48,6 +48,20 @@
   let rangeIndex = -1;
   let authUser = null;
 
+  function hasAdminPermission(user) {
+    return !!(user && user.is_admin);
+  }
+
+  function hasSiteAdminPermission(user) {
+    return !!(user && (user.is_admin || user.is_site_admin));
+  }
+
+  function permissionLabel(user) {
+    if (hasAdminPermission(user)) return "관리자";
+    if (hasSiteAdminPermission(user)) return "단지관리자";
+    return "사용자";
+  }
+
   function toast(msg) {
     const el = $("#toast");
     if (!el) return;
@@ -75,24 +89,24 @@
       chip.textContent = "미로그인";
       return;
     }
-    const role = user.is_admin ? "관리자" : "일반";
+    const role = permissionLabel(user);
     chip.textContent = `${user.name || user.login_id} (${role})`;
   }
 
   function assignedSiteNameForUser() {
-    if (!authUser || authUser.is_admin) return "";
+    if (!authUser || hasAdminPermission(authUser)) return "";
     return String(authUser.site_name || "").trim();
   }
 
   function assignedSiteCodeForUser() {
-    if (!authUser || authUser.is_admin) return "";
+    if (!authUser || hasAdminPermission(authUser)) return "";
     return String(authUser.site_code || "").trim().toUpperCase();
   }
 
   function enforceSiteNamePolicy() {
     const el = $("#siteName");
     if (!el || !authUser) return;
-    if (authUser.is_admin) {
+    if (hasAdminPermission(authUser)) {
       el.readOnly = false;
       el.removeAttribute("aria-readonly");
       el.title = "";
@@ -113,9 +127,9 @@
     authUser = await window.KAAuth.requireAuth();
     setCurrentUserChip(authUser);
     const btnUsers = $("#btnUsers");
-    if (btnUsers && !authUser.is_admin) btnUsers.style.display = "none";
+    if (btnUsers && !hasAdminPermission(authUser)) btnUsers.style.display = "none";
     const btnSpec = $("#btnSpecEnv");
-    if (btnSpec && !authUser.is_admin) btnSpec.style.display = "none";
+    if (btnSpec && !hasSiteAdminPermission(authUser)) btnSpec.style.display = "none";
     enforceSiteNamePolicy();
     const assignedCode = assignedSiteCodeForUser();
     if (assignedCode) setSiteCode(assignedCode);
@@ -724,7 +738,7 @@
     });
 
     $("#siteName")?.addEventListener("change", () => {
-      if (authUser && !authUser.is_admin) {
+      if (authUser && !hasAdminPermission(authUser)) {
         const assigned = assignedSiteNameForUser();
         if (assigned) setSiteName(assigned);
         toast("소속 단지는 관리자만 변경할 수 있습니다.");

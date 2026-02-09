@@ -4,6 +4,11 @@
   const $ = (s) => document.querySelector(s);
   let users = [];
   let roles = [];
+  let permissionLevels = [
+    { key: "admin", label: "관리자" },
+    { key: "site_admin", label: "단지관리자" },
+    { key: "user", label: "사용자" },
+  ];
   let editingId = null;
   let recommendedCount = 9;
   let me = null;
@@ -32,7 +37,7 @@
     $("#userOfficeFax").value = "";
     $("#userNote").value = "";
     $("#userPassword").value = "";
-    $("#isAdmin").checked = false;
+    $("#userPermission").value = "user";
     $("#isActive").checked = true;
     if (roles.length) $("#userRole").value = roles[0];
     setMsg("");
@@ -51,7 +56,7 @@
     $("#userOfficeFax").value = user.office_fax || "";
     $("#userNote").value = user.note || "";
     $("#userPassword").value = "";
-    $("#isAdmin").checked = !!user.is_admin;
+    $("#userPermission").value = String(user.permission_level || (user.is_admin ? "admin" : user.is_site_admin ? "site_admin" : "user"));
     $("#isActive").checked = !!user.is_active;
     $("#userRole").value = user.role || roles[0] || "";
     setMsg("");
@@ -63,18 +68,27 @@
     const count = users.length;
     const active = users.filter((u) => u.is_active).length;
     const adminCount = users.filter((u) => u.is_admin && u.is_active).length;
-    el.textContent = `등록 ${count}명 (활성 ${active}명 / 관리자 ${adminCount}명 / 권장 ${recommendedCount}명)`;
+    const siteAdminCount = users.filter((u) => !u.is_admin && u.is_site_admin && u.is_active).length;
+    const userCount = users.filter((u) => !u.is_admin && !u.is_site_admin && u.is_active).length;
+    el.textContent = `등록 ${count}명 (활성 ${active}명 / 관리자 ${adminCount}명 / 단지관리자 ${siteAdminCount}명 / 사용자 ${userCount}명 / 권장 ${recommendedCount}명)`;
     el.classList.toggle("warn", active > recommendedCount);
+  }
+
+  function permissionLabel(user) {
+    const key = String(user.permission_level || (user.is_admin ? "admin" : user.is_site_admin ? "site_admin" : "user"));
+    const found = permissionLevels.find((x) => x.key === key);
+    return found ? found.label : key;
   }
 
   function itemHtml(u) {
     const activeText = u.is_active ? "활성" : "비활성";
-    const adminTag = u.is_admin ? "<span class=\"badge\">관리자</span>" : "";
+    const level = permissionLabel(u);
+    const levelTag = `<span class="badge">${escapeHtml(level)}</span>`;
     return `
       <div class="item ${u.is_active ? "" : "inactive"}" data-id="${u.id}">
         <div class="line1">
           <div>
-            <div class="name">${escapeHtml(u.name || "")} <span class="login">(${escapeHtml(u.login_id || "")})</span> ${adminTag}</div>
+            <div class="name">${escapeHtml(u.name || "")} <span class="login">(${escapeHtml(u.login_id || "")})</span> ${levelTag}</div>
             <div class="line2">${escapeHtml(u.role || "")} / ${escapeHtml(u.phone || "-")} / ${activeText}</div>
             <div class="line2">${escapeHtml(u.site_name || "-")}${u.site_code ? ` <code>[${escapeHtml(u.site_code)}]</code>` : ""} / 관리소 ${escapeHtml(
       u.office_phone || "-"
@@ -113,6 +127,7 @@
   async function loadRoles() {
     const data = await jfetch("/api/user_roles");
     roles = Array.isArray(data.roles) ? data.roles : [];
+    permissionLevels = Array.isArray(data.permission_levels) && data.permission_levels.length ? data.permission_levels : permissionLevels;
     recommendedCount = Number(data.recommended_staff_count || 9);
     const sel = $("#userRole");
     sel.innerHTML = "";
@@ -121,6 +136,14 @@
       o.value = role;
       o.textContent = role;
       sel.appendChild(o);
+    }
+    const permSel = $("#userPermission");
+    permSel.innerHTML = "";
+    for (const p of permissionLevels) {
+      const o = document.createElement("option");
+      o.value = String(p.key || "");
+      o.textContent = String(p.label || p.key || "");
+      permSel.appendChild(o);
     }
   }
 
@@ -145,7 +168,7 @@
       office_phone: ($("#userOfficePhone").value || "").trim(),
       office_fax: ($("#userOfficeFax").value || "").trim(),
       note: ($("#userNote").value || "").trim(),
-      is_admin: !!$("#isAdmin").checked,
+      permission_level: ($("#userPermission").value || "user").trim(),
       is_active: !!$("#isActive").checked,
     };
     if (pw) payload.password = pw;

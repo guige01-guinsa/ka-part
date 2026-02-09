@@ -99,6 +99,14 @@ def _clean_site_code_value(value: Any) -> str | None:
     return raw
 
 
+def _normalize_staff_permission_flags(is_admin: Any, is_site_admin: Any) -> tuple[int, int]:
+    admin = 1 if int(is_admin or 0) == 1 else 0
+    site_admin = 1 if int(is_site_admin or 0) == 1 else 0
+    if admin:
+        site_admin = 0
+    return admin, site_admin
+
+
 def dynamic_upsert(
     con: sqlite3.Connection,
     table: str,
@@ -268,6 +276,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
           note TEXT,
           password_hash TEXT,
           is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1)),
+          is_site_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_site_admin IN (0,1)),
           is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
           last_login_at TEXT,
           created_at TEXT NOT NULL,
@@ -277,6 +286,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     )
     _ensure_column(con, "staff_users", "password_hash TEXT")
     _ensure_column(con, "staff_users", "is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1))")
+    _ensure_column(con, "staff_users", "is_site_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_site_admin IN (0,1))")
     _ensure_column(con, "staff_users", "last_login_at TEXT")
     _ensure_column(con, "staff_users", "site_code TEXT")
     _ensure_column(con, "staff_users", "site_name TEXT")
@@ -873,7 +883,7 @@ def list_staff_users(*, active_only: bool = False) -> List[Dict[str, Any]]:
     con = _connect()
     try:
         sql = """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
         """
         params: List[Any] = []
@@ -891,7 +901,7 @@ def get_staff_user(user_id: int) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -916,18 +926,20 @@ def create_staff_user(
     note: Optional[str] = None,
     password_hash: Optional[str] = None,
     is_admin: int = 0,
+    is_site_admin: int = 0,
     is_active: int = 1,
 ) -> Dict[str, Any]:
     con = _connect()
     try:
         ts = now_iso()
         clean_site_code = _clean_site_code_value(site_code)
+        clean_is_admin, clean_is_site_admin = _normalize_staff_permission_flags(is_admin, is_site_admin)
         con.execute(
             """
             INSERT INTO staff_users(
-              login_id, name, role, phone, site_code, site_name, address, office_phone, office_fax, note, password_hash, is_admin, is_active, created_at, updated_at
+              login_id, name, role, phone, site_code, site_name, address, office_phone, office_fax, note, password_hash, is_admin, is_site_admin, is_active, created_at, updated_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 login_id,
@@ -941,7 +953,8 @@ def create_staff_user(
                 office_fax,
                 note,
                 password_hash,
-                int(1 if is_admin else 0),
+                clean_is_admin,
+                clean_is_site_admin,
                 int(1 if is_active else 0),
                 ts,
                 ts,
@@ -950,7 +963,7 @@ def create_staff_user(
         con.commit()
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -975,16 +988,18 @@ def update_staff_user(
     office_fax: Optional[str] = None,
     note: Optional[str] = None,
     is_admin: int = 0,
+    is_site_admin: int = 0,
     is_active: int = 1,
 ) -> Optional[Dict[str, Any]]:
     con = _connect()
     try:
         ts = now_iso()
         clean_site_code = _clean_site_code_value(site_code)
+        clean_is_admin, clean_is_site_admin = _normalize_staff_permission_flags(is_admin, is_site_admin)
         cur = con.execute(
             """
             UPDATE staff_users
-            SET login_id=?, name=?, role=?, phone=?, site_code=?, site_name=?, address=?, office_phone=?, office_fax=?, note=?, is_admin=?, is_active=?, updated_at=?
+            SET login_id=?, name=?, role=?, phone=?, site_code=?, site_name=?, address=?, office_phone=?, office_fax=?, note=?, is_admin=?, is_site_admin=?, is_active=?, updated_at=?
             WHERE id=?
             """,
             (
@@ -998,7 +1013,8 @@ def update_staff_user(
                 office_phone,
                 office_fax,
                 note,
-                int(1 if is_admin else 0),
+                clean_is_admin,
+                clean_is_site_admin,
                 int(1 if is_active else 0),
                 ts,
                 int(user_id),
@@ -1009,7 +1025,7 @@ def update_staff_user(
             return None
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -1078,7 +1094,7 @@ def get_staff_user_by_login(login_id: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -1195,6 +1211,7 @@ def get_auth_user_by_token(token: str) -> Optional[Dict[str, Any]]:
               u.office_phone,
               u.office_fax,
               u.is_admin,
+              u.is_site_admin,
               u.is_active,
               u.created_at,
               u.updated_at,
@@ -1237,7 +1254,7 @@ def get_staff_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE phone=?
             ORDER BY is_active DESC, id ASC

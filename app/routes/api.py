@@ -65,6 +65,7 @@ from ..utils import build_excel, build_pdf, safe_ymd, today_ymd
 router = APIRouter()
 
 VALID_USER_ROLES = ["관리소장", "과장", "주임", "기사", "행정", "경비", "미화", "기타"]
+VALID_PERMISSION_LEVELS = ["admin", "site_admin", "user"]
 DEFAULT_SITE_NAME = "미지정단지"
 PHONE_VERIFY_TTL_MINUTES = 5
 PHONE_VERIFY_MAX_ATTEMPTS = 5
@@ -245,7 +246,44 @@ def _clean_bool(value: Any, default: bool = False) -> bool:
     return s in ("1", "true", "y", "yes", "on")
 
 
+def _permission_level_from_user(user: Dict[str, Any]) -> str:
+    if int(user.get("is_admin") or 0) == 1:
+        return "admin"
+    if int(user.get("is_site_admin") or 0) == 1:
+        return "site_admin"
+    return "user"
+
+
+def _clean_permission_level(value: Any, *, required: bool = False) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        if required:
+            raise HTTPException(status_code=400, detail="permission_level is required")
+        return ""
+    if raw not in VALID_PERMISSION_LEVELS:
+        raise HTTPException(status_code=400, detail=f"permission_level must be one of: {', '.join(VALID_PERMISSION_LEVELS)}")
+    return raw
+
+
+def _resolve_permission_flags(payload: Dict[str, Any], *, default_admin: bool = False, default_site_admin: bool = False) -> Tuple[int, int, str]:
+    if "permission_level" in payload:
+        level = _clean_permission_level(payload.get("permission_level"), required=True)
+        if level == "admin":
+            return 1, 0, level
+        if level == "site_admin":
+            return 0, 1, level
+        return 0, 0, level
+
+    is_admin = _clean_bool(payload.get("is_admin"), default=default_admin)
+    is_site_admin = _clean_bool(payload.get("is_site_admin"), default=default_site_admin)
+    if is_admin:
+        is_site_admin = False
+    level = "admin" if is_admin else ("site_admin" if is_site_admin else "user")
+    return (1 if is_admin else 0), (1 if is_site_admin else 0), level
+
+
 def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
+    permission_level = _permission_level_from_user(user)
     return {
         "id": int(user.get("id")),
         "login_id": user.get("login_id"),
@@ -259,6 +297,8 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "office_fax": user.get("office_fax"),
         "note": user.get("note"),
         "is_admin": bool(user.get("is_admin")),
+        "is_site_admin": bool(user.get("is_site_admin")),
+        "permission_level": permission_level,
         "is_active": bool(user.get("is_active")),
         "created_at": user.get("created_at"),
         "updated_at": user.get("updated_at"),
@@ -326,6 +366,17 @@ def _require_admin(request: Request) -> Tuple[Dict[str, Any], str]:
     return user, token
 
 
+def _can_manage_site_env(user: Dict[str, Any]) -> bool:
+    return int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1
+
+
+def _require_site_env_manager(request: Request) -> Tuple[Dict[str, Any], str]:
+    user, token = _require_auth(request)
+    if not _can_manage_site_env(user):
+        raise HTTPException(status_code=403, detail="site env manager only")
+    return user, token
+
+
 def _normalized_assigned_site_name(user: Dict[str, Any]) -> str:
     raw_site = (str(user.get("site_name") or "")).strip()
     if not raw_site:
@@ -381,13 +432,13 @@ def api_schema_alignment(request: Request):
 
 @router.get("/site_env_template")
 def api_site_env_template(request: Request):
-    _require_admin(request)
+    _require_site_env_manager(request)
     return {"ok": True, "template": site_env_template()}
 
 
 @router.get("/site_env_templates")
 def api_site_env_templates(request: Request):
-    _require_admin(request)
+    _require_site_env_manager(request)
     templates = site_env_templates()
     items = [
         {
@@ -403,15 +454,19 @@ def api_site_env_templates(request: Request):
 
 @router.get("/base_schema")
 def api_base_schema(request: Request):
-    _require_admin(request)
+    _require_site_env_manager(request)
     return {"ok": True, "schema": SCHEMA_DEFS}
 
 
 @router.get("/site_env")
-def api_site_env(request: Request, site_name: str = Query(...), site_code: str = Query(default="")):
-    _require_admin(request)
-    clean_site_name = _clean_site_name(site_name, required=True)
-    clean_site_code = _clean_site_code(site_code, required=False)
+def api_site_env(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
+    user, _token = _require_site_env_manager(request)
+    if int(user.get("is_admin") or 0) == 1:
+        clean_site_name = _clean_site_name(site_name, required=True)
+        clean_site_code = _clean_site_code(site_code, required=False)
+    else:
+        clean_site_name = _resolve_allowed_site_name(user, site_name, required=False)
+        clean_site_code = _resolve_allowed_site_code(user, site_code)
     row = get_site_env_record(clean_site_name, site_code=clean_site_code or None)
     resolved_site_code = _clean_site_code((row or {}).get("site_code"), required=False) or clean_site_code
     schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
@@ -420,9 +475,13 @@ def api_site_env(request: Request, site_name: str = Query(...), site_code: str =
 
 @router.put("/site_env")
 def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
-    _require_admin(request)
-    clean_site_name = _clean_site_name(payload.get("site_name"), required=True)
-    clean_site_code = _clean_site_code(payload.get("site_code"), required=False)
+    user, _token = _require_site_env_manager(request)
+    if int(user.get("is_admin") or 0) == 1:
+        clean_site_name = _clean_site_name(payload.get("site_name"), required=True)
+        clean_site_code = _clean_site_code(payload.get("site_code"), required=False)
+    else:
+        clean_site_name = _resolve_allowed_site_name(user, payload.get("site_name"), required=False)
+        clean_site_code = _resolve_allowed_site_code(user, payload.get("site_code"))
     raw_cfg = payload.get("config", payload.get("env", payload if isinstance(payload, dict) else {}))
     cfg = normalize_site_env_config(raw_cfg if isinstance(raw_cfg, dict) else {})
     row = upsert_site_env_config(clean_site_name, cfg, site_code=clean_site_code or None)
@@ -440,10 +499,14 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
 
 @router.delete("/site_env")
 def api_site_env_delete(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
-    _require_admin(request)
-    raw_site_name = (str(site_name or "")).strip()
-    clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
-    clean_site_code = _clean_site_code(site_code, required=False)
+    user, _token = _require_site_env_manager(request)
+    if int(user.get("is_admin") or 0) == 1:
+        raw_site_name = (str(site_name or "")).strip()
+        clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
+        clean_site_code = _clean_site_code(site_code, required=False)
+    else:
+        clean_site_name = _resolve_allowed_site_name(user, site_name, required=False)
+        clean_site_code = _resolve_allowed_site_code(user, site_code)
     if not clean_site_name and not clean_site_code:
         raise HTTPException(status_code=400, detail="site_name or site_code is required")
     ok = delete_site_env_config(clean_site_name, site_code=clean_site_code or None)
@@ -452,8 +515,21 @@ def api_site_env_delete(request: Request, site_name: str = Query(default=""), si
 
 @router.get("/site_env_list")
 def api_site_env_list(request: Request):
-    _require_admin(request)
+    user, _token = _require_site_env_manager(request)
     rows = list_site_env_configs()
+    if int(user.get("is_admin") or 0) != 1:
+        assigned_name = _normalized_assigned_site_name(user)
+        assigned_code = _clean_site_code(user.get("site_code"), required=False)
+        filtered: List[Dict[str, Any]] = []
+        for r in rows:
+            row_code = _clean_site_code(r.get("site_code"), required=False)
+            row_name = _clean_site_name(r.get("site_name"), required=False)
+            if assigned_code:
+                if row_code == assigned_code:
+                    filtered.append(r)
+            elif row_name == assigned_name:
+                filtered.append(r)
+        rows = filtered
     return {
         "ok": True,
         "count": len(rows),
@@ -498,6 +574,7 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
             office_fax=existing.get("office_fax"),
             note=existing.get("note"),
             is_admin=1,
+            is_site_admin=0,
             is_active=1,
         )
         set_staff_user_password(int(existing["id"]), password)
@@ -509,6 +586,7 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
             role=role,
             password_hash=hash_password(password),
             is_admin=1,
+            is_site_admin=0,
             is_active=1,
         )
     if not user:
@@ -639,6 +717,7 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         note="자가가입(휴대폰 인증)",
         password_hash=hash_password(temp_password),
         is_admin=0,
+        is_site_admin=0,
         is_active=1,
     )
     touch_signup_phone_verification_attempt(int(row["id"]), success=True, issued_login_id=login_id)
@@ -717,7 +796,16 @@ def auth_change_password(request: Request, payload: Dict[str, Any] = Body(...)):
 @router.get("/user_roles")
 def api_user_roles(request: Request):
     _require_auth(request)
-    return {"ok": True, "roles": VALID_USER_ROLES, "recommended_staff_count": 9}
+    return {
+        "ok": True,
+        "roles": VALID_USER_ROLES,
+        "permission_levels": [
+            {"key": "admin", "label": "관리자"},
+            {"key": "site_admin", "label": "단지관리자"},
+            {"key": "user", "label": "사용자"},
+        ],
+        "recommended_staff_count": 9,
+    }
 
 
 @router.get("/users")
@@ -741,7 +829,7 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     office_fax = _normalize_phone(payload.get("office_fax"), required=False, field_name="office_fax")
     note = _clean_optional_text(payload.get("note"), 200)
     password = _clean_password(payload.get("password"), required=True)
-    is_admin = 1 if _clean_bool(payload.get("is_admin"), default=False) else 0
+    is_admin, is_site_admin, _permission_level = _resolve_permission_flags(payload, default_admin=False, default_site_admin=False)
     is_active = 1 if _clean_bool(payload.get("is_active"), default=True) else 0
     try:
         user = create_staff_user(
@@ -757,6 +845,7 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
             note=note,
             password_hash=hash_password(password),
             is_admin=is_admin,
+            is_site_admin=is_site_admin,
             is_active=is_active,
         )
     except Exception as e:
@@ -792,8 +881,10 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
     )
     note = _clean_optional_text(payload["note"] if "note" in payload else current.get("note"), 200)
 
-    is_admin = _clean_bool(payload["is_admin"], default=bool(current.get("is_admin"))) if "is_admin" in payload else bool(
-        current.get("is_admin")
+    is_admin, is_site_admin, _permission_level = _resolve_permission_flags(
+        payload,
+        default_admin=bool(current.get("is_admin")),
+        default_site_admin=bool(current.get("is_site_admin")),
     )
     is_active = (
         _clean_bool(payload["is_active"], default=bool(current.get("is_active")))
@@ -823,6 +914,7 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
             office_fax=office_fax,
             note=note,
             is_admin=1 if is_admin else 0,
+            is_site_admin=1 if is_site_admin else 0,
             is_active=1 if is_active else 0,
         )
     except Exception as e:

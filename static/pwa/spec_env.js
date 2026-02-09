@@ -22,6 +22,14 @@
   let activeSchema = {};
   const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnGoMain"];
 
+  function canManageSpecEnv(user) {
+    return !!(user && (user.is_admin || user.is_site_admin));
+  }
+
+  function isAdmin(user) {
+    return !!(user && user.is_admin);
+  }
+
   function setMsg(msg, isErr = false) {
     const el = $("#msg");
     if (!el) return;
@@ -820,10 +828,40 @@
     });
   }
 
+  function enforceSitePolicy() {
+    if (!me) return;
+    const siteInput = $("#siteName");
+    const codeInput = $("#siteCode");
+    if (!siteInput || !codeInput) return;
+    if (isAdmin(me)) {
+      siteInput.readOnly = false;
+      codeInput.readOnly = false;
+      siteInput.removeAttribute("aria-readonly");
+      codeInput.removeAttribute("aria-readonly");
+      siteInput.title = "";
+      codeInput.title = "";
+      return;
+    }
+
+    const assignedSite = String(me.site_name || "").trim();
+    if (!assignedSite) {
+      throw new Error("계정에 소속 단지가 지정되지 않았습니다. 관리자에게 문의하세요.");
+    }
+    setSiteName(assignedSite);
+    const assignedCode = String(me.site_code || "").trim().toUpperCase();
+    setSiteCode(assignedCode || "");
+    siteInput.readOnly = true;
+    codeInput.readOnly = true;
+    siteInput.setAttribute("aria-readonly", "true");
+    codeInput.setAttribute("aria-readonly", "true");
+    siteInput.title = "소속 단지는 관리자만 변경할 수 있습니다.";
+    codeInput.title = "소속 단지코드는 관리자만 변경할 수 있습니다.";
+  }
+
   async function init() {
     me = await KAAuth.requireAuth();
-    if (!me.is_admin) {
-      alert("관리자만 접근할 수 있습니다.");
+    if (!canManageSpecEnv(me)) {
+      alert("관리자/단지관리자만 접근할 수 있습니다.");
       window.location.href = "/pwa/";
       return;
     }
@@ -834,6 +872,7 @@
     const storedCode = (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
     setSiteName(qSite || stored || "미지정단지");
     setSiteCode(qCode || storedCode || "");
+    enforceSitePolicy();
 
     wire();
     await loadBaseSchema();
