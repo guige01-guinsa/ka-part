@@ -3,6 +3,7 @@
 
   const $ = (s) => document.querySelector(s);
   const SITE_KEY = "ka_current_site_name_v1";
+  const SITE_CODE_KEY = "ka_current_site_code_v1";
   const TAB_ORDER = [
     "home",
     "tr450",
@@ -92,6 +93,26 @@
     const v = (name || "").trim();
     $("#siteName").value = v;
     if (v) localStorage.setItem(SITE_KEY, v);
+  }
+
+  function getSiteCode() {
+    return ($("#siteCode").value || "").trim().toUpperCase();
+  }
+
+  function setSiteCode(code) {
+    const v = (code || "").trim().toUpperCase();
+    $("#siteCode").value = v;
+    if (v) localStorage.setItem(SITE_CODE_KEY, v);
+    else localStorage.removeItem(SITE_CODE_KEY);
+  }
+
+  function buildSiteQuery(siteName, siteCode) {
+    const qs = new URLSearchParams();
+    const site = String(siteName || "").trim();
+    const code = String(siteCode || "").trim().toUpperCase();
+    if (site) qs.set("site_name", site);
+    if (code) qs.set("site_code", code);
+    return qs.toString();
   }
 
   function getConfigFromEditor() {
@@ -294,6 +315,7 @@
     const schema = (data && data.schema) || {};
     const lines = [];
     lines.push(`site_name: ${data.site_name || getSiteName()}`);
+    lines.push(`site_code: ${data.site_code || getSiteCode() || "-"}`);
     lines.push(`tab_count: ${Object.keys(schema).length}`);
     for (const [tabKey, tabDef] of Object.entries(schema)) {
       const title = tabDef.title || tabKey;
@@ -624,7 +646,7 @@
     const next = mode === "replace" ? templateScoped : mergeConfigWithScope(current, templateScoped, scopeTabs);
     setConfigToEditor(next);
     const schemaPreview = applyConfigToSchema(baseSchema, next);
-    renderPreview({ site_name: getSiteName(), schema: schemaPreview });
+    renderPreview({ site_name: getSiteName(), site_code: getSiteCode(), schema: schemaPreview });
     markActionSuccess($("#btnTemplateApply"), "✓");
     setMsg("선택한 탭메뉴와 항목들을 불러왔습니다.이제 [저장]을 누르고 [메인으로]를 누르세요");
   }
@@ -659,21 +681,27 @@
     wrap.innerHTML = items
       .map(
         (x) =>
-          `<button class="btn site-item" type="button" data-site="${escapeHtmlAttr(x.site_name || "")}">${escapeHtml(
-            x.site_name || ""
-          )}</button> <span style="opacity:.75">${escapeHtml(x.updated_at || "")}</span>`
+          `<button class="btn site-item" type="button" data-site="${escapeHtmlAttr(x.site_name || "")}" data-code="${escapeHtmlAttr(
+            x.site_code || ""
+          )}">${escapeHtml(x.site_name || "")}${x.site_code ? ` <code>[${escapeHtml(x.site_code)}]</code>` : ""}</button> <span style="opacity:.75">${escapeHtml(
+            x.updated_at || ""
+          )}</span>`
       )
       .join("<br/>");
   }
 
   async function reloadConfig() {
     const site = getSiteName();
+    const siteCode = getSiteCode();
     if (!site) {
       setMsg("site_name을 입력하세요.", true);
       return;
     }
     localStorage.setItem(SITE_KEY, site);
-    const data = await jfetch(`/api/site_env?site_name=${encodeURIComponent(site)}`);
+    setSiteCode(siteCode);
+    const qs = buildSiteQuery(site, siteCode);
+    const data = await jfetch(`/api/site_env?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setConfigToEditor(data.config || {});
     setActiveSchema(data.schema || {});
     renderPreview(data);
@@ -683,6 +711,7 @@
 
   async function saveConfig() {
     const site = getSiteName();
+    const siteCode = getSiteCode();
     if (!site) {
       setMsg("site_name을 입력하세요.", true);
       return;
@@ -696,8 +725,9 @@
     }
     const data = await jfetch("/api/site_env", {
       method: "PUT",
-      body: JSON.stringify({ site_name: site, config: cfg }),
+      body: JSON.stringify({ site_name: site, site_code: siteCode || "", config: cfg }),
     });
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setConfigToEditor(data.config || {});
     setActiveSchema(data.schema || {});
     renderPreview(data);
@@ -708,30 +738,36 @@
 
   async function deleteConfig() {
     const site = getSiteName();
+    const siteCode = getSiteCode();
     if (!site) {
       setMsg("site_name을 입력하세요.", true);
       return;
     }
-    const ok = confirm(`${site} 단지의 제원설정을 삭제할까요?`);
+    const ok = confirm(`${site}${siteCode ? ` [${siteCode}]` : ""} 단지의 제원설정을 삭제할까요?`);
     if (!ok) return;
-    await jfetch(`/api/site_env?site_name=${encodeURIComponent(site)}`, { method: "DELETE" });
-    const data = await jfetch(`/api/schema?site_name=${encodeURIComponent(site)}`);
+    const qs = buildSiteQuery(site, siteCode);
+    await jfetch(`/api/site_env?${qs}`, { method: "DELETE" });
+    const data = await jfetch(`/api/schema?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setConfigToEditor((data && data.site_env_config) || {});
     setActiveSchema((data && data.schema) || {});
-    renderPreview({ site_name: site, schema: (data && data.schema) || {} });
+    renderPreview({ site_name: site, site_code: (data && data.site_code) || siteCode, schema: (data && data.schema) || {} });
     setMsg("삭제되었습니다.");
     await loadSiteList().catch(() => {});
   }
 
   async function previewSchema() {
     const site = getSiteName();
+    const siteCode = getSiteCode();
     if (!site) {
       setMsg("site_name을 입력하세요.", true);
       return;
     }
-    const data = await jfetch(`/api/schema?site_name=${encodeURIComponent(site)}`);
+    const qs = buildSiteQuery(site, siteCode);
+    const data = await jfetch(`/api/schema?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setActiveSchema(data.schema || {});
-    renderPreview({ site_name: site, schema: data.schema || {} });
+    renderPreview({ site_name: site, site_code: data.site_code || siteCode, schema: data.schema || {} });
     setMsg("미리보기를 갱신했습니다.");
   }
 
@@ -742,7 +778,9 @@
       markActionSuccess(btn, "↗");
       setMsg("메인으로 이동합니다.");
       const site = getSiteName();
-      const target = site ? `/pwa/?site_name=${encodeURIComponent(site)}` : "/pwa/";
+      const siteCode = getSiteCode();
+      const qs = buildSiteQuery(site, siteCode);
+      const target = qs ? `/pwa/?${qs}` : "/pwa/";
       window.setTimeout(() => {
         window.location.href = target;
       }, 240);
@@ -755,6 +793,9 @@
 
     $("#templateSelect").addEventListener("change", updateTemplateDescAndScope);
     $("#btnTemplateApply").addEventListener("click", applySelectedTemplate);
+    $("#siteCode")?.addEventListener("change", () => {
+      setSiteCode(getSiteCode());
+    });
     $("#btnTplAllOn").addEventListener("click", () => {
       setTemplateSelectionAll(true);
       syncTemplateFieldDisables();
@@ -771,8 +812,10 @@
       const btn = e.target.closest("button.site-item[data-site]");
       if (!btn) return;
       const site = String(btn.dataset.site || "").trim();
+      const code = String(btn.dataset.code || "").trim().toUpperCase();
       if (!site) return;
       setSiteName(site);
+      setSiteCode(code);
       reloadConfig().catch((err) => setMsg(err.message || String(err), true));
     });
   }
@@ -786,8 +829,11 @@
     }
     const u = new URL(window.location.href);
     const qSite = (u.searchParams.get("site_name") || "").trim();
+    const qCode = (u.searchParams.get("site_code") || "").trim().toUpperCase();
     const stored = (localStorage.getItem(SITE_KEY) || "").trim();
+    const storedCode = (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
     setSiteName(qSite || stored || "미지정단지");
+    setSiteCode(qCode || storedCode || "");
 
     wire();
     await loadBaseSchema();

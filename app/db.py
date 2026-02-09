@@ -92,6 +92,13 @@ def _to_text(v: Any) -> Optional[str]:
     return s if s else None
 
 
+def _clean_site_code_value(value: Any) -> str | None:
+    raw = str(value or "").strip().upper()
+    if not raw:
+        return None
+    return raw
+
+
 def dynamic_upsert(
     con: sqlite3.Connection,
     table: str,
@@ -271,6 +278,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "staff_users", "password_hash TEXT")
     _ensure_column(con, "staff_users", "is_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_admin IN (0,1))")
     _ensure_column(con, "staff_users", "last_login_at TEXT")
+    _ensure_column(con, "staff_users", "site_code TEXT")
     _ensure_column(con, "staff_users", "site_name TEXT")
     _ensure_column(con, "staff_users", "address TEXT")
     _ensure_column(con, "staff_users", "office_phone TEXT")
@@ -329,6 +337,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS site_env_configs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT,
           site_name TEXT NOT NULL UNIQUE,
           env_json TEXT NOT NULL,
           created_at TEXT NOT NULL,
@@ -336,10 +345,24 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "site_env_configs", "site_code TEXT")
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_site_env_configs_site
         ON site_env_configs(site_name);
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_site_env_configs_code
+        ON site_env_configs(site_code)
+        WHERE site_code IS NOT NULL AND site_code <> '';
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_site_env_configs_code
+        ON site_env_configs(site_code);
         """
     )
 
@@ -401,57 +424,119 @@ def ensure_site(name: str) -> int:
         con.close()
 
 
-def get_site_env_config(site_name: str) -> Dict[str, Any] | None:
+def get_site_env_record(site_name: str = "", site_code: str | None = None) -> Dict[str, Any] | None:
     con = _connect()
     try:
-        row = con.execute(
-            """
-            SELECT env_json
-            FROM site_env_configs
-            WHERE site_name=?
-            """,
-            (str(site_name or "").strip(),),
-        ).fetchone()
+        clean_site_name = str(site_name or "").strip()
+        clean_site_code = _clean_site_code_value(site_code)
+
+        row = None
+        if clean_site_code:
+            row = con.execute(
+                """
+                SELECT site_code, site_name, env_json, created_at, updated_at
+                FROM site_env_configs
+                WHERE site_code=?
+                """,
+                (clean_site_code,),
+            ).fetchone()
+        if row is None and clean_site_name:
+            row = con.execute(
+                """
+                SELECT site_code, site_name, env_json, created_at, updated_at
+                FROM site_env_configs
+                WHERE site_name=?
+                """,
+                (clean_site_name,),
+            ).fetchone()
         if not row:
             return None
-        raw = row["env_json"]
-        if raw is None:
-            return {}
+        out = dict(row)
+        raw = out.get("env_json")
         try:
-            data = json.loads(str(raw))
-            return data if isinstance(data, dict) else {}
+            data = json.loads(str(raw or "{}"))
+            out["config"] = data if isinstance(data, dict) else {}
         except Exception:
-            return {}
+            out["config"] = {}
+        return out
     finally:
         con.close()
 
 
-def upsert_site_env_config(site_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
+def get_site_env_config(site_name: str, site_code: str | None = None) -> Dict[str, Any] | None:
+    row = get_site_env_record(site_name, site_code=site_code)
+    if row is None:
+        return None
+    cfg = row.get("config")
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def upsert_site_env_config(site_name: str, config: Dict[str, Any], *, site_code: str | None = None) -> Dict[str, Any]:
     con = _connect()
     try:
         ts = now_iso()
         clean_site_name = str(site_name or "").strip()
+        clean_site_code = _clean_site_code_value(site_code)
         env_json = json.dumps(config if isinstance(config, dict) else {}, ensure_ascii=False, separators=(",", ":"))
-        con.execute(
-            """
-            INSERT INTO site_env_configs(site_name, env_json, created_at, updated_at)
-            VALUES(?,?,?,?)
-            ON CONFLICT(site_name) DO UPDATE SET
-              env_json=excluded.env_json,
-              updated_at=excluded.updated_at
-            """,
-            (clean_site_name, env_json, ts, ts),
-        )
+
+        target = None
+        if clean_site_code:
+            target = con.execute(
+                """
+                SELECT id FROM site_env_configs
+                WHERE site_code=?
+                LIMIT 1
+                """,
+                (clean_site_code,),
+            ).fetchone()
+        if target is None:
+            target = con.execute(
+                """
+                SELECT id FROM site_env_configs
+                WHERE site_name=?
+                LIMIT 1
+                """,
+                (clean_site_name,),
+            ).fetchone()
+
+        if target is None:
+            con.execute(
+                """
+                INSERT INTO site_env_configs(site_code, site_name, env_json, created_at, updated_at)
+                VALUES(?,?,?,?,?)
+                """,
+                (clean_site_code, clean_site_name, env_json, ts, ts),
+            )
+        else:
+            con.execute(
+                """
+                UPDATE site_env_configs
+                SET site_code=?, site_name=?, env_json=?, updated_at=?
+                WHERE id=?
+                """,
+                (clean_site_code, clean_site_name, env_json, ts, int(target["id"])),
+            )
+
         con.commit()
         row = con.execute(
             """
-            SELECT site_name, env_json, created_at, updated_at
+            SELECT site_code, site_name, env_json, created_at, updated_at
             FROM site_env_configs
             WHERE site_name=?
             """,
             (clean_site_name,),
         ).fetchone()
-        out = dict(row) if row else {"site_name": clean_site_name, "env_json": env_json, "created_at": ts, "updated_at": ts}
+        out = (
+            dict(row)
+            if row
+            else {
+                "site_code": clean_site_code,
+                "site_name": clean_site_name,
+                "env_json": env_json,
+                "created_at": ts,
+                "updated_at": ts,
+            }
+        )
         try:
             out["config"] = json.loads(str(out.get("env_json") or "{}"))
         except Exception:
@@ -461,10 +546,15 @@ def upsert_site_env_config(site_name: str, config: Dict[str, Any]) -> Dict[str, 
         con.close()
 
 
-def delete_site_env_config(site_name: str) -> bool:
+def delete_site_env_config(site_name: str = "", *, site_code: str | None = None) -> bool:
     con = _connect()
     try:
-        cur = con.execute("DELETE FROM site_env_configs WHERE site_name=?", (str(site_name or "").strip(),))
+        clean_site_code = _clean_site_code_value(site_code)
+        clean_site_name = str(site_name or "").strip()
+        if clean_site_code:
+            cur = con.execute("DELETE FROM site_env_configs WHERE site_code=?", (clean_site_code,))
+        else:
+            cur = con.execute("DELETE FROM site_env_configs WHERE site_name=?", (clean_site_name,))
         con.commit()
         return cur.rowcount > 0
     finally:
@@ -476,9 +566,9 @@ def list_site_env_configs() -> List[Dict[str, Any]]:
     try:
         rows = con.execute(
             """
-            SELECT site_name, env_json, created_at, updated_at
+            SELECT site_code, site_name, env_json, created_at, updated_at
             FROM site_env_configs
-            ORDER BY site_name ASC
+            ORDER BY COALESCE(site_code, ''), site_name ASC
             """
         ).fetchall()
         out: List[Dict[str, Any]] = []
@@ -750,26 +840,28 @@ def schema_alignment_report() -> Dict[str, Any]:
 
         site_env_rows = con.execute(
             """
-            SELECT site_name, env_json
+            SELECT site_code, site_name, env_json
             FROM site_env_configs
             ORDER BY site_name ASC
             """
         ).fetchall()
         for row in site_env_rows:
+            site_code = str(row["site_code"] or "").strip()
             site_name = str(row["site_name"] or "").strip() or "(empty-site-name)"
+            site_ref = f"{site_name}" if not site_code else f"{site_name}/{site_code}"
             raw_text = str(row["env_json"] or "").strip()
             try:
                 raw = json.loads(raw_text) if raw_text else {}
             except Exception:
-                issues.append(f"[site_env:{site_name}] env_json is not valid json")
+                issues.append(f"[site_env:{site_ref}] env_json is not valid json")
                 continue
             if not isinstance(raw, dict):
-                issues.append(f"[site_env:{site_name}] env_json root must be object")
+                issues.append(f"[site_env:{site_ref}] env_json root must be object")
                 continue
             normalized = normalize_site_env_config(raw)
             effective = build_effective_schema(base_schema=SCHEMA_DEFS, site_env_config=normalized)
             if not effective:
-                issues.append(f"[site_env:{site_name}] effective schema is empty")
+                issues.append(f"[site_env:{site_ref}] effective schema is empty")
 
         ok = len(issues) == 0
         return {"ok": ok, "issue_count": len(issues), "issues": issues}
@@ -781,7 +873,7 @@ def list_staff_users(*, active_only: bool = False) -> List[Dict[str, Any]]:
     con = _connect()
     try:
         sql = """
-            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
         """
         params: List[Any] = []
@@ -799,7 +891,7 @@ def get_staff_user(user_id: int) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -816,6 +908,7 @@ def create_staff_user(
     name: str,
     role: str,
     phone: Optional[str] = None,
+    site_code: Optional[str] = None,
     site_name: Optional[str] = None,
     address: Optional[str] = None,
     office_phone: Optional[str] = None,
@@ -828,18 +921,20 @@ def create_staff_user(
     con = _connect()
     try:
         ts = now_iso()
+        clean_site_code = _clean_site_code_value(site_code)
         con.execute(
             """
             INSERT INTO staff_users(
-              login_id, name, role, phone, site_name, address, office_phone, office_fax, note, password_hash, is_admin, is_active, created_at, updated_at
+              login_id, name, role, phone, site_code, site_name, address, office_phone, office_fax, note, password_hash, is_admin, is_active, created_at, updated_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 login_id,
                 name,
                 role,
                 phone,
+                clean_site_code,
                 site_name,
                 address,
                 office_phone,
@@ -855,7 +950,7 @@ def create_staff_user(
         con.commit()
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -873,6 +968,7 @@ def update_staff_user(
     name: str,
     role: str,
     phone: Optional[str] = None,
+    site_code: Optional[str] = None,
     site_name: Optional[str] = None,
     address: Optional[str] = None,
     office_phone: Optional[str] = None,
@@ -884,10 +980,11 @@ def update_staff_user(
     con = _connect()
     try:
         ts = now_iso()
+        clean_site_code = _clean_site_code_value(site_code)
         cur = con.execute(
             """
             UPDATE staff_users
-            SET login_id=?, name=?, role=?, phone=?, site_name=?, address=?, office_phone=?, office_fax=?, note=?, is_admin=?, is_active=?, updated_at=?
+            SET login_id=?, name=?, role=?, phone=?, site_code=?, site_name=?, address=?, office_phone=?, office_fax=?, note=?, is_admin=?, is_active=?, updated_at=?
             WHERE id=?
             """,
             (
@@ -895,6 +992,7 @@ def update_staff_user(
                 name,
                 role,
                 phone,
+                clean_site_code,
                 site_name,
                 address,
                 office_phone,
@@ -911,7 +1009,7 @@ def update_staff_user(
             return None
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -980,7 +1078,7 @@ def get_staff_user_by_login(login_id: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -1091,6 +1189,7 @@ def get_auth_user_by_token(token: str) -> Optional[Dict[str, Any]]:
               u.role,
               u.phone,
               u.note,
+              u.site_code,
               u.site_name,
               u.address,
               u.office_phone,
@@ -1138,7 +1237,7 @@ def get_staff_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_name, address, office_phone, office_fax, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE phone=?
             ORDER BY is_active DESC, id ASC

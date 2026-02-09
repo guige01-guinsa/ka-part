@@ -25,6 +25,7 @@
     $("#loginId").value = "";
     $("#userName").value = "";
     $("#userPhone").value = "";
+    $("#userSiteCode").value = "";
     $("#userSiteName").value = "";
     $("#userAddress").value = "";
     $("#userOfficePhone").value = "";
@@ -43,6 +44,7 @@
     $("#loginId").value = user.login_id || "";
     $("#userName").value = user.name || "";
     $("#userPhone").value = user.phone || "";
+    $("#userSiteCode").value = user.site_code || "";
     $("#userSiteName").value = user.site_name || "";
     $("#userAddress").value = user.address || "";
     $("#userOfficePhone").value = user.office_phone || "";
@@ -74,9 +76,9 @@
           <div>
             <div class="name">${escapeHtml(u.name || "")} <span class="login">(${escapeHtml(u.login_id || "")})</span> ${adminTag}</div>
             <div class="line2">${escapeHtml(u.role || "")} / ${escapeHtml(u.phone || "-")} / ${activeText}</div>
-            <div class="line2">${escapeHtml(u.site_name || "-")} / 관리소 ${escapeHtml(u.office_phone || "-")} / FAX ${escapeHtml(
-      u.office_fax || "-"
-    )}</div>
+            <div class="line2">${escapeHtml(u.site_name || "-")}${u.site_code ? ` <code>[${escapeHtml(u.site_code)}]</code>` : ""} / 관리소 ${escapeHtml(
+      u.office_phone || "-"
+    )} / FAX ${escapeHtml(u.office_fax || "-")}</div>
             <div class="line2">주소: ${escapeHtml(u.address || "-")}</div>
           </div>
           <div class="actions">
@@ -137,6 +139,7 @@
       name: ($("#userName").value || "").trim(),
       role: $("#userRole").value || "",
       phone: ($("#userPhone").value || "").trim(),
+      site_code: ($("#userSiteCode").value || "").trim().toUpperCase(),
       site_name: ($("#userSiteName").value || "").trim(),
       address: ($("#userAddress").value || "").trim(),
       office_phone: ($("#userOfficePhone").value || "").trim(),

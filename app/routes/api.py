@@ -25,6 +25,7 @@ from ..db import (
     get_auth_user_by_token,
     get_latest_signup_phone_verification,
     get_site_env_config,
+    get_site_env_record,
     get_staff_user_by_phone,
     get_staff_user,
     get_staff_user_by_login,
@@ -99,6 +100,19 @@ def _clean_site_name(value: Any, *, required: bool = False) -> str:
     if len(site_name) > 80:
         raise HTTPException(status_code=400, detail="site_name length must be <= 80")
     return site_name
+
+
+def _clean_site_code(value: Any, *, required: bool = False) -> str:
+    site_code = (str(value or "")).strip().upper()
+    if not site_code:
+        if required:
+            raise HTTPException(status_code=400, detail="site_code is required")
+        return ""
+    if len(site_code) > 32:
+        raise HTTPException(status_code=400, detail="site_code length must be <= 32")
+    if not re.match(r"^[A-Z0-9][A-Z0-9._-]{0,31}$", site_code):
+        raise HTTPException(status_code=400, detail="site_code must match ^[A-Z0-9][A-Z0-9._-]{0,31}$")
+    return site_code
 
 
 def _clean_password(value: Any, *, required: bool = True) -> str | None:
@@ -238,6 +252,7 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "name": user.get("name"),
         "role": user.get("role"),
         "phone": user.get("phone"),
+        "site_code": user.get("site_code"),
         "site_name": user.get("site_name"),
         "address": user.get("address"),
         "office_phone": user.get("office_phone"),
@@ -251,8 +266,8 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _site_schema_and_env(site_name: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
-    raw = get_site_env_config(site_name)
+def _site_schema_and_env(site_name: str, site_code: str = "") -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    raw = get_site_env_config(site_name, site_code=site_code or None)
     if raw is None:
         env_cfg = default_site_env_config()
     else:
@@ -260,6 +275,21 @@ def _site_schema_and_env(site_name: str) -> Tuple[Dict[str, Dict[str, Any]], Dic
     effective_cfg = merge_site_env_configs(default_site_env_config(), env_cfg)
     schema = build_effective_schema(base_schema=SCHEMA_DEFS, site_env_config=effective_cfg)
     return schema, env_cfg
+
+
+def _resolve_allowed_site_code(user: Dict[str, Any], requested_site_code: Any) -> str:
+    requested = _clean_site_code(requested_site_code, required=False)
+    if int(user.get("is_admin") or 0) == 1:
+        return requested
+
+    assigned = _clean_site_code(user.get("site_code"), required=False)
+    if assigned:
+        if requested and requested != assigned:
+            raise HTTPException(status_code=403, detail="소속 단지코드 데이터만 접근할 수 있습니다.")
+        return assigned
+    if requested:
+        raise HTTPException(status_code=403, detail="소속 단지코드(site_code)가 지정되지 않았습니다. 관리자에게 문의하세요.")
+    return ""
 
 
 def _schema_allowed_keys(schema: Dict[str, Dict[str, Any]]) -> Dict[str, set[str]]:
@@ -331,10 +361,16 @@ def health():
 
 
 @router.get("/schema")
-def api_schema(request: Request, site_name: str = Query(default="")):
-    _user, _token, clean_site_name = _require_site_access(request, site_name, required=False)
-    schema, env_cfg = _site_schema_and_env(clean_site_name)
-    return {"schema": schema, "site_name": clean_site_name, "site_env_config": env_cfg}
+def api_schema(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
+    user, _token, clean_site_name = _require_site_access(request, site_name, required=False)
+    clean_site_code = _resolve_allowed_site_code(user, site_code)
+    resolved_site_code = clean_site_code
+    if not resolved_site_code:
+        row = get_site_env_record(clean_site_name)
+        if row:
+            resolved_site_code = _clean_site_code(row.get("site_code"), required=False)
+    schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
+    return {"schema": schema, "site_name": clean_site_name, "site_code": resolved_site_code, "site_env_config": env_cfg}
 
 
 @router.get("/schema_alignment")
@@ -372,24 +408,30 @@ def api_base_schema(request: Request):
 
 
 @router.get("/site_env")
-def api_site_env(request: Request, site_name: str = Query(...)):
+def api_site_env(request: Request, site_name: str = Query(...), site_code: str = Query(default="")):
     _require_admin(request)
     clean_site_name = _clean_site_name(site_name, required=True)
-    schema, env_cfg = _site_schema_and_env(clean_site_name)
-    return {"ok": True, "site_name": clean_site_name, "config": env_cfg, "schema": schema}
+    clean_site_code = _clean_site_code(site_code, required=False)
+    row = get_site_env_record(clean_site_name, site_code=clean_site_code or None)
+    resolved_site_code = _clean_site_code((row or {}).get("site_code"), required=False) or clean_site_code
+    schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
+    return {"ok": True, "site_name": clean_site_name, "site_code": resolved_site_code, "config": env_cfg, "schema": schema}
 
 
 @router.put("/site_env")
 def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     _require_admin(request)
     clean_site_name = _clean_site_name(payload.get("site_name"), required=True)
+    clean_site_code = _clean_site_code(payload.get("site_code"), required=False)
     raw_cfg = payload.get("config", payload.get("env", payload if isinstance(payload, dict) else {}))
     cfg = normalize_site_env_config(raw_cfg if isinstance(raw_cfg, dict) else {})
-    row = upsert_site_env_config(clean_site_name, cfg)
-    schema, _env_cfg = _site_schema_and_env(clean_site_name)
+    row = upsert_site_env_config(clean_site_name, cfg, site_code=clean_site_code or None)
+    resolved_site_code = _clean_site_code(row.get("site_code"), required=False)
+    schema, _env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
     return {
         "ok": True,
         "site_name": clean_site_name,
+        "site_code": resolved_site_code,
         "config": cfg,
         "schema": schema,
         "updated_at": row.get("updated_at"),
@@ -397,11 +439,15 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
 
 
 @router.delete("/site_env")
-def api_site_env_delete(request: Request, site_name: str = Query(...)):
+def api_site_env_delete(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
     _require_admin(request)
-    clean_site_name = _clean_site_name(site_name, required=True)
-    ok = delete_site_env_config(clean_site_name)
-    return {"ok": ok, "site_name": clean_site_name}
+    raw_site_name = (str(site_name or "")).strip()
+    clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
+    clean_site_code = _clean_site_code(site_code, required=False)
+    if not clean_site_name and not clean_site_code:
+        raise HTTPException(status_code=400, detail="site_name or site_code is required")
+    ok = delete_site_env_config(clean_site_name, site_code=clean_site_code or None)
+    return {"ok": ok, "site_name": clean_site_name, "site_code": clean_site_code}
 
 
 @router.get("/site_env_list")
@@ -411,7 +457,14 @@ def api_site_env_list(request: Request):
     return {
         "ok": True,
         "count": len(rows),
-        "items": [{"site_name": r.get("site_name"), "updated_at": r.get("updated_at")} for r in rows],
+        "items": [
+            {
+                "site_name": r.get("site_name"),
+                "site_code": r.get("site_code"),
+                "updated_at": r.get("updated_at"),
+            }
+            for r in rows
+        ],
     }
 
 
@@ -438,6 +491,7 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
             name=name,
             role=role,
             phone=existing.get("phone"),
+            site_code=existing.get("site_code"),
             site_name=existing.get("site_name"),
             address=existing.get("address"),
             office_phone=existing.get("office_phone"),
@@ -475,6 +529,7 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
 def auth_signup_request_phone_verification(request: Request, payload: Dict[str, Any] = Body(...)):
     name = _clean_name(payload.get("name"))
     phone = _normalize_phone(payload.get("phone"), required=True, field_name="phone")
+    site_code = _clean_site_code(payload.get("site_code"), required=False)
     site_name = _clean_required_text(payload.get("site_name"), 80, "site_name")
     role = _clean_role(payload.get("role"))
     address = _clean_required_text(payload.get("address"), 200, "address")
@@ -487,6 +542,7 @@ def auth_signup_request_phone_verification(request: Request, payload: Dict[str, 
     profile = {
         "name": name,
         "phone": phone,
+        "site_code": site_code,
         "site_name": site_name,
         "role": role,
         "address": address,
@@ -562,6 +618,7 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
 
     name = _clean_name(profile.get("name"))
     role = _clean_role(profile.get("role"))
+    site_code = _clean_site_code(profile.get("site_code"), required=False)
     site_name = _clean_required_text(profile.get("site_name"), 80, "site_name")
     address = _clean_required_text(profile.get("address"), 200, "address")
     office_phone = _normalize_phone(profile.get("office_phone"), required=True, field_name="office_phone")
@@ -574,6 +631,7 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         name=name,
         role=role,
         phone=phone,
+        site_code=site_code,
         site_name=site_name,
         address=address,
         office_phone=office_phone,
@@ -676,6 +734,7 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     name = _clean_name(payload.get("name"))
     role = _clean_role(payload.get("role"))
     phone = _normalize_phone(payload.get("phone"), required=False, field_name="phone")
+    site_code = _clean_site_code(payload.get("site_code"), required=False)
     site_name = _clean_optional_text(payload.get("site_name"), 80)
     address = _clean_optional_text(payload.get("address"), 200)
     office_phone = _normalize_phone(payload.get("office_phone"), required=False, field_name="office_phone")
@@ -690,6 +749,7 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
             name=name,
             role=role,
             phone=phone,
+            site_code=site_code,
             site_name=site_name,
             address=address,
             office_phone=office_phone,
@@ -717,6 +777,7 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
     name = _clean_name(payload.get("name", current.get("name")))
     role = _clean_role(payload.get("role", current.get("role")))
     phone = _normalize_phone(payload["phone"] if "phone" in payload else current.get("phone"), required=False, field_name="phone")
+    site_code = _clean_site_code(payload["site_code"] if "site_code" in payload else current.get("site_code"), required=False)
     site_name = _clean_optional_text(payload["site_name"] if "site_name" in payload else current.get("site_name"), 80)
     address = _clean_optional_text(payload["address"] if "address" in payload else current.get("address"), 200)
     office_phone = _normalize_phone(
@@ -755,6 +816,7 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
             name=name,
             role=role,
             phone=phone,
+            site_code=site_code,
             site_name=site_name,
             address=address,
             office_phone=office_phone,

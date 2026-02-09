@@ -40,6 +40,7 @@
   const COMPACT_TABS = new Set(["tr450", "tr400", "meter", "facility_check"]);
   const HOME_DRAFT_KEY = "ka_home_draft_v2";
   const SITE_NAME_KEY = "ka_current_site_name_v1";
+  const SITE_CODE_KEY = "ka_current_site_code_v1";
   const DEFAULT_SITE_NAME = "미지정단지";
 
   let TABS = [];
@@ -83,6 +84,11 @@
     return String(authUser.site_name || "").trim();
   }
 
+  function assignedSiteCodeForUser() {
+    if (!authUser || authUser.is_admin) return "";
+    return String(authUser.site_code || "").trim().toUpperCase();
+  }
+
   function enforceSiteNamePolicy() {
     const el = $("#siteName");
     if (!el || !authUser) return;
@@ -111,6 +117,8 @@
     const btnSpec = $("#btnSpecEnv");
     if (btnSpec && !authUser.is_admin) btnSpec.style.display = "none";
     enforceSiteNamePolicy();
+    const assignedCode = assignedSiteCodeForUser();
+    if (assignedCode) setSiteCode(assignedCode);
   }
 
   function parseFilename(contentDisposition, fallback) {
@@ -166,6 +174,10 @@
     return (el && el.value ? el.value : "").trim();
   }
 
+  function getSiteCode() {
+    return (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
+  }
+
   function getHomeComplexName() {
     const el = document.getElementById("f-home-complex_name");
     return el ? String(el.value || "").trim() : "";
@@ -191,6 +203,22 @@
     return clean;
   }
 
+  function setSiteCode(code) {
+    const clean = (code || "").trim().toUpperCase();
+    if (clean) localStorage.setItem(SITE_CODE_KEY, clean);
+    else localStorage.removeItem(SITE_CODE_KEY);
+    return clean;
+  }
+
+  function buildSiteQuery(siteName, siteCode) {
+    const qs = new URLSearchParams();
+    const s = String(siteName || "").trim();
+    const c = String(siteCode || "").trim().toUpperCase();
+    if (s) qs.set("site_name", s);
+    if (c) qs.set("site_code", c);
+    return qs.toString();
+  }
+
   function resolveSiteName() {
     const assigned = assignedSiteNameForUser();
     if (assigned) return setSiteName(assigned);
@@ -200,6 +228,17 @@
     const stored = (localStorage.getItem(SITE_NAME_KEY) || "").trim();
     if (stored) return setSiteName(stored);
     return setSiteName(DEFAULT_SITE_NAME);
+  }
+
+  function resolveSiteCode() {
+    const assigned = assignedSiteCodeForUser();
+    if (assigned) return setSiteCode(assigned);
+    const u = new URL(window.location.href);
+    const q = (u.searchParams.get("site_code") || "").trim().toUpperCase();
+    if (q) return setSiteCode(q);
+    const stored = (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
+    if (stored) return setSiteCode(stored);
+    return setSiteCode("");
   }
 
   function getDateStart() {
@@ -692,8 +731,10 @@
         return;
       }
       const next = setSiteName(getSiteName());
+      setSiteCode("");
       const u = new URL(window.location.href);
       u.searchParams.set("site_name", next);
+      u.searchParams.delete("site_code");
       window.location.href = `${u.pathname}?${u.searchParams.toString()}`;
     });
 
@@ -717,11 +758,15 @@
     });
     $("#btnUsers")?.addEventListener("click", () => {
       const site = getSiteName();
-      window.location.href = `/pwa/users.html?site_name=${encodeURIComponent(site)}`;
+      const siteCode = getSiteCode();
+      const qs = buildSiteQuery(site, siteCode);
+      window.location.href = qs ? `/pwa/users.html?${qs}` : "/pwa/users.html";
     });
     $("#btnSpecEnv")?.addEventListener("click", () => {
       const site = getSiteName();
-      window.location.href = `/pwa/spec_env.html?site_name=${encodeURIComponent(site)}`;
+      const siteCode = getSiteCode();
+      const qs = buildSiteQuery(site, siteCode);
+      window.location.href = qs ? `/pwa/spec_env.html?${qs}` : "/pwa/spec_env.html";
     });
     $("#btnLogout")?.addEventListener("click", () => {
       const run = async () => {
@@ -747,9 +792,11 @@
   async function init() {
     await ensureAuth();
     const siteName = resolveSiteName();
-    const data = await jfetch(`/api/schema?site_name=${encodeURIComponent(siteName)}`);
+    const siteCode = resolveSiteCode();
+    const data = await jfetch(`/api/schema?${buildSiteQuery(siteName, siteCode)}`);
     const schema = data && data.schema ? data.schema : null;
     if (data && data.site_name) setSiteName(String(data.site_name));
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     if (!schema) throw new Error("스키마를 불러오지 못했습니다.");
     TABS = normalizeTabsFromSchema(schema);
     if (!TABS.length) throw new Error("스키마 탭이 비어있습니다.");
