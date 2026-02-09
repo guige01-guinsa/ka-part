@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from ..db import (
     cleanup_expired_sessions,
     count_staff_admins,
+    count_staff_users_for_site,
     create_signup_phone_verification,
     create_auth_session,
     create_staff_user,
@@ -38,8 +39,10 @@ from ..db import (
     mark_staff_user_login,
     revoke_all_user_sessions,
     revoke_auth_session,
+    resolve_or_create_site_code,
     save_tab_values,
     schema_alignment_report,
+    set_staff_user_site_code,
     set_staff_user_password,
     touch_signup_phone_verification_attempt,
     upsert_site_env_config,
@@ -282,6 +285,41 @@ def _resolve_permission_flags(payload: Dict[str, Any], *, default_admin: bool = 
     return (1 if is_admin else 0), (1 if is_site_admin else 0), level
 
 
+def _resolve_site_code_for_site(site_name: str, site_code: str = "") -> str:
+    try:
+        return resolve_or_create_site_code(site_name, preferred_code=(site_code or None))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"site_code resolve failed: {e}") from e
+
+
+def _bind_user_site_code_if_missing(user: Dict[str, Any]) -> Dict[str, Any]:
+    if not user:
+        return user
+    if int(user.get("is_admin") or 0) == 1:
+        return user
+    current_code = _clean_site_code(user.get("site_code"), required=False)
+    if current_code:
+        return user
+    site_name = str(user.get("site_name") or "").strip()
+    if not site_name:
+        return user
+
+    resolved = _resolve_site_code_for_site(site_name, "")
+    if not resolved:
+        return user
+    uid = int(user.get("id") or 0)
+    if uid > 0:
+        set_staff_user_site_code(uid, resolved)
+        fresh = get_staff_user(uid)
+        if fresh:
+            merged = dict(user)
+            merged.update(fresh)
+            return merged
+    return user
+
+
 def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     permission_level = _permission_level_from_user(user)
     return {
@@ -356,6 +394,7 @@ def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
     user = get_auth_user_by_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="invalid or expired session")
+    user = _bind_user_site_code_if_missing(user)
     return user, token
 
 
@@ -482,6 +521,7 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     else:
         clean_site_name = _resolve_allowed_site_name(user, payload.get("site_name"), required=False)
         clean_site_code = _resolve_allowed_site_code(user, payload.get("site_code"))
+    clean_site_code = _resolve_site_code_for_site(clean_site_name, clean_site_code)
     raw_cfg = payload.get("config", payload.get("env", payload if isinstance(payload, dict) else {}))
     cfg = normalize_site_env_config(raw_cfg if isinstance(raw_cfg, dict) else {})
     row = upsert_site_env_config(clean_site_name, cfg, site_code=clean_site_code or None)
@@ -678,6 +718,12 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
 
     existing = get_staff_user_by_phone(phone)
     if existing:
+        existing_site_name = _clean_required_text(existing.get("site_name"), 80, "site_name")
+        existing_site_code = _clean_site_code(existing.get("site_code"), required=False)
+        if not existing_site_code:
+            resolved_code = _resolve_site_code_for_site(existing_site_name, "")
+            set_staff_user_site_code(int(existing["id"]), resolved_code)
+            existing = get_staff_user(int(existing["id"])) or existing
         touch_signup_phone_verification_attempt(int(row["id"]), success=True, issued_login_id=str(existing.get("login_id") or ""))
         return {
             "ok": True,
@@ -702,6 +748,8 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
     office_phone = _normalize_phone(profile.get("office_phone"), required=True, field_name="office_phone")
     office_fax = _normalize_phone(profile.get("office_fax"), required=True, field_name="office_fax")
 
+    resolved_site_code = _resolve_site_code_for_site(site_name, site_code)
+    existing_site_user_count = count_staff_users_for_site(site_name, site_code=resolved_site_code)
     login_id = _generate_login_id_from_phone(phone)
     temp_password = _generate_temp_password(10)
     user = create_staff_user(
@@ -709,7 +757,7 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         name=name,
         role=role,
         phone=phone,
-        site_code=site_code,
+        site_code=resolved_site_code,
         site_name=site_name,
         address=address,
         office_phone=office_phone,
@@ -717,7 +765,7 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         note="자가가입(휴대폰 인증)",
         password_hash=hash_password(temp_password),
         is_admin=0,
-        is_site_admin=0,
+        is_site_admin=1 if existing_site_user_count == 0 else 0,
         is_active=1,
     )
     touch_signup_phone_verification_attempt(int(row["id"]), success=True, issued_login_id=login_id)
@@ -740,6 +788,7 @@ def auth_login(request: Request, payload: Dict[str, Any] = Body(...)):
     user = get_staff_user_by_login(login_id)
     if not user or int(user.get("is_active") or 0) != 1:
         raise HTTPException(status_code=401, detail="invalid credentials")
+    user = _bind_user_site_code_if_missing(user)
     password_hash = user.get("password_hash")
     if not password_hash:
         raise HTTPException(status_code=403, detail="password is not set for this account")
@@ -824,6 +873,8 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     phone = _normalize_phone(payload.get("phone"), required=False, field_name="phone")
     site_code = _clean_site_code(payload.get("site_code"), required=False)
     site_name = _clean_optional_text(payload.get("site_name"), 80)
+    if site_name:
+        site_code = _resolve_site_code_for_site(site_name, site_code)
     address = _clean_optional_text(payload.get("address"), 200)
     office_phone = _normalize_phone(payload.get("office_phone"), required=False, field_name="office_phone")
     office_fax = _normalize_phone(payload.get("office_fax"), required=False, field_name="office_fax")
@@ -868,6 +919,8 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
     phone = _normalize_phone(payload["phone"] if "phone" in payload else current.get("phone"), required=False, field_name="phone")
     site_code = _clean_site_code(payload["site_code"] if "site_code" in payload else current.get("site_code"), required=False)
     site_name = _clean_optional_text(payload["site_name"] if "site_name" in payload else current.get("site_name"), 80)
+    if site_name:
+        site_code = _resolve_site_code_for_site(site_name, site_code)
     address = _clean_optional_text(payload["address"] if "address" in payload else current.get("address"), 200)
     office_phone = _normalize_phone(
         payload["office_phone"] if "office_phone" in payload else current.get("office_phone"),

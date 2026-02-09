@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -97,6 +98,15 @@ def _clean_site_code_value(value: Any) -> str | None:
     if not raw:
         return None
     return raw
+
+
+def _require_site_name_value(site_name: Any) -> str:
+    clean = str(site_name or "").strip()
+    if not clean:
+        raise ValueError("site_name is required")
+    if len(clean) > 80:
+        raise ValueError("site_name length must be <= 80")
+    return clean
 
 
 def _normalize_staff_permission_flags(is_admin: Any, is_site_admin: Any) -> tuple[int, int]:
@@ -358,6 +368,29 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "site_env_configs", "site_code TEXT")
     con.execute(
         """
+        CREATE TABLE IF NOT EXISTS site_registry (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_name TEXT NOT NULL UNIQUE,
+          site_code TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_site_registry_name
+        ON site_registry(site_name);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_site_registry_code
+        ON site_registry(site_code);
+        """
+    )
+    con.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_site_env_configs_site
         ON site_env_configs(site_name);
         """
@@ -430,6 +463,211 @@ def ensure_site(name: str) -> int:
         con.commit()
         row2 = con.execute("SELECT id FROM sites WHERE name=?", (name,)).fetchone()
         return int(row2["id"])
+    finally:
+        con.close()
+
+
+def _used_site_codes(con: sqlite3.Connection) -> set[str]:
+    codes: set[str] = set()
+    queries = [
+        "SELECT site_code FROM site_registry WHERE site_code IS NOT NULL AND TRIM(site_code)<>''",
+        "SELECT site_code FROM site_env_configs WHERE site_code IS NOT NULL AND TRIM(site_code)<>''",
+        "SELECT site_code FROM staff_users WHERE site_code IS NOT NULL AND TRIM(site_code)<>''",
+    ]
+    for sql in queries:
+        for row in con.execute(sql).fetchall():
+            code = str(row["site_code"] or "").strip().upper()
+            if code:
+                codes.add(code)
+    return codes
+
+
+def _next_site_code(con: sqlite3.Connection) -> str:
+    used = _used_site_codes(con)
+    max_seq = 0
+    for code in used:
+        m = re.fullmatch(r"APT(\d{5})", code)
+        if not m:
+            continue
+        try:
+            max_seq = max(max_seq, int(m.group(1)))
+        except Exception:
+            continue
+    seq = max_seq + 1
+    while True:
+        candidate = f"APT{seq:05d}"
+        if candidate not in used:
+            return candidate
+        seq += 1
+
+
+def resolve_or_create_site_code(site_name: str, *, preferred_code: str | None = None) -> str:
+    clean_site_name = _require_site_name_value(site_name)
+    clean_preferred = _clean_site_code_value(preferred_code)
+
+    con = _connect()
+    try:
+        ts = now_iso()
+        by_name = con.execute(
+            """
+            SELECT id, site_name, site_code
+            FROM site_registry
+            WHERE site_name=?
+            LIMIT 1
+            """,
+            (clean_site_name,),
+        ).fetchone()
+        by_code = None
+        if clean_preferred:
+            by_code = con.execute(
+                """
+                SELECT id, site_name, site_code
+                FROM site_registry
+                WHERE site_code=?
+                LIMIT 1
+                """,
+                (clean_preferred,),
+            ).fetchone()
+
+        resolved_code = ""
+
+        if by_name:
+            resolved_code = str(by_name["site_code"] or "").strip().upper()
+            if clean_preferred and clean_preferred != resolved_code:
+                if by_code and int(by_code["id"]) != int(by_name["id"]):
+                    raise ValueError("site_code already mapped to another site_name")
+                con.execute(
+                    """
+                    UPDATE site_registry
+                    SET site_code=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (clean_preferred, ts, int(by_name["id"])),
+                )
+                resolved_code = clean_preferred
+        elif by_code:
+            mapped_name = str(by_code["site_name"] or "").strip()
+            if mapped_name and mapped_name != clean_site_name:
+                raise ValueError("site_code already mapped to another site_name")
+            if mapped_name != clean_site_name:
+                con.execute(
+                    """
+                    UPDATE site_registry
+                    SET site_name=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (clean_site_name, ts, int(by_code["id"])),
+                )
+            resolved_code = str(by_code["site_code"] or "").strip().upper()
+        else:
+            legacy = None
+            if clean_preferred:
+                legacy = clean_preferred
+            if not legacy:
+                row_env = con.execute(
+                    """
+                    SELECT site_code
+                    FROM site_env_configs
+                    WHERE site_name=? AND site_code IS NOT NULL AND TRIM(site_code)<>''
+                    ORDER BY updated_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (clean_site_name,),
+                ).fetchone()
+                if row_env:
+                    legacy = _clean_site_code_value(row_env["site_code"])
+            if not legacy:
+                row_user = con.execute(
+                    """
+                    SELECT site_code
+                    FROM staff_users
+                    WHERE site_name=? AND site_code IS NOT NULL AND TRIM(site_code)<>''
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    (clean_site_name,),
+                ).fetchone()
+                if row_user:
+                    legacy = _clean_site_code_value(row_user["site_code"])
+            resolved_code = legacy or _next_site_code(con)
+            con.execute(
+                """
+                INSERT INTO site_registry(site_name, site_code, created_at, updated_at)
+                VALUES(?,?,?,?)
+                """,
+                (clean_site_name, resolved_code, ts, ts),
+            )
+
+        if not resolved_code:
+            raise ValueError("failed to resolve site_code")
+
+        con.execute(
+            """
+            UPDATE staff_users
+            SET site_code=?, updated_at=?
+            WHERE site_name=? AND (site_code IS NULL OR TRIM(site_code)='')
+            """,
+            (resolved_code, ts, clean_site_name),
+        )
+        con.execute(
+            """
+            UPDATE site_env_configs
+            SET site_code=?, updated_at=?
+            WHERE site_name=? AND (site_code IS NULL OR TRIM(site_code)='')
+            """,
+            (resolved_code, ts, clean_site_name),
+        )
+        con.commit()
+        return resolved_code
+    finally:
+        con.close()
+
+
+def count_staff_users_for_site(site_name: str, *, site_code: str | None = None) -> int:
+    clean_site_name = _require_site_name_value(site_name)
+    clean_site_code = _clean_site_code_value(site_code)
+    con = _connect()
+    try:
+        if clean_site_code:
+            row = con.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM staff_users
+                WHERE site_name=? OR site_code=?
+                """,
+                (clean_site_name, clean_site_code),
+            ).fetchone()
+        else:
+            row = con.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM staff_users
+                WHERE site_name=?
+                """,
+                (clean_site_name,),
+            ).fetchone()
+        return int(row["c"] if row else 0)
+    finally:
+        con.close()
+
+
+def set_staff_user_site_code(user_id: int, site_code: str) -> bool:
+    clean_site_code = _clean_site_code_value(site_code)
+    if not clean_site_code:
+        return False
+    con = _connect()
+    try:
+        ts = now_iso()
+        cur = con.execute(
+            """
+            UPDATE staff_users
+            SET site_code=?, updated_at=?
+            WHERE id=?
+            """,
+            (clean_site_code, ts, int(user_id)),
+        )
+        con.commit()
+        return cur.rowcount > 0
     finally:
         con.close()
 
