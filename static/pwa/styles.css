@@ -140,11 +140,26 @@ body {
   padding: 8px 10px;
   font-size: 13px;
   font-weight: 800;
+  opacity: 0.78;
+  transition: opacity 140ms ease, transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.tabbtn:hover {
+  opacity: 0.95;
+}
+
+.tabbtn:not(.active) {
+  filter: saturate(0.78);
 }
 
 .tabbtn.active {
-  border-color: color-mix(in srgb, var(--primary) 75%, var(--line));
-  background: color-mix(in srgb, var(--primary) 24%, var(--bg-soft));
+  opacity: 1;
+  color: #ffffff;
+  border-color: color-mix(in srgb, var(--primary) 88%, white 12%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 48%, var(--bg-soft)) 0%, color-mix(in srgb, var(--primary) 26%, var(--bg-soft)) 100%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 64%, transparent), 0 6px 18px color-mix(in srgb, var(--primary) 44%, transparent);
+  transform: translateY(-1px);
+  text-shadow: 0 1px 0 color-mix(in srgb, black 42%, transparent);
 }
 
 .panels {

@@ -161,6 +161,28 @@
     return (el && el.value ? el.value : "").trim() || DEFAULT_SITE_NAME;
   }
 
+  function getSiteNameRaw() {
+    const el = $("#siteName");
+    return (el && el.value ? el.value : "").trim();
+  }
+
+  function getHomeComplexName() {
+    const el = document.getElementById("f-home-complex_name");
+    return el ? String(el.value || "").trim() : "";
+  }
+
+  function resolveSiteNameForSave() {
+    const currentSite = getSiteNameRaw();
+    if (currentSite) return currentSite;
+
+    const homeComplexName = getHomeComplexName();
+    if (homeComplexName) {
+      setSiteName(homeComplexName);
+      return homeComplexName;
+    }
+    return "";
+  }
+
   function setSiteName(name) {
     const clean = (name || "").trim() || DEFAULT_SITE_NAME;
     const el = $("#siteName");
@@ -401,12 +423,19 @@
     if (TABS.length) activateTab(TABS[0].key);
   }
 
-  function activateTab(tabKey) {
+  function activateTab(tabKey, announce = false) {
+    let activatedTitle = "";
     for (const b of document.querySelectorAll(".tabbtn")) {
-      b.classList.toggle("active", b.dataset.tab === tabKey);
+      const isActive = b.dataset.tab === tabKey;
+      b.classList.toggle("active", isActive);
+      b.setAttribute("aria-pressed", isActive ? "true" : "false");
+      if (isActive) activatedTitle = String(b.textContent || tabKey);
     }
     for (const p of document.querySelectorAll(".panel")) {
       p.classList.toggle("active", p.id === `panel-${tabKey}`);
+    }
+    if (announce && activatedTitle) {
+      toast(`탭 실행: ${activatedTitle}`);
     }
   }
 
@@ -588,13 +617,20 @@
   }
 
   async function doSave() {
+    const siteNameForSave = resolveSiteNameForSave();
+    if (!siteNameForSave) {
+      alert("홈에 있는 단지명이 없어 저장할 수 없습니다. 단지명을 입력해 주세요.");
+      toast("단지명 누락: 저장할 수 없습니다.");
+      return;
+    }
+
     const wc = countWarnings();
     if (wc > 0) {
       const ok = confirm(`허용범위를 벗어난 값이 ${wc}개 있습니다. 저장할까요?`);
       if (!ok) return;
     }
     const payload = {
-      site_name: getSiteName(),
+      site_name: siteNameForSave,
       date: getPickedDate(),
       tabs: collectAllTabs(),
     };
@@ -645,7 +681,7 @@
     $("#tabs")?.addEventListener("click", (e) => {
       const btn = e.target.closest(".tabbtn");
       if (!btn) return;
-      activateTab(btn.dataset.tab);
+      activateTab(btn.dataset.tab, true);
     });
 
     $("#siteName")?.addEventListener("change", () => {
