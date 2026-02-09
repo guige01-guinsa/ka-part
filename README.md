@@ -15,6 +15,22 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 메인: `http://localhost:8000/pwa/`
 - 로그인: `http://localhost:8000/pwa/login.html`
 
+## 주차관리 독립 서비스
+- 소스 경로: `services/parking`
+- 독립 포트: `127.0.0.1:8011`
+- 리버스프록시 경로: `/parking/*`
+- 진입 URL(프록시): `http://127.0.0.1:8080/parking/login`
+
+전체 스택 실행(메인 + 주차 + Caddy):
+```powershell
+pwsh -File ops\start_stack.ps1
+```
+
+전체 스택 중지:
+```powershell
+pwsh -File ops\stop_stack.ps1
+```
+
 ## 배포(Render)
 - Build: `pip install -r requirements.txt`
 - Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
@@ -65,3 +81,4 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 사용자/인증 운영: `docs/USERS.md`
 - 단지 제원 설정: `docs/SITE_ENV.md`
 - 시설관리 사용자 매뉴얼: `docs/USER_MANUAL_FACILITY_MANAGER_KO.md`
+- 주차 통합 운영: `docs/PARKING_INTEGRATION.md`

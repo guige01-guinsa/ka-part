@@ -4,3 +4,17 @@ __pycache__/
 data/
 *.db
 .DS_Store
+.venv/
+services/parking/.venv/
+services/parking/.env.production
+services/parking/app/data/
+services/parking/app/uploads/
+services/parking/app/__pycache__/
+services/parking/logs/
+ops/pids/
+ops/logs/
+tools/caddy/
+reportgen/*.sqlite3
+*.log
+*.zip
+incoming_zip/

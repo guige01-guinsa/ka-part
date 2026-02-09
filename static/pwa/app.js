@@ -804,6 +804,9 @@
       const qs = buildSiteQuery(site, siteCode);
       window.location.href = qs ? `/pwa/spec_env.html?${qs}` : "/pwa/spec_env.html";
     });
+    $("#btnParking")?.addEventListener("click", () => {
+      window.location.href = "/parking/login";
+    });
     $("#btnLogout")?.addEventListener("click", () => {
       const run = async () => {
         try {
