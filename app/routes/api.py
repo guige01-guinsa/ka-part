@@ -457,6 +457,21 @@ def _verify_first_site_registrant_for_spec_env(user: Dict[str, Any], site_name: 
     }
 
 
+def _is_first_site_registrant(user: Dict[str, Any], site_name: str, site_code: str = "") -> bool:
+    if int(user.get("is_admin") or 0) == 1:
+        return False
+    uid = int(user.get("id") or 0)
+    if uid <= 0:
+        return False
+
+    clean_site_name = _clean_site_name(site_name, required=True)
+    clean_site_code = _clean_site_code(site_code, required=False)
+    first_user = get_first_staff_user_for_site(clean_site_name, site_code=clean_site_code or None)
+    if not first_user:
+        return False
+    return int(first_user.get("id") or 0) == uid
+
+
 def _normalized_assigned_site_name(user: Dict[str, Any]) -> str:
     raw_site = (str(user.get("site_name") or "")).strip()
     if not raw_site:
@@ -501,6 +516,18 @@ def api_schema(request: Request, site_name: str = Query(default=""), site_code: 
         if row:
             resolved_site_code = _clean_site_code(row.get("site_code"), required=False)
     schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
+
+    # On first login for the first site registrant, show only the Home tab
+    # until the site env is explicitly saved.
+    if int(user.get("is_site_admin") or 0) == 1 and _is_first_site_registrant(user, clean_site_name, resolved_site_code):
+        row = get_site_env_record(clean_site_name, site_code=resolved_site_code or None)
+        if row is None:
+            env_cfg = _home_only_site_env_config()
+            schema = build_effective_schema(
+                base_schema=SCHEMA_DEFS,
+                site_env_config=merge_site_env_configs(default_site_env_config(), env_cfg),
+            )
+
     return {"schema": schema, "site_name": clean_site_name, "site_code": resolved_site_code, "site_env_config": env_cfg}
 
 
