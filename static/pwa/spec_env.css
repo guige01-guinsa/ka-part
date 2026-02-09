@@ -54,6 +54,8 @@ body {
   font-size: 13px;
   font-weight: 800;
   text-decoration: none;
+  position: relative;
+  transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease, background 150ms ease, color 150ms ease;
 }
 
 .btn.primary {
@@ -64,6 +66,42 @@ body {
 .btn.danger {
   border-color: color-mix(in srgb, var(--danger) 70%, var(--line));
   background: color-mix(in srgb, var(--danger) 22%, var(--bg-soft));
+}
+
+.btn.action-success {
+  color: #ffffff;
+  border-color: color-mix(in srgb, #23d17c 84%, var(--line));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, #23d17c 34%, var(--bg-soft)) 0%,
+    color-mix(in srgb, #23d17c 18%, var(--bg-soft)) 100%
+  );
+  box-shadow: 0 0 0 2px color-mix(in srgb, #23d17c 54%, transparent), 0 7px 20px color-mix(in srgb, #23d17c 38%, transparent);
+  transform: translateY(-1px) scale(1.04);
+}
+
+.btn.action-success::before {
+  content: attr(data-ok-icon);
+  display: inline-block;
+  margin-right: 6px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.btn.action-success-pulse {
+  animation: btnSuccessPulse 520ms ease-out;
+}
+
+@keyframes btnSuccessPulse {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  45% {
+    transform: translateY(-1px) scale(1.09);
+  }
+  100% {
+    transform: translateY(-1px) scale(1.04);
+  }
 }
 
 .main {

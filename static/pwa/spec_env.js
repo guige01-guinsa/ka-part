@@ -19,12 +19,38 @@
   let templates = [];
   let baseSchema = {};
   let activeSchema = {};
+  const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnGoMain"];
 
   function setMsg(msg, isErr = false) {
     const el = $("#msg");
     if (!el) return;
     el.textContent = msg || "";
     el.classList.toggle("err", !!isErr);
+  }
+
+  function clearActionSuccess(exceptButtonId = "") {
+    for (const id of ACTION_SUCCESS_BUTTON_IDS) {
+      if (exceptButtonId && id === exceptButtonId) continue;
+      const btn = document.getElementById(id);
+      if (!btn) continue;
+      btn.classList.remove("action-success", "action-success-pulse");
+      btn.removeAttribute("data-ok-icon");
+      btn.removeAttribute("aria-current");
+    }
+  }
+
+  function markActionSuccess(button, icon = "✓") {
+    if (!button) return;
+    const targetId = String(button.id || "");
+    clearActionSuccess(targetId);
+    button.classList.add("action-success");
+    button.setAttribute("data-ok-icon", icon);
+    button.setAttribute("aria-current", "true");
+    button.classList.remove("action-success-pulse");
+    void button.offsetWidth;
+    button.classList.add("action-success-pulse");
+    clearTimeout(button._actionPulseTimer);
+    button._actionPulseTimer = setTimeout(() => button.classList.remove("action-success-pulse"), 560);
   }
 
   function clone(v) {
@@ -599,7 +625,8 @@
     setConfigToEditor(next);
     const schemaPreview = applyConfigToSchema(baseSchema, next);
     renderPreview({ site_name: getSiteName(), schema: schemaPreview });
-    setMsg(`템플릿 '${t.name}'을 ${mode === "replace" ? "덮어쓰기" : "병합"} 적용했습니다. 확인 후 저장하세요.`);
+    markActionSuccess($("#btnTemplateApply"), "✓");
+    setMsg("선택한 탭메뉴와 항목들을 불러왔습니다.이제 [저장]을 누르고 [메인으로]를 누르세요");
   }
 
   async function loadTemplates() {
@@ -674,7 +701,8 @@
     setConfigToEditor(data.config || {});
     setActiveSchema(data.schema || {});
     renderPreview(data);
-    setMsg("저장되었습니다. 현재 사용 중 양식과 동기화되었습니다.");
+    markActionSuccess($("#btnSave"), "✓");
+    setMsg("저장이 완료되었습니다. 이제 [메인으로]를 눌러 이동하세요.");
     await loadSiteList().catch(() => {});
   }
 
@@ -708,6 +736,18 @@
   }
 
   function wire() {
+    $("#btnGoMain")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      const btn = e.currentTarget instanceof HTMLElement ? e.currentTarget : $("#btnGoMain");
+      markActionSuccess(btn, "↗");
+      setMsg("메인으로 이동합니다.");
+      const site = getSiteName();
+      const target = site ? `/pwa/?site_name=${encodeURIComponent(site)}` : "/pwa/";
+      window.setTimeout(() => {
+        window.location.href = target;
+      }, 240);
+    });
+
     $("#btnReload").addEventListener("click", () => reloadConfig().catch((e) => setMsg(e.message || String(e), true)));
     $("#btnSave").addEventListener("click", () => saveConfig().catch((e) => setMsg(e.message || String(e), true)));
     $("#btnDelete").addEventListener("click", () => deleteConfig().catch((e) => setMsg(e.message || String(e), true)));
