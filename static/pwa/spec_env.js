@@ -876,7 +876,12 @@
 
     wire();
     await loadBaseSchema();
-    await reloadConfig().catch((e) => setMsg(e.message || String(e), true));
+    try {
+      await reloadConfig();
+    } catch (e) {
+      setMsg(e.message || String(e), true);
+      return;
+    }
     await loadTemplates();
     await loadSiteList().catch(() => {});
   }

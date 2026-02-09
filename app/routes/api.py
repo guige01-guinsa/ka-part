@@ -27,6 +27,8 @@ from ..db import (
     get_latest_signup_phone_verification,
     get_site_env_config,
     get_site_env_record,
+    get_first_staff_user_for_site,
+    get_latest_home_complex_name,
     get_staff_user_by_phone,
     get_staff_user,
     get_staff_user_by_login,
@@ -54,6 +56,7 @@ from ..db import (
 )
 from ..schema_defs import (
     SCHEMA_DEFS,
+    SCHEMA_TAB_ORDER,
     build_effective_schema,
     default_site_env_config,
     merge_site_env_configs,
@@ -416,6 +419,44 @@ def _require_site_env_manager(request: Request) -> Tuple[Dict[str, Any], str]:
     return user, token
 
 
+def _home_only_site_env_config() -> Dict[str, Any]:
+    hide_tabs = [tab for tab in SCHEMA_TAB_ORDER if tab != "home"]
+    return normalize_site_env_config({"hide_tabs": hide_tabs, "tabs": {"home": {"title": "홈"}}})
+
+
+def _verify_first_site_registrant_for_spec_env(user: Dict[str, Any], site_name: str, site_code: str = "") -> Dict[str, Any]:
+    if int(user.get("is_admin") or 0) == 1:
+        return {"verified": True, "home_site_name": site_name, "first_user_id": None}
+
+    if int(user.get("is_site_admin") or 0) != 1:
+        raise HTTPException(status_code=403, detail="제원설정 권한이 없습니다.")
+
+    assigned_site_name = _normalized_assigned_site_name(user)
+    assigned_site_code = _clean_site_code(user.get("site_code"), required=False)
+    target_site_name = _clean_site_name(site_name or assigned_site_name, required=True)
+    target_site_code = _clean_site_code(site_code or assigned_site_code, required=False)
+
+    home_complex_name = _clean_site_name(get_latest_home_complex_name(target_site_name) or target_site_name, required=True)
+    if home_complex_name != assigned_site_name:
+        raise HTTPException(
+            status_code=403,
+            detail="홈 탭 단지명 재확인에 실패했습니다. 소속 단지와 홈 단지명이 일치할 때만 제원설정을 사용할 수 있습니다.",
+        )
+
+    first_user = get_first_staff_user_for_site(home_complex_name, site_code=target_site_code or assigned_site_code or None)
+    if not first_user:
+        raise HTTPException(status_code=403, detail="최초가입자 정보를 찾을 수 없습니다. 관리자에게 문의하세요.")
+    if int(first_user.get("id") or 0) != int(user.get("id") or 0):
+        raise HTTPException(status_code=403, detail="해당 단지의 최초가입자만 제원설정을 사용할 수 있습니다.")
+
+    return {
+        "verified": True,
+        "home_site_name": home_complex_name,
+        "first_user_id": int(first_user.get("id") or 0),
+        "first_login_id": str(first_user.get("login_id") or ""),
+    }
+
+
 def _normalized_assigned_site_name(user: Dict[str, Any]) -> str:
     raw_site = (str(user.get("site_name") or "")).strip()
     if not raw_site:
@@ -506,10 +547,25 @@ def api_site_env(request: Request, site_name: str = Query(default=""), site_code
     else:
         clean_site_name = _resolve_allowed_site_name(user, site_name, required=False)
         clean_site_code = _resolve_allowed_site_code(user, site_code)
+    verify = _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
+
     row = get_site_env_record(clean_site_name, site_code=clean_site_code or None)
     resolved_site_code = _clean_site_code((row or {}).get("site_code"), required=False) or clean_site_code
     schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
-    return {"ok": True, "site_name": clean_site_name, "site_code": resolved_site_code, "config": env_cfg, "schema": schema}
+    if row is None and int(user.get("is_site_admin") or 0) == 1 and int(user.get("is_admin") or 0) != 1:
+        env_cfg = _home_only_site_env_config()
+        schema = build_effective_schema(
+            base_schema=SCHEMA_DEFS,
+            site_env_config=merge_site_env_configs(default_site_env_config(), env_cfg),
+        )
+    return {
+        "ok": True,
+        "site_name": clean_site_name,
+        "site_code": resolved_site_code,
+        "config": env_cfg,
+        "schema": schema,
+        "spec_access": verify,
+    }
 
 
 @router.put("/site_env")
@@ -521,6 +577,7 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     else:
         clean_site_name = _resolve_allowed_site_name(user, payload.get("site_name"), required=False)
         clean_site_code = _resolve_allowed_site_code(user, payload.get("site_code"))
+    verify = _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
     clean_site_code = _resolve_site_code_for_site(clean_site_name, clean_site_code)
     raw_cfg = payload.get("config", payload.get("env", payload if isinstance(payload, dict) else {}))
     cfg = normalize_site_env_config(raw_cfg if isinstance(raw_cfg, dict) else {})
@@ -534,6 +591,7 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
         "config": cfg,
         "schema": schema,
         "updated_at": row.get("updated_at"),
+        "spec_access": verify,
     }
 
 
@@ -547,6 +605,7 @@ def api_site_env_delete(request: Request, site_name: str = Query(default=""), si
     else:
         clean_site_name = _resolve_allowed_site_name(user, site_name, required=False)
         clean_site_code = _resolve_allowed_site_code(user, site_code)
+    _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
     if not clean_site_name and not clean_site_code:
         raise HTTPException(status_code=400, detail="site_name or site_code is required")
     ok = delete_site_env_config(clean_site_name, site_code=clean_site_code or None)
@@ -560,6 +619,7 @@ def api_site_env_list(request: Request):
     if int(user.get("is_admin") or 0) != 1:
         assigned_name = _normalized_assigned_site_name(user)
         assigned_code = _clean_site_code(user.get("site_code"), required=False)
+        _verify_first_site_registrant_for_spec_env(user, assigned_name, assigned_code)
         filtered: List[Dict[str, Any]] = []
         for r in rows:
             row_code = _clean_site_code(r.get("site_code"), required=False)

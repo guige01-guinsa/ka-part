@@ -672,6 +672,65 @@ def set_staff_user_site_code(user_id: int, site_code: str) -> bool:
         con.close()
 
 
+def get_first_staff_user_for_site(site_name: str, *, site_code: str | None = None) -> Optional[Dict[str, Any]]:
+    clean_site_name = _require_site_name_value(site_name)
+    clean_site_code = _clean_site_code_value(site_code)
+    con = _connect()
+    try:
+        if clean_site_code:
+            row = con.execute(
+                """
+                SELECT id, login_id, name, site_name, site_code, created_at
+                FROM staff_users
+                WHERE site_name=? OR site_code=?
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+                """,
+                (clean_site_name, clean_site_code),
+            ).fetchone()
+        else:
+            row = con.execute(
+                """
+                SELECT id, login_id, name, site_name, site_code, created_at
+                FROM staff_users
+                WHERE site_name=?
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+                """,
+                (clean_site_name,),
+            ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
+def get_latest_home_complex_name(site_name: str) -> str | None:
+    clean_site_name = _require_site_name_value(site_name)
+    con = _connect()
+    try:
+        row = con.execute(
+            """
+            SELECT ev.value_text AS complex_name
+            FROM entries e
+            JOIN sites s ON s.id = e.site_id
+            JOIN entry_values ev ON ev.entry_id = e.id
+            WHERE s.name=?
+              AND ev.tab_key='home'
+              AND ev.field_key='complex_name'
+              AND TRIM(COALESCE(ev.value_text,''))<>''
+            ORDER BY e.entry_date DESC, e.id DESC, ev.id DESC
+            LIMIT 1
+            """,
+            (clean_site_name,),
+        ).fetchone()
+        if not row:
+            return None
+        val = str(row["complex_name"] or "").strip()
+        return val if val else None
+    finally:
+        con.close()
+
+
 def get_site_env_record(site_name: str = "", site_code: str | None = None) -> Dict[str, Any] | None:
     con = _connect()
     try:
