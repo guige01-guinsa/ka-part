@@ -32,6 +32,7 @@ SCHEMA_DEFS = {
     "home": {
         "title": "홈",
         "fields": [
+            {"k": "complex_code", "label": "단지코드(표시)", "type": "text", "placeholder": "예: APT00012", "readonly": True},
             {"k": "complex_name", "label": "단지명(표시)", "type": "text", "placeholder": "예: OO아파트"},
             {"k": "work_type", "label": "업무구분", "type": "select", "options": WORK_TYPES},
             {"k": "important_work", "label": "중요작업(요약)", "type": "textarea", "placeholder": "핵심 작업 요약"},

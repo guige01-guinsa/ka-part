@@ -197,6 +197,13 @@
     return el ? String(el.value || "").trim() : "";
   }
 
+  function syncHomeSiteCodeDisplay(code = null) {
+    const el = document.getElementById("f-home-complex_code");
+    if (!el) return;
+    const next = code === null ? getSiteCode() : String(code || "").trim().toUpperCase();
+    el.value = next;
+  }
+
   function resolveSiteNameForSave() {
     const currentSite = getSiteNameRaw();
     if (currentSite) return currentSite;
@@ -221,6 +228,7 @@
     const clean = (code || "").trim().toUpperCase();
     if (clean) localStorage.setItem(SITE_CODE_KEY, clean);
     else localStorage.removeItem(SITE_CODE_KEY);
+    syncHomeSiteCodeDisplay(clean);
     return clean;
   }
 
@@ -420,6 +428,14 @@
     }
 
     input.id = `f-${tabKey}-${field.k}`;
+    if (field.readonly) {
+      if (input instanceof HTMLSelectElement) {
+        input.disabled = true;
+      } else {
+        input.readOnly = true;
+        input.setAttribute("aria-readonly", "true");
+      }
+    }
     if (field.warn_min !== undefined) input.dataset.warnMin = String(field.warn_min);
     if (field.warn_max !== undefined) input.dataset.warnMax = String(field.warn_max);
     input.addEventListener("input", () => validateFieldValue(wrap, input));
@@ -513,6 +529,7 @@
         el.value = values[field.k] ?? "";
       }
     }
+    syncHomeSiteCodeDisplay();
   }
 
   function getActivePanel() {
@@ -564,6 +581,7 @@
       if (!home) return;
       const obj = {};
       for (const f of home.fields) {
+        if (f.readonly) continue;
         const el = document.getElementById(`f-home-${f.k}`);
         if (el) obj[f.k] = el.value ?? "";
       }
@@ -587,9 +605,11 @@
     const home = TABS.find((t) => t.key === "home");
     if (!home) return;
     for (const f of home.fields) {
+      if (f.readonly) continue;
       const el = document.getElementById(`f-home-${f.k}`);
       if (el && obj[f.k] !== undefined) el.value = obj[f.k];
     }
+    syncHomeSiteCodeDisplay();
   }
 
   function clearHomeDraft() {
@@ -599,9 +619,11 @@
     const home = TABS.find((t) => t.key === "home");
     if (!home) return;
     for (const f of home.fields) {
+      if (f.readonly) continue;
       const el = document.getElementById(`f-home-${f.k}`);
       if (el) el.value = "";
     }
+    syncHomeSiteCodeDisplay();
   }
 
   async function loadOne(site, date) {
@@ -815,6 +837,7 @@
     TABS = normalizeTabsFromSchema(schema);
     if (!TABS.length) throw new Error("스키마 탭이 비어있습니다.");
     render();
+    syncHomeSiteCodeDisplay();
     wire();
     syncStickyOffset();
     applyHomeDraft(loadHomeDraft());
