@@ -93,23 +93,29 @@ $deployId = ""
 
 if ($HookUrl) {
   $triggerResp = Trigger-WithHook $HookUrl
-  if ($triggerResp -and $triggerResp.deploy -and $triggerResp.deploy.id) {
-    $deployId = [string]$triggerResp.deploy.id
-  }
-  elseif ($triggerResp -and $triggerResp.id) {
-    $deployId = [string]$triggerResp.id
+  if ($triggerResp) {
+    $props = @{}
+    foreach ($p in $triggerResp.PSObject.Properties) {
+      $props[$p.Name] = $p.Value
+    }
+    if ($props.ContainsKey("deploy") -and $props["deploy"] -and $props["deploy"].PSObject.Properties["id"]) {
+      $deployId = [string]$props["deploy"].id
+    }
+    elseif ($props.ContainsKey("id") -and $props["id"]) {
+      $deployId = [string]$props["id"]
+    }
   }
 }
 else {
   $triggerResp = Trigger-WithApi $ServiceId $ApiKey
-  if ($triggerResp -and $triggerResp.id) {
+  if ($triggerResp -and $triggerResp.PSObject.Properties["id"]) {
     $deployId = [string]$triggerResp.id
   }
 }
 
 if ($deployId) { Write-Host "Deploy ID: $deployId" }
-if ($triggerResp -and $triggerResp.status) { Write-Host "Status: $($triggerResp.status)" }
-if ($triggerResp -and $triggerResp.createdAt) { Write-Host "Created: $($triggerResp.createdAt)" }
+if ($triggerResp -and $triggerResp.PSObject.Properties["status"]) { Write-Host "Status: $($triggerResp.status)" }
+if ($triggerResp -and $triggerResp.PSObject.Properties["createdAt"]) { Write-Host "Created: $($triggerResp.createdAt)" }
 
 if ($Wait) {
   Wait-Deploy -Svc $ServiceId -Token $ApiKey -DeployId $deployId -Timeout $TimeoutSec -Poll $PollSec
