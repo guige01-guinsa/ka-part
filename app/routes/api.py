@@ -84,14 +84,18 @@ PARKING_CONTEXT_SECRET = (
 )
 PARKING_CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
 PARKING_BASE_URL = (os.getenv("PARKING_BASE_URL") or "").strip()
-PARKING_SSO_PATH = (os.getenv("PARKING_SSO_PATH") or "/sso").strip()
-if not PARKING_SSO_PATH.startswith("/"):
-    PARKING_SSO_PATH = f"/{PARKING_SSO_PATH}"
 _embed_raw = os.getenv("ENABLE_PARKING_EMBED")
 if _embed_raw is None:
     PARKING_EMBED_ENABLED = (PARKING_BASE_URL == "")
 else:
     PARKING_EMBED_ENABLED = _embed_raw.strip().lower() not in ("0", "false", "no", "off")
+_raw_sso_path = (os.getenv("PARKING_SSO_PATH") or "").strip()
+if not _raw_sso_path:
+    # Default differs by runtime mode:
+    # - embedded parking in ka-part: /parking/sso
+    # - external parking_man gateway: /sso
+    _raw_sso_path = "/parking/sso" if (PARKING_EMBED_ENABLED and (not PARKING_BASE_URL)) else "/sso"
+PARKING_SSO_PATH = _raw_sso_path if _raw_sso_path.startswith("/") else f"/{_raw_sso_path}"
 _parking_ctx_ser = URLSafeTimedSerializer(PARKING_CONTEXT_SECRET, salt="parking-context")
 
 
