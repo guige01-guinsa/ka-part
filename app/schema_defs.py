@@ -15,10 +15,10 @@ SCHEMA_TAB_ORDER = [
     "home",
     "tr1",
     "tr2",
-    "lv3",
-    "lv4",
-    "lv5",
-    "lv6",
+    "tr3",
+    "tr4",
+    "tr5",
+    "tr6",
     "meter",
     "facility",
     "facility_check",
@@ -27,7 +27,7 @@ SCHEMA_TAB_ORDER = [
     "facility_telecom",
 ]
 
-DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "lv3", "lv4", "lv5", "lv6", "meter", "facility_check"]
+DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "meter", "facility_check"]
 DEFAULT_HIDDEN_TAB_KEYS = ["home", "facility", "facility_fire", "facility_mechanical", "facility_telecom"]
 
 FIELD_TYPE_SET = {"text", "number", "textarea", "select", "date"}
@@ -35,6 +35,10 @@ FIELD_TYPE_SET = {"text", "number", "textarea", "select", "date"}
 LEGACY_TAB_ALIASES: Dict[str, str] = {
     "tr450": "tr1",
     "tr400": "tr2",
+    "lv3": "tr3",
+    "lv4": "tr4",
+    "lv5": "tr5",
+    "lv6": "tr6",
 }
 
 
@@ -89,22 +93,22 @@ SCHEMA_DEFS = {
         "fields": _lv_fields("lv2"),
         "rows": _lv_rows("lv2"),
     },
-    "lv3": {
+    "tr3": {
         "title": "LV3",
         "fields": _lv_fields("lv3"),
         "rows": _lv_rows("lv3"),
     },
-    "lv4": {
+    "tr4": {
         "title": "LV4",
         "fields": _lv_fields("lv4"),
         "rows": _lv_rows("lv4"),
     },
-    "lv5": {
+    "tr5": {
         "title": "LV5",
         "fields": _lv_fields("lv5"),
         "rows": _lv_rows("lv5"),
     },
-    "lv6": {
+    "tr6": {
         "title": "LV6",
         "fields": _lv_fields("lv6"),
         "rows": _lv_rows("lv6"),
