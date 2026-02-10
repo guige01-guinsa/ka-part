@@ -67,6 +67,7 @@ curl.exe -I https://www.ka-part.com/parking/admin2
 4. `PARKING_SECRET_KEY=<강한 랜덤 문자열>`
 5. `PARKING_CONTEXT_SECRET=<강한 랜덤 문자열>`
 6. `PARKING_CONTEXT_MAX_AGE=300`
+7. `PARKING_PORTAL_LOGIN_URL=https://www.ka-part.com/pwa/login.html?next=%2Fparking%2Fadmin2`
 
 ### B. 외부 parking_man 게이트웨이 모드 (독립 운영)
 

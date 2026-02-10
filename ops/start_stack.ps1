@@ -87,6 +87,7 @@ if (-not (Test-Path $parkingEnv)) {
         "PARKING_ROOT_PATH=/parking"
         "PARKING_LOCAL_LOGIN_ENABLED=0"
         "PARKING_CONTEXT_SECRET=$(New-RandomBase64 -Bytes 48)"
+        "PARKING_PORTAL_LOGIN_URL=https://www.ka-part.com/pwa/login.html?next=%2Fparking%2Fadmin2"
     ) | Set-Content -Path $parkingEnv -Encoding UTF8
 }
 Set-EnvFromFile -Path $parkingEnv
@@ -100,6 +101,7 @@ if (-not $env:PARKING_LOCAL_LOGIN_ENABLED) { $env:PARKING_LOCAL_LOGIN_ENABLED = 
 if (-not $env:PARKING_API_KEY) { $env:PARKING_API_KEY = "change-me" }
 if (-not $env:PARKING_SECRET_KEY) { $env:PARKING_SECRET_KEY = "change-this-secret" }
 if (-not $env:PARKING_CONTEXT_SECRET) { $env:PARKING_CONTEXT_SECRET = $env:PARKING_SECRET_KEY }
+if (-not $env:PARKING_PORTAL_LOGIN_URL) { $env:PARKING_PORTAL_LOGIN_URL = "https://www.ka-part.com/pwa/login.html?next=%2Fparking%2Fadmin2" }
 $parkingBaseUrl = [string]($env:PARKING_BASE_URL)
 $embedRaw = [string]($env:ENABLE_PARKING_EMBED)
 if ([string]::IsNullOrWhiteSpace($embedRaw)) {

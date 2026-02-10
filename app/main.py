@@ -30,6 +30,9 @@ app.include_router(api_router, prefix="/api")
 # PWA static
 app.mount("/pwa", StaticFiles(directory="static/pwa", html=True), name="pwa")
 
+PARKING_PORTAL_URL = (os.getenv("PARKING_PORTAL_URL") or "").strip()
+PARKING_PORTAL_LOGIN_URL = (os.getenv("PARKING_PORTAL_LOGIN_URL") or "").strip()
+
 
 def _load_env_file_if_exists(path: Path) -> None:
     if not path.exists():
@@ -49,8 +52,26 @@ def _load_env_file_if_exists(path: Path) -> None:
             os.environ.setdefault(key, value)
 
 
+def _portal_login_url(next_path: str = "/parking/admin2") -> str:
+    nxt_enc = urllib.parse.quote(next_path, safe="")
+    portal_url = (os.getenv("PARKING_PORTAL_URL") or PARKING_PORTAL_URL or "").strip()
+    base = (os.getenv("PARKING_PORTAL_LOGIN_URL") or PARKING_PORTAL_LOGIN_URL or "").strip()
+    if not base:
+        if portal_url:
+            base = portal_url if "login.html" in portal_url else f"{portal_url.rstrip('/')}/login.html"
+        else:
+            base = "https://www.ka-part.com/pwa/login.html"
+    if "{next}" in base:
+        return base.replace("{next}", nxt_enc)
+    if "next=" in base:
+        return base
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}next={nxt_enc}"
+
+
 def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
     quoted_next = json.dumps(next_path)
+    quoted_login = json.dumps(_portal_login_url(next_path), ensure_ascii=False)
     return f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -65,7 +86,7 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
       const msgEl = document.getElementById("msg");
       const setMsg = (txt) => {{ if (msgEl) msgEl.textContent = txt; }};
       const nextPath = {quoted_next};
-      const loginUrl = "/pwa/login.html?next=" + encodeURIComponent(nextPath);
+      const loginUrl = {quoted_login};
       const LOOP_KEY = "ka_parking_entry_retry_v1";
       const readRetry = () => {{
         try {{

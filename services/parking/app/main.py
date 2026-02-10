@@ -27,6 +27,7 @@ LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lowe
 CONTEXT_SECRET = os.getenv("PARKING_CONTEXT_SECRET", os.getenv("PARKING_SECRET_KEY", "change-this-secret"))
 CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
 PORTAL_URL = (os.getenv("PARKING_PORTAL_URL") or "").strip()
+PORTAL_LOGIN_URL = (os.getenv("PARKING_PORTAL_LOGIN_URL") or "").strip()
 _ctx_ser = URLSafeTimedSerializer(CONTEXT_SECRET, salt="parking-context")
 UPLOAD_DIR = Path(os.getenv("PARKING_UPLOAD_DIR", str(Path(__file__).resolve().parent / "uploads")))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -45,10 +46,22 @@ def app_url(path: str) -> str:
 
 
 def portal_login_url(next_path: str | None = None) -> str:
-    if PORTAL_URL:
-        return PORTAL_URL
     nxt = app_url("/admin2") if not next_path else next_path
-    return f"/pwa/login.html?next={urllib.parse.quote(nxt, safe='')}"
+    nxt_enc = urllib.parse.quote(nxt, safe="")
+
+    base = PORTAL_LOGIN_URL
+    if not base:
+        if PORTAL_URL:
+            base = PORTAL_URL if "login.html" in PORTAL_URL else f"{PORTAL_URL.rstrip('/')}/login.html"
+        else:
+            base = "https://www.ka-part.com/pwa/login.html"
+
+    if "{next}" in base:
+        return base.replace("{next}", nxt_enc)
+    if "next=" in base:
+        return base
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}next={nxt_enc}"
 
 
 def integration_required_page(status_code: int = 200) -> HTMLResponse:
