@@ -83,6 +83,30 @@ def _auto_entry_page(next_path: str) -> str:
       const setMsg = (txt) => {{ if (msgEl) msgEl.textContent = txt; }};
       const nextPath = {quoted_next};
       const loginUrl = {quoted_login};
+      const LOOP_KEY = "ka_parking_entry_retry_v1";
+      const readRetry = () => {{
+        try {{
+          const raw = (sessionStorage.getItem(LOOP_KEY) || "0").trim();
+          const n = Number.parseInt(raw, 10);
+          return Number.isFinite(n) && n > 0 ? n : 0;
+        }} catch (_e) {{
+          return 0;
+        }}
+      }};
+      const bumpRetry = () => {{
+        try {{
+          sessionStorage.setItem(LOOP_KEY, String(readRetry() + 1));
+        }} catch (_e) {{
+          // ignore
+        }}
+      }};
+      const clearRetry = () => {{
+        try {{
+          sessionStorage.removeItem(LOOP_KEY);
+        }} catch (_e) {{
+          // ignore
+        }}
+      }};
       let token = "";
       try {{
         token = (localStorage.getItem("ka_part_auth_token_v1") || "").trim();
@@ -90,6 +114,11 @@ def _auto_entry_page(next_path: str) -> str:
         token = "";
       }}
       if (!token) {{
+        if (readRetry() >= 2) {{
+          setMsg("로그인이 필요합니다. 시설관리 로그인 후 다시 시도하세요.");
+          return;
+        }}
+        bumpRetry();
         window.location.replace(loginUrl);
         return;
       }}
@@ -101,6 +130,17 @@ def _auto_entry_page(next_path: str) -> str:
         const ct = res.headers.get("content-type") || "";
         const data = ct.includes("application/json") ? await res.json() : {{}};
         if (res.status === 401) {{
+          try {{
+            localStorage.removeItem("ka_part_auth_token_v1");
+            localStorage.removeItem("ka_part_auth_user_v1");
+          }} catch (_e) {{
+            // ignore
+          }}
+          if (readRetry() >= 2) {{
+            setMsg("세션이 만료되었습니다. 다시 로그인하세요.");
+            return;
+          }}
+          bumpRetry();
           window.location.replace(loginUrl);
           return;
         }}
@@ -108,6 +148,7 @@ def _auto_entry_page(next_path: str) -> str:
           const detail = data && data.detail ? String(data.detail) : ("HTTP " + String(res.status));
           throw new Error(detail);
         }}
+        clearRetry();
         window.location.replace((data && data.url) ? String(data.url) : nextPath);
       }} catch (e) {{
         setMsg("주차 연동 오류: " + String((e && e.message) || e));
