@@ -13,9 +13,11 @@ from typing import Any, Dict, List, Optional
 
 from .schema_defs import (
     LEGACY_FIELD_ALIASES,
+    LEGACY_TAB_ALIASES,
     SCHEMA_DEFS,
     TAB_STORAGE_SPECS,
     build_effective_schema,
+    canonical_tab_key,
     canonicalize_tab_fields,
     normalize_site_env_config,
     schema_field_keys,
@@ -434,6 +436,35 @@ def _rename_entry_value_key(con: sqlite3.Connection, tab_key: str, old_key: str,
     )
 
 
+def _rename_entry_tab_key(con: sqlite3.Connection, old_tab: str, new_tab: str) -> None:
+    con.execute(
+        """
+        DELETE FROM entry_values
+        WHERE tab_key=?
+          AND EXISTS (
+            SELECT 1 FROM entry_values ev2
+            WHERE ev2.entry_id=entry_values.entry_id
+              AND ev2.tab_key=?
+              AND ev2.field_key=entry_values.field_key
+          );
+        """,
+        (old_tab, new_tab),
+    )
+    con.execute(
+        """
+        UPDATE entry_values
+        SET tab_key=?
+        WHERE tab_key=?;
+        """,
+        (new_tab, old_tab),
+    )
+
+
+def migrate_legacy_tab_keys(con: sqlite3.Connection) -> None:
+    for old_tab, new_tab in LEGACY_TAB_ALIASES.items():
+        _rename_entry_tab_key(con, str(old_tab), str(new_tab))
+
+
 def migrate_legacy_entry_values(con: sqlite3.Connection) -> None:
     for tab_key, alias_map in LEGACY_FIELD_ALIASES.items():
         for old_key, new_key in alias_map.items():
@@ -446,6 +477,7 @@ def init_db() -> None:
         if SCHEMA_PATH.exists():
             con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         ensure_domain_tables(con)
+        migrate_legacy_tab_keys(con)
         migrate_legacy_entry_values(con)
         con.commit()
     finally:
@@ -962,7 +994,7 @@ def _load_entry_values_for_entry(
     ).fetchall()
     out: Dict[str, Dict[str, str]] = {}
     for r in rows:
-        tab_key = str(r["tab_key"])
+        tab_key = canonical_tab_key(str(r["tab_key"]))
         raw_key = str(r["field_key"])
         key = LEGACY_FIELD_ALIASES.get(tab_key, {}).get(raw_key, raw_key)
         if isinstance(allowed_keys_by_tab, dict):
@@ -1036,19 +1068,20 @@ def load_entry_by_id(entry_id: int, *, allowed_keys_by_tab: Optional[Dict[str, s
 
 
 def upsert_tab_domain_data(site_name: str, entry_date: str, tab_key: str, fields: Dict[str, Any]) -> bool:
-    spec = TAB_STORAGE_SPECS.get(tab_key)
+    canonical_key = canonical_tab_key(tab_key)
+    spec = TAB_STORAGE_SPECS.get(canonical_key)
     if not spec:
         return False
-    clean = canonicalize_tab_fields(tab_key, fields)
+    clean = canonicalize_tab_fields(canonical_key, fields)
     payload: Dict[str, Any] = {"site_name": site_name, "entry_date": entry_date}
     payload.update(dict(spec.get("fixed") or {}))
 
-    numeric_tabs = {"tr450", "tr400", "meter", "facility_check"}
+    numeric_tabs = {"tr1", "tr2", "meter", "facility_check"}
     for form_key, db_col in dict(spec.get("column_map") or {}).items():
         if form_key not in clean:
             continue
         raw_val = clean.get(form_key)
-        payload[db_col] = _to_float(raw_val) if tab_key in numeric_tabs else _to_text(raw_val)
+        payload[db_col] = _to_float(raw_val) if canonical_key in numeric_tabs else _to_text(raw_val)
 
     con = _connect()
     try:
@@ -1065,11 +1098,11 @@ def upsert_tab_domain_data(site_name: str, entry_date: str, tab_key: str, fields
 
 
 def upsert_transformer_450(site_name: str, entry_date: str, fields: Dict[str, Any]) -> None:
-    upsert_tab_domain_data(site_name, entry_date, "tr450", fields)
+    upsert_tab_domain_data(site_name, entry_date, "tr1", fields)
 
 
 def upsert_transformer_400(site_name: str, entry_date: str, fields: Dict[str, Any]) -> None:
-    upsert_tab_domain_data(site_name, entry_date, "tr400", fields)
+    upsert_tab_domain_data(site_name, entry_date, "tr2", fields)
 
 
 def upsert_power_meter(site_name: str, entry_date: str, fields: Dict[str, Any]) -> None:

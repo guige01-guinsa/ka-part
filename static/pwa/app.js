@@ -4,8 +4,12 @@
   const $ = (sel) => document.querySelector(sel);
   const PREFERRED_TAB_ORDER = [
     "home",
-    "tr450",
-    "tr400",
+    "tr1",
+    "tr2",
+    "lv3",
+    "lv4",
+    "lv5",
+    "lv6",
     "meter",
     "facility",
     "facility_check",
@@ -14,17 +18,41 @@
     "facility_telecom",
   ];
   const FALLBACK_ROWS = {
-    tr450: [
+    tr1: [
       ["lv1_L1_V", "lv1_L1_A", "lv1_L1_KW"],
       ["lv1_L2_V", "lv1_L2_A", "lv1_L2_KW"],
       ["lv1_L3_V", "lv1_L3_A", "lv1_L3_KW"],
       ["lv1_temp"],
     ],
-    tr400: [
+    tr2: [
       ["lv2_L1_V", "lv2_L1_A", "lv2_L1_KW"],
       ["lv2_L2_V", "lv2_L2_A", "lv2_L2_KW"],
       ["lv2_L3_V", "lv2_L3_A", "lv2_L3_KW"],
       ["lv2_temp"],
+    ],
+    lv3: [
+      ["lv3_L1_V", "lv3_L1_A", "lv3_L1_KW"],
+      ["lv3_L2_V", "lv3_L2_A", "lv3_L2_KW"],
+      ["lv3_L3_V", "lv3_L3_A", "lv3_L3_KW"],
+      ["lv3_temp"],
+    ],
+    lv4: [
+      ["lv4_L1_V", "lv4_L1_A", "lv4_L1_KW"],
+      ["lv4_L2_V", "lv4_L2_A", "lv4_L2_KW"],
+      ["lv4_L3_V", "lv4_L3_A", "lv4_L3_KW"],
+      ["lv4_temp"],
+    ],
+    lv5: [
+      ["lv5_L1_V", "lv5_L1_A", "lv5_L1_KW"],
+      ["lv5_L2_V", "lv5_L2_A", "lv5_L2_KW"],
+      ["lv5_L3_V", "lv5_L3_A", "lv5_L3_KW"],
+      ["lv5_temp"],
+    ],
+    lv6: [
+      ["lv6_L1_V", "lv6_L1_A", "lv6_L1_KW"],
+      ["lv6_L2_V", "lv6_L2_A", "lv6_L2_KW"],
+      ["lv6_L3_V", "lv6_L3_A", "lv6_L3_KW"],
+      ["lv6_temp"],
     ],
     meter: [
       ["AISS_L1_A", "AISS_L2_A", "AISS_L3_A"],
@@ -37,7 +65,7 @@
       ["office_pressure", "shop_pressure"],
     ],
   };
-  const COMPACT_TABS = new Set(["tr450", "tr400", "meter", "facility_check"]);
+  const COMPACT_TABS = new Set(["tr1", "tr2", "lv3", "lv4", "lv5", "lv6", "meter", "facility_check"]);
   const HOME_DRAFT_KEY = "ka_home_draft_v2";
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
@@ -327,7 +355,7 @@
   }
 
   function shortLabel(tabKey, field) {
-    if (tabKey === "tr450" || tabKey === "tr400") {
+    if (["tr1", "tr2", "lv3", "lv4", "lv5", "lv6"].includes(tabKey)) {
       const custom = String(field.label || "").trim();
       const normalized = custom.toLowerCase();
       const defaultLike = new Set(["v", "a", "kw", "온도", "온도(℃)", "온도(°c)"]);

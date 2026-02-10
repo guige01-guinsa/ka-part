@@ -13,8 +13,12 @@ SUBTASK_CRITICALITY = ["낮음", "중간", "높음", "긴급"]
 
 SCHEMA_TAB_ORDER = [
     "home",
-    "tr450",
-    "tr400",
+    "tr1",
+    "tr2",
+    "lv3",
+    "lv4",
+    "lv5",
+    "lv6",
     "meter",
     "facility",
     "facility_check",
@@ -23,10 +27,46 @@ SCHEMA_TAB_ORDER = [
     "facility_telecom",
 ]
 
-DEFAULT_PRIMARY_TAB_KEYS = ["tr450", "tr400", "meter", "facility_check"]
+DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "lv3", "lv4", "lv5", "lv6", "meter", "facility_check"]
 DEFAULT_HIDDEN_TAB_KEYS = ["home", "facility", "facility_fire", "facility_mechanical", "facility_telecom"]
 
 FIELD_TYPE_SET = {"text", "number", "textarea", "select", "date"}
+
+LEGACY_TAB_ALIASES: Dict[str, str] = {
+    "tr450": "tr1",
+    "tr400": "tr2",
+}
+
+
+def canonical_tab_key(value: Any) -> str:
+    raw = str(value or "").strip()
+    return LEGACY_TAB_ALIASES.get(raw, raw)
+
+
+def _lv_fields(prefix: str) -> List[Dict[str, Any]]:
+    p = str(prefix or "").strip()
+    return [
+        {"k": f"{p}_L1_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
+        {"k": f"{p}_L1_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
+        {"k": f"{p}_L1_KW", "label": "kW", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
+        {"k": f"{p}_L2_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
+        {"k": f"{p}_L2_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
+        {"k": f"{p}_L2_KW", "label": "kW", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
+        {"k": f"{p}_L3_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
+        {"k": f"{p}_L3_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
+        {"k": f"{p}_L3_KW", "label": "kW", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
+        {"k": f"{p}_temp", "label": "온도(℃)", "type": "number", "step": "0.01", "warn_min": -10, "warn_max": 120},
+    ]
+
+
+def _lv_rows(prefix: str) -> List[List[str]]:
+    p = str(prefix or "").strip()
+    return [
+        [f"{p}_L1_V", f"{p}_L1_A", f"{p}_L1_KW"],
+        [f"{p}_L2_V", f"{p}_L2_A", f"{p}_L2_KW"],
+        [f"{p}_L3_V", f"{p}_L3_A", f"{p}_L3_KW"],
+        [f"{p}_temp"],
+    ]
 
 SCHEMA_DEFS = {
     "home": {
@@ -39,47 +79,35 @@ SCHEMA_DEFS = {
             {"k": "note", "label": "비고", "type": "textarea", "placeholder": "특이사항"},
         ],
     },
-    "tr450": {
-        "title": "세대부분(LV1)",
-        "fields": [
-            {"k": "lv1_L1_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
-            {"k": "lv1_L1_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv1_L1_KW", "label": "kW", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv1_L2_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
-            {"k": "lv1_L2_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv1_L2_KW", "label": "kW", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv1_L3_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
-            {"k": "lv1_L3_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv1_L3_KW", "label": "kW", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv1_temp", "label": "온도(℃)", "type": "number", "step": "0.01", "warn_min": -10, "warn_max": 120},
-        ],
-        "rows": [
-            ["lv1_L1_V", "lv1_L1_A", "lv1_L1_KW"],
-            ["lv1_L2_V", "lv1_L2_A", "lv1_L2_KW"],
-            ["lv1_L3_V", "lv1_L3_A", "lv1_L3_KW"],
-            ["lv1_temp"],
-        ],
+    "tr1": {
+        "title": "LV1",
+        "fields": _lv_fields("lv1"),
+        "rows": _lv_rows("lv1"),
     },
-    "tr400": {
-        "title": "공용부(LV2)",
-        "fields": [
-            {"k": "lv2_L1_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
-            {"k": "lv2_L1_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv2_L1_KW", "label": "kW", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv2_L2_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
-            {"k": "lv2_L2_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv2_L2_KW", "label": "kW", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv2_L3_V", "label": "V", "type": "number", "step": "0.01", "warn_min": 180, "warn_max": 260},
-            {"k": "lv2_L3_A", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv2_L3_KW", "label": "kW", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
-            {"k": "lv2_temp", "label": "온도(℃)", "type": "number", "step": "0.01", "warn_min": -10, "warn_max": 120},
-        ],
-        "rows": [
-            ["lv2_L1_V", "lv2_L1_A", "lv2_L1_KW"],
-            ["lv2_L2_V", "lv2_L2_A", "lv2_L2_KW"],
-            ["lv2_L3_V", "lv2_L3_A", "lv2_L3_KW"],
-            ["lv2_temp"],
-        ],
+    "tr2": {
+        "title": "LV2",
+        "fields": _lv_fields("lv2"),
+        "rows": _lv_rows("lv2"),
+    },
+    "lv3": {
+        "title": "LV3",
+        "fields": _lv_fields("lv3"),
+        "rows": _lv_rows("lv3"),
+    },
+    "lv4": {
+        "title": "LV4",
+        "fields": _lv_fields("lv4"),
+        "rows": _lv_rows("lv4"),
+    },
+    "lv5": {
+        "title": "LV5",
+        "fields": _lv_fields("lv5"),
+        "rows": _lv_rows("lv5"),
+    },
+    "lv6": {
+        "title": "LV6",
+        "fields": _lv_fields("lv6"),
+        "rows": _lv_rows("lv6"),
     },
     "meter": {
         "title": "전력량계",
@@ -178,10 +206,10 @@ DEFAULT_SITE_ENV_CONFIG: Dict[str, Any] = {
 SITE_ENV_TEMPLATE: Dict[str, Any] = {
     "hide_tabs": [],
     "tabs": {
-        "tr450": {
-            "title": "세대부분(LV1)",
+        "tr1": {
+            "title": "LV1",
             "hide_fields": [],
-            "field_labels": {"lv1_temp": "TR450 온도(℃)"},
+            "field_labels": {"lv1_temp": "LV1 온도(℃)"},
             "field_overrides": {"lv1_temp": {"warn_max": 110}},
             "add_fields": [
                 {
@@ -215,8 +243,8 @@ SITE_ENV_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "config": {
             "hide_tabs": ["facility_telecom"],
             "tabs": {
-                "tr450": {"title": "세대부분(LV1)", "hide_fields": []},
-                "tr400": {"title": "공용부(LV2)", "hide_fields": []},
+                "tr1": {"title": "LV1", "hide_fields": []},
+                "tr2": {"title": "LV2", "hide_fields": []},
                 "meter": {"title": "전력량계"},
             },
         },
@@ -264,7 +292,7 @@ LEGACY_FIELD_ALIASES: Dict[str, Dict[str, str]] = {
 }
 
 TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
-    "tr450": {
+    "tr1": {
         "table": "transformer_450_reads",
         "key_cols": ["site_name", "entry_date"],
         "column_map": {
@@ -280,7 +308,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
             "lv1_temp": "lv1_temp",
         },
     },
-    "tr400": {
+    "tr2": {
         "table": "transformer_400_reads",
         "key_cols": ["site_name", "entry_date"],
         "column_map": {
@@ -366,7 +394,8 @@ def _schema_source(schema_defs: Dict[str, Dict[str, Any]] | None = None) -> Dict
 
 
 def schema_fields(tab_key: str, schema_defs: Dict[str, Dict[str, Any]] | None = None) -> List[Dict[str, Any]]:
-    return list((_schema_source(schema_defs).get(tab_key) or {}).get("fields") or [])
+    key = canonical_tab_key(tab_key)
+    return list((_schema_source(schema_defs).get(key) or {}).get("fields") or [])
 
 
 def schema_field_keys(tab_key: str, schema_defs: Dict[str, Dict[str, Any]] | None = None) -> List[str]:
@@ -380,13 +409,14 @@ def canonicalize_tab_fields(
 ) -> Dict[str, Any]:
     if not isinstance(values, dict):
         return {}
-    aliases = LEGACY_FIELD_ALIASES.get(tab_key, {})
-    allowed = set(schema_field_keys(tab_key, schema_defs=schema_defs))
+    canonical_key = canonical_tab_key(tab_key)
+    aliases = LEGACY_FIELD_ALIASES.get(canonical_key, {})
+    allowed = set(schema_field_keys(canonical_key, schema_defs=schema_defs))
     out: Dict[str, Any] = {}
     for raw_key, raw_val in values.items():
-        key = aliases.get(str(raw_key), str(raw_key))
-        if key in allowed:
-            out[key] = raw_val
+        field_key = aliases.get(str(raw_key), str(raw_key))
+        if field_key in allowed:
+            out[field_key] = raw_val
     return out
 
 
@@ -399,7 +429,7 @@ def normalize_tabs_payload(
     source = _schema_source(schema_defs)
     out: Dict[str, Dict[str, Any]] = {}
     for tab_key, tab_values in tabs.items():
-        key = str(tab_key)
+        key = canonical_tab_key(tab_key)
         if key not in source:
             continue
         out[key] = canonicalize_tab_fields(
@@ -446,7 +476,7 @@ def normalize_site_env_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
         hide_tabs = []
         seen = set()
         for x in raw_hide_tabs:
-            k = str(x or "").strip()
+            k = canonical_tab_key(x)
             if not k or k in seen:
                 continue
             hide_tabs.append(k)
@@ -458,7 +488,7 @@ def normalize_site_env_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
     if isinstance(raw_tabs, dict):
         clean_tabs: Dict[str, Dict[str, Any]] = {}
         for raw_tab_key, raw_tab_cfg in raw_tabs.items():
-            tab_key = str(raw_tab_key or "").strip()
+            tab_key = canonical_tab_key(raw_tab_key)
             if not tab_key or not isinstance(raw_tab_cfg, dict):
                 continue
             tab_cfg: Dict[str, Any] = {}
@@ -532,6 +562,35 @@ def normalize_site_env_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
                     tab_cfg["rows"] = rows
 
             if tab_cfg:
+                prior = clean_tabs.get(tab_key)
+                if isinstance(prior, dict):
+                    merged_tab = copy.deepcopy(prior)
+                    merged_tab.update(tab_cfg)
+                    if "hide_fields" in prior or "hide_fields" in tab_cfg:
+                        h_prev = [str(x or "").strip() for x in (prior.get("hide_fields") or []) if str(x or "").strip()]
+                        h_new = [str(x or "").strip() for x in (tab_cfg.get("hide_fields") or []) if str(x or "").strip()]
+                        merged_tab["hide_fields"] = list(dict.fromkeys([*h_prev, *h_new]))
+                    if "field_labels" in prior or "field_labels" in tab_cfg:
+                        merged_tab["field_labels"] = {**(prior.get("field_labels") or {}), **(tab_cfg.get("field_labels") or {})}
+                    if "field_overrides" in prior or "field_overrides" in tab_cfg:
+                        overs = copy.deepcopy(prior.get("field_overrides") or {})
+                        for fk, ov in (tab_cfg.get("field_overrides") or {}).items():
+                            prev_ov = dict(overs.get(fk) or {})
+                            if isinstance(ov, dict):
+                                prev_ov.update(ov)
+                            if prev_ov:
+                                overs[fk] = prev_ov
+                        if overs:
+                            merged_tab["field_overrides"] = overs
+                    if "add_fields" in prior or "add_fields" in tab_cfg:
+                        by_key: Dict[str, Dict[str, Any]] = {}
+                        for f in [*(prior.get("add_fields") or []), *(tab_cfg.get("add_fields") or [])]:
+                            fk = str((f or {}).get("k") or "").strip()
+                            if fk:
+                                by_key[fk] = f
+                        if by_key:
+                            merged_tab["add_fields"] = list(by_key.values())
+                    tab_cfg = merged_tab
                 clean_tabs[tab_key] = tab_cfg
 
         if clean_tabs:

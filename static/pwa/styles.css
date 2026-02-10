@@ -297,7 +297,7 @@ body {
     grid-template-columns: 2fr 1fr 1fr;
   }
 
-  .panel:not(#panel-tr450):not(#panel-tr400):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="3"] {
+  .panel:not(#panel-tr1):not(#panel-tr2):not(#panel-lv3):not(#panel-lv4):not(#panel-lv5):not(#panel-lv6):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="3"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -326,8 +326,8 @@ body {
     font-size: 12px;
   }
 
-  .panel:not(#panel-tr450):not(#panel-tr400):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="2"],
-  .panel:not(#panel-tr450):not(#panel-tr400):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="3"] {
+  .panel:not(#panel-tr1):not(#panel-tr2):not(#panel-lv3):not(#panel-lv4):not(#panel-lv5):not(#panel-lv6):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="2"],
+  .panel:not(#panel-tr1):not(#panel-tr2):not(#panel-lv3):not(#panel-lv4):not(#panel-lv5):not(#panel-lv6):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="3"] {
     grid-template-columns: 1fr;
   }
 }

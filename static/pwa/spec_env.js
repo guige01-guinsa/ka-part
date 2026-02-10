@@ -6,8 +6,12 @@
   const SITE_CODE_KEY = "ka_current_site_code_v1";
   const TAB_ORDER = [
     "home",
-    "tr450",
-    "tr400",
+    "tr1",
+    "tr2",
+    "lv3",
+    "lv4",
+    "lv5",
+    "lv6",
     "meter",
     "facility",
     "facility_check",
