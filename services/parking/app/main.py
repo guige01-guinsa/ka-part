@@ -25,7 +25,11 @@ if ROOT_PATH and not ROOT_PATH.startswith("/"):
 ROOT_PATH = ROOT_PATH.rstrip("/")
 DEFAULT_SITE_CODE = normalize_site_code(os.getenv("PARKING_DEFAULT_SITE_CODE", "COMMON"))
 LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
-CONTEXT_SECRET = os.getenv("PARKING_CONTEXT_SECRET", os.getenv("PARKING_SECRET_KEY", "change-this-secret"))
+CONTEXT_SECRET = (
+    os.getenv("PARKING_CONTEXT_SECRET")
+    or os.getenv("PARKING_SECRET_KEY")
+    or os.getenv("KA_PHONE_VERIFY_SECRET", "ka-part-dev-secret")
+)
 CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
 PORTAL_URL = (os.getenv("PARKING_PORTAL_URL") or "").strip()
 PORTAL_LOGIN_URL = (os.getenv("PARKING_PORTAL_LOGIN_URL") or "").strip()

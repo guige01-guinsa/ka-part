@@ -232,7 +232,7 @@ def _mount_parking_if_enabled() -> None:
     parking_base_url = (os.getenv("PARKING_BASE_URL") or "").strip()
     embed_raw = os.getenv("ENABLE_PARKING_EMBED")
     if embed_raw is None:
-        enabled = (parking_base_url == "")
+        enabled = True
     else:
         enabled = embed_raw.strip().lower() not in ("0", "false", "no", "off")
     if not enabled:
