@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import urllib.parse
 from datetime import date
 from pathlib import Path
 import uuid
@@ -43,18 +44,30 @@ def app_url(path: str) -> str:
     return path
 
 
+def portal_login_url(next_path: str | None = None) -> str:
+    if PORTAL_URL:
+        return PORTAL_URL
+    nxt = app_url("/admin2") if not next_path else next_path
+    return f"/pwa/login.html?next={urllib.parse.quote(nxt, safe='')}"
+
+
 def integration_required_page(status_code: int = 200) -> HTMLResponse:
+    target = portal_login_url(app_url("/admin2"))
+    target_js = json.dumps(target, ensure_ascii=False)
     link = (
-        f"""<p><a href="{_html.escape(PORTAL_URL)}">아파트 시설관리 시스템으로 이동</a></p>"""
-        if PORTAL_URL
-        else "<p>아파트 시설관리 시스템의 '주차관리' 메뉴를 통해 접속하세요.</p>"
+        f"""<p><a href="{_html.escape(target)}">아파트 시설관리 시스템으로 이동</a></p>"""
     )
-    body = f"<h2>Parking Login</h2><p>통합 로그인 전용입니다.</p>{link}"
+    body = (
+        "<h2>Parking Login</h2><p>통합 로그인 전용입니다.</p>"
+        f"{link}<script>window.location.replace({target_js});</script>"
+    )
     return HTMLResponse(body, status_code=status_code)
 
 
 def _auto_entry_page(next_path: str) -> str:
     quoted_next = json.dumps(next_path)
+    login_url = portal_login_url(next_path)
+    quoted_login = json.dumps(login_url, ensure_ascii=False)
     return f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -69,7 +82,7 @@ def _auto_entry_page(next_path: str) -> str:
       const msgEl = document.getElementById("msg");
       const setMsg = (txt) => {{ if (msgEl) msgEl.textContent = txt; }};
       const nextPath = {quoted_next};
-      const loginUrl = "/pwa/login.html?next=" + encodeURIComponent(nextPath);
+      const loginUrl = {quoted_login};
       let token = "";
       try {{
         token = (localStorage.getItem("ka_part_auth_token_v1") || "").trim();
