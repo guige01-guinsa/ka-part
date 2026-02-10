@@ -10,6 +10,7 @@
     "tr4",
     "tr5",
     "tr6",
+    "main_vcb",
     "meter",
     "facility",
     "facility_check",
@@ -54,6 +55,10 @@
       ["lv6_L3_V", "lv6_L3_A", "lv6_L3_KW"],
       ["lv6_temp"],
     ],
+    main_vcb: [
+      ["main_vcb_kv", "main_vcb_l1_a", "main_vcb_l2_a"],
+      ["main_vcb_l3_a"],
+    ],
     meter: [
       ["AISS_L1_A", "AISS_L2_A", "AISS_L3_A"],
       ["main_kwh", "industry_kwh", "street_kwh"],
@@ -65,7 +70,7 @@
       ["office_pressure", "shop_pressure"],
     ],
   };
-  const COMPACT_TABS = new Set(["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "meter", "facility_check"]);
+  const COMPACT_TABS = new Set(["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "meter", "facility_check"]);
   const HOME_DRAFT_KEY = "ka_home_draft_v2";
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";

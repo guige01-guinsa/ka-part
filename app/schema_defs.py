@@ -19,6 +19,7 @@ SCHEMA_TAB_ORDER = [
     "tr4",
     "tr5",
     "tr6",
+    "main_vcb",
     "meter",
     "facility",
     "facility_check",
@@ -27,7 +28,7 @@ SCHEMA_TAB_ORDER = [
     "facility_telecom",
 ]
 
-DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "meter", "facility_check"]
+DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "meter", "facility_check"]
 DEFAULT_HIDDEN_TAB_KEYS = ["home", "facility", "facility_fire", "facility_mechanical", "facility_telecom"]
 
 FIELD_TYPE_SET = {"text", "number", "textarea", "select", "date"}
@@ -112,6 +113,19 @@ SCHEMA_DEFS = {
         "title": "LV6",
         "fields": _lv_fields("lv6"),
         "rows": _lv_rows("lv6"),
+    },
+    "main_vcb": {
+        "title": "특고(Main VCB)",
+        "fields": [
+            {"k": "main_vcb_kv", "label": "KV", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 300},
+            {"k": "main_vcb_l1_a", "label": "L1-A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 4000},
+            {"k": "main_vcb_l2_a", "label": "L2-A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 4000},
+            {"k": "main_vcb_l3_a", "label": "L3-A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 4000},
+        ],
+        "rows": [
+            ["main_vcb_kv", "main_vcb_l1_a", "main_vcb_l2_a"],
+            ["main_vcb_l3_a"],
+        ],
     },
     "meter": {
         "title": "전력량계",
@@ -326,6 +340,16 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
             "lv2_L3_A": "lv2_l3_a",
             "lv2_L3_KW": "lv2_l3_kw",
             "lv2_temp": "lv2_temp",
+        },
+    },
+    "main_vcb": {
+        "table": "main_vcb_reads",
+        "key_cols": ["site_name", "entry_date"],
+        "column_map": {
+            "main_vcb_kv": "main_vcb_kv",
+            "main_vcb_l1_a": "main_vcb_l1_a",
+            "main_vcb_l2_a": "main_vcb_l2_a",
+            "main_vcb_l3_a": "main_vcb_l3_a",
         },
     },
     "meter": {

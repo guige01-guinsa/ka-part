@@ -12,6 +12,7 @@
     "tr4",
     "tr5",
     "tr6",
+    "main_vcb",
     "meter",
     "facility",
     "facility_check",

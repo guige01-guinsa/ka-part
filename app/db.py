@@ -208,6 +208,35 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
 
     con.execute(
         """
+        CREATE TABLE IF NOT EXISTS main_vcb_reads (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_name TEXT NOT NULL,
+          entry_date TEXT,
+          main_vcb_kv REAL,
+          main_vcb_l1_a REAL,
+          main_vcb_l2_a REAL,
+          main_vcb_l3_a REAL,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          updated_at TEXT
+        );
+        """
+    )
+    _ensure_column(con, "main_vcb_reads", "site_name TEXT")
+    _ensure_column(con, "main_vcb_reads", "entry_date TEXT")
+    _ensure_column(con, "main_vcb_reads", "main_vcb_kv REAL")
+    _ensure_column(con, "main_vcb_reads", "main_vcb_l1_a REAL")
+    _ensure_column(con, "main_vcb_reads", "main_vcb_l2_a REAL")
+    _ensure_column(con, "main_vcb_reads", "main_vcb_l3_a REAL")
+    _ensure_column(con, "main_vcb_reads", "updated_at TEXT")
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_main_vcb_site_date
+        ON main_vcb_reads(site_name, entry_date);
+        """
+    )
+
+    con.execute(
+        """
         CREATE TABLE IF NOT EXISTS power_meter_reads (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           site_name TEXT NOT NULL,
@@ -1181,7 +1210,7 @@ def upsert_tab_domain_data(site_name: str, entry_date: str, tab_key: str, fields
     payload: Dict[str, Any] = {"site_name": site_name, "entry_date": entry_date}
     payload.update(dict(spec.get("fixed") or {}))
 
-    numeric_tabs = {"tr1", "tr2", "meter", "facility_check"}
+    numeric_tabs = {"tr1", "tr2", "main_vcb", "meter", "facility_check"}
     for form_key, db_col in dict(spec.get("column_map") or {}).items():
         if form_key not in clean:
             continue
