@@ -14,6 +14,7 @@
     "tr6",
     "main_vcb",
     "dc_panel",
+    "temperature",
     "meter",
     "facility",
     "facility_check",

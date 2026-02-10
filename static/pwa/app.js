@@ -12,6 +12,7 @@
     "tr6",
     "main_vcb",
     "dc_panel",
+    "temperature",
     "meter",
     "facility",
     "facility_check",
@@ -62,6 +63,9 @@
     dc_panel: [
       ["dc_panel_v", "dc_panel_a"],
     ],
+    temperature: [
+      ["temperature_tr1", "temperature_tr2", "temperature_tr3", "temperature_tr4", "temperature_indoor"],
+    ],
     meter: [
       ["AISS_L1_A", "AISS_L2_A", "AISS_L3_A"],
       ["main_kwh", "industry_kwh", "street_kwh"],
@@ -73,7 +77,7 @@
       ["office_pressure", "shop_pressure"],
     ],
   };
-  const COMPACT_TABS = new Set(["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "dc_panel", "meter", "facility_check"]);
+  const COMPACT_TABS = new Set(["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "dc_panel", "temperature", "meter", "facility_check"]);
   const HOME_DRAFT_KEY = "ka_home_draft_v2";
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";

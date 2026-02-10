@@ -21,6 +21,7 @@ SCHEMA_TAB_ORDER = [
     "tr6",
     "main_vcb",
     "dc_panel",
+    "temperature",
     "meter",
     "facility",
     "facility_check",
@@ -29,7 +30,7 @@ SCHEMA_TAB_ORDER = [
     "facility_telecom",
 ]
 
-DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "dc_panel", "meter", "facility_check"]
+DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "dc_panel", "temperature", "meter", "facility_check"]
 DEFAULT_HIDDEN_TAB_KEYS = ["home", "facility", "facility_fire", "facility_mechanical", "facility_telecom"]
 
 FIELD_TYPE_SET = {"text", "number", "textarea", "select", "date"}
@@ -135,6 +136,19 @@ SCHEMA_DEFS = {
         ],
         "rows": [
             ["dc_panel_v", "dc_panel_a"],
+        ],
+    },
+    "temperature": {
+        "title": "온도",
+        "fields": [
+            {"k": "temperature_tr1", "label": "TR1", "type": "number", "step": "0.01", "warn_min": -30, "warn_max": 120},
+            {"k": "temperature_tr2", "label": "TR2", "type": "number", "step": "0.01", "warn_min": -30, "warn_max": 120},
+            {"k": "temperature_tr3", "label": "TR3", "type": "number", "step": "0.01", "warn_min": -30, "warn_max": 120},
+            {"k": "temperature_tr4", "label": "TR4", "type": "number", "step": "0.01", "warn_min": -30, "warn_max": 120},
+            {"k": "temperature_indoor", "label": "실내", "type": "number", "step": "0.01", "warn_min": -30, "warn_max": 120},
+        ],
+        "rows": [
+            ["temperature_tr1", "temperature_tr2", "temperature_tr3", "temperature_tr4", "temperature_indoor"],
         ],
     },
     "meter": {
@@ -368,6 +382,17 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
         "column_map": {
             "dc_panel_v": "dc_panel_v",
             "dc_panel_a": "dc_panel_a",
+        },
+    },
+    "temperature": {
+        "table": "temperature_reads",
+        "key_cols": ["site_name", "entry_date"],
+        "column_map": {
+            "temperature_tr1": "temperature_tr1",
+            "temperature_tr2": "temperature_tr2",
+            "temperature_tr3": "temperature_tr3",
+            "temperature_tr4": "temperature_tr4",
+            "temperature_indoor": "temperature_indoor",
         },
     },
     "meter": {

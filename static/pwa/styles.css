@@ -222,6 +222,10 @@ body {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.field-row[data-count="5"] {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .input {
   display: flex;
   flex-direction: column;
@@ -308,6 +312,10 @@ body {
   .field-row[data-count="4"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .field-row[data-count="5"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 560px) {
@@ -341,5 +349,9 @@ body {
 
   .field-row[data-count="4"] {
     grid-template-columns: 1fr;
+  }
+
+  .field-row[data-count="5"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
