@@ -54,4 +54,15 @@ INSERT OR IGNORE INTO roles(code, name) VALUES ('STAFF','Staff');
 INSERT OR IGNORE INTO roles(code, name) VALUES ('RESIDENT','Resident');
 INSERT OR IGNORE INTO roles(code, name) VALUES ('VENDOR','Vendor');
 
+-- ---------------------------------------------------------
+-- 6) 단지/사용자 매핑(주차관리 연동 기본값)
+-- ---------------------------------------------------------
+INSERT OR IGNORE INTO complexes(code, name, is_active, created_at, updated_at)
+VALUES ('KA-DEFAULT', 'ka-part 아파트', 1, datetime('now'), datetime('now'));
+
+INSERT OR IGNORE INTO user_complexes(user_id, complex_id, is_primary, created_at)
+SELECT u.id, c.id, 1, datetime('now')
+FROM users u
+JOIN complexes c ON c.code='KA-DEFAULT';
+
 COMMIT;

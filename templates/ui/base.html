@@ -49,6 +49,7 @@
       <div class="nav" id="topNav">
         <a class="pill {{ 'active' if active=='works' else '' }}" href="/ui/works?login={{ login }}">작업</a>
         <a class="pill {{ 'active' if active=='monthly' else '' }}" href="/ui/monthly_work?login={{ login }}">월간보고</a>
+        <a class="pill" href="#" id="parkingLaunchBtn">주차관리(접속/실행)</a>
 
         <a class="pill {{ 'active' if active=='admin' else '' }}" href="/ui/admin/users?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN">관리자</a>
         <a class="pill" href="/ui/admin/notifications?login={{ login }}" data-roles="CHIEF,MANAGER,ADMIN">알림로그</a>
@@ -89,6 +90,41 @@
         const u = new URL(location.href);
         u.searchParams.set("login", login);
         location.href = u.toString();
+      });
+    })();
+  </script>
+
+  <script>
+    (function(){
+      const btn = document.getElementById("parkingLaunchBtn");
+      if(!btn) return;
+
+      btn.addEventListener("click", async (e)=>{
+        e.preventDefault();
+
+        const loginInput = document.getElementById("login");
+        const login = (loginInput && loginInput.value ? loginInput.value : "").trim()
+          || (new URL(location.href).searchParams.get("login") || "").trim()
+          || "admin";
+
+        try{
+          const u = `/api/parking/launch-url?login=${encodeURIComponent(login)}`;
+          const res = await fetch(u, { headers: { "X-User-Login": login } });
+          const txt = await res.text();
+          let data = {};
+          try{ data = JSON.parse(txt); } catch(_) {}
+
+          if(!res.ok || !data.url){
+            throw new Error(data.detail || txt || `HTTP ${res.status}`);
+          }
+
+          const w = window.open(data.url, "_blank", "noopener");
+          if(!w){
+            location.href = data.url;
+          }
+        }catch(err){
+          alert(`주차관리 실행 실패: ${err && err.message ? err.message : err}`);
+        }
       });
     })();
   </script>

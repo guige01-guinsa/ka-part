@@ -1,0 +1,18 @@
+{
+  "name": "주차관리 스캐너",
+  "short_name": "주차관리",
+  "start_url": "/parking/app",
+  "scope": "/parking/",
+  "display": "standalone",
+  "background_color": "#042029",
+  "theme_color": "#052436",
+  "description": "카메라로 차량 번호판을 인식해 불법주차 여부를 즉시 조회합니다.",
+  "icons": [
+    {
+      "src": "/static/parking_icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <meta name="theme-color" content="#052436" />
+  <title>{{ title or "주차관리 PWA" }}</title>
+  <link rel="manifest" href="/parking/manifest.webmanifest" />
+  <link rel="stylesheet" href="/static/parking_app.css" />
+</head>
+<body
+  data-parking-token="{{ parking_token or '' }}"
+  data-bootstrap-error="{{ bootstrap_error or '' }}"
+>
+  <main class="app">
+    <header class="hero">
+      <div class="badge">PWA</div>
+      <h1>주차관리 스캐너</h1>
+      <p id="ctxLine">단지/사용자 로딩 중...</p>
+      <p class="hint" id="ttlLine">토큰 유효시간 {{ token_ttl_seconds }}초</p>
+    </header>
+
+    <section class="panel">
+      <h2>번호판 인식</h2>
+      <video id="video" playsinline autoplay muted></video>
+      <canvas id="canvas" width="1280" height="720" hidden></canvas>
+      <div class="row">
+        <button id="btnCam" class="btn">카메라 켜기</button>
+        <button id="btnCapture" class="btn">캡처 + OCR</button>
+      </div>
+      <div class="row">
+        <input id="plateInput" placeholder="예: 123가4567" autocomplete="off" />
+        <button id="btnCheck" class="btn strong">불법주차 조회</button>
+      </div>
+      <p class="hint" id="ocrLine">OCR 대기 중</p>
+      <article id="resultCard" class="result neutral">
+        <h3>조회 결과</h3>
+        <p id="resultText">차량 번호를 입력/인식한 뒤 조회하세요.</p>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>불법주차 등록</h2>
+      <div class="row">
+        <input id="illegalPlate" placeholder="등록 번호판 (기본값: 최근 조회 번호)" autocomplete="off" />
+      </div>
+      <div class="row">
+        <input id="illegalReason" placeholder="사유 (예: 등록차량 아님)" value="미등록/불법 주차 차량" />
+      </div>
+      <div class="row">
+        <input id="illegalMemo" placeholder="메모(선택)" />
+      </div>
+      <div class="row">
+        <button id="btnRegisterIllegal" class="btn warn">불법주차 등록</button>
+        <button id="btnReloadIllegal" class="btn">목록 새로고침</button>
+      </div>
+      <div id="illegalList" class="list"></div>
+    </section>
+
+    <section class="panel">
+      <h2>최근 조회 로그</h2>
+      <div id="scanList" class="list"></div>
+    </section>
+  </main>
+
+  <script id="parkingContextJson" type="application/json">
+    {{ parking_context | tojson if parking_context else "null" }}
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" defer></script>
+  <script src="/static/parking_app.js" defer></script>
+</body>
+</html>

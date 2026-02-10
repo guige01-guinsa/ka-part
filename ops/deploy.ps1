@@ -21,9 +21,40 @@ if (!(Test-Path $ParkingEnv)) {
   Write-Host "Created services\\parking\\.env.production (set strong secrets before production)." -ForegroundColor Yellow
 }
 
-# Apply migrations
-& sqlite3 $ProjectRoot\ka.db ".read $ProjectRoot\sql\migrations\20260201_outsourcing_and_notifications.sql"
-& sqlite3 $ProjectRoot\ka.db ".read $ProjectRoot\sql\migrations\20260201_notification_templates.sql"
+# Apply migrations (sorted, idempotent scripts 권장)
+$MigDir = Join-Path $ProjectRoot "sql\migrations"
+if (Test-Path $MigDir) {
+  $runner = @'
+import pathlib
+import sqlite3
+import sys
+
+db_path = pathlib.Path(sys.argv[1])
+mig_dir = pathlib.Path(sys.argv[2])
+
+conn = sqlite3.connect(str(db_path))
+try:
+    for p in sorted(mig_dir.glob("*.sql")):
+        print(f"Applying migration: {p.name}")
+        sql = p.read_text(encoding="utf-8")
+        try:
+            conn.executescript(sql)
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "duplicate column name" in msg or "already exists" in msg:
+                conn.rollback()
+                print(f"  skip non-fatal: {e}")
+                continue
+            raise
+finally:
+    conn.close()
+'@
+  $tmpRunner = Join-Path $env:TEMP "ka-part-migrate.py"
+  Set-Content -Path $tmpRunner -Value $runner -Encoding UTF8
+  & $VenvPy $tmpRunner "$ProjectRoot\ka.db" "$MigDir"
+  Remove-Item $tmpRunner -Force -ErrorAction SilentlyContinue
+}
 
 # Download Caddy if missing (direct exe)
 if (!(Test-Path $CaddyExe)) {
