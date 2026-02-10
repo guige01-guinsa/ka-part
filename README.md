@@ -29,7 +29,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 외부 주차 서버(`parking_man`) 연동 모드:
 - `ENABLE_PARKING_EMBED=0`
 - `PARKING_BASE_URL=https://<parking-man-domain>`
-- `PARKING_SSO_PATH=/parking/sso` (환경에 따라 `/sso`)
+- `PARKING_SSO_PATH=/sso` (parking-man이 하위 경로로 운영되면 해당 경로 기준 `/sso`)
 - `PARKING_CONTEXT_SECRET`는 parking_man의 `PARKING_CONTEXT_SECRET`와 동일값 사용
 - 위 값이 누락되면 `/api/parking/context`는 `503`으로 명확한 설정오류를 반환
 

@@ -84,7 +84,7 @@ PARKING_CONTEXT_SECRET = (
 )
 PARKING_CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
 PARKING_BASE_URL = (os.getenv("PARKING_BASE_URL") or "").strip()
-PARKING_SSO_PATH = (os.getenv("PARKING_SSO_PATH") or "/parking/sso").strip()
+PARKING_SSO_PATH = (os.getenv("PARKING_SSO_PATH") or "/sso").strip()
 if not PARKING_SSO_PATH.startswith("/"):
     PARKING_SSO_PATH = f"/{PARKING_SSO_PATH}"
 _embed_raw = os.getenv("ENABLE_PARKING_EMBED")

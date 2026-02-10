@@ -27,7 +27,7 @@
 
 - `ENABLE_PARKING_EMBED=0`
 - `PARKING_BASE_URL=https://<parking-man-domain>`
-- `PARKING_SSO_PATH=/parking/sso` (서버 경로에 따라 `/sso`)
+- `PARKING_SSO_PATH=/sso` (parking_man이 하위 경로로 운영되면 해당 경로 기준 `/sso`)
 - `PARKING_CONTEXT_SECRET` must match parking_man `PARKING_CONTEXT_SECRET`
 
 이 모드에서는 `/parking/admin2` 접근도 ka-part가 `/api/parking/context`를 사용해 외부 parking_man으로 자동 전달합니다.

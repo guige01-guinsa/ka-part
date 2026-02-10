@@ -3,10 +3,12 @@ import os
 import sys
 import json
 import urllib.parse
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .db import init_db
@@ -101,7 +103,7 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
 
 def _register_parking_gateway_routes() -> None:
     parking_base_url = (os.getenv("PARKING_BASE_URL") or "").strip()
-    parking_sso_path = (os.getenv("PARKING_SSO_PATH") or "/parking/sso").strip()
+    parking_sso_path = (os.getenv("PARKING_SSO_PATH") or "/sso").strip()
     if not parking_sso_path.startswith("/"):
         parking_sso_path = f"/{parking_sso_path}"
 
@@ -124,6 +126,44 @@ def _register_parking_gateway_routes() -> None:
             )
         target = f"{parking_base_url.rstrip('/')}{parking_sso_path}?ctx={urllib.parse.quote(ctx, safe='')}"
         return RedirectResponse(url=target, status_code=302)
+
+    @app.get("/parking/health")
+    def parking_gateway_health():
+        if not parking_base_url:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "mode": "gateway",
+                    "detail": "PARKING_BASE_URL is required",
+                },
+                status_code=503,
+            )
+        upstream = f"{parking_base_url.rstrip('/')}/health"
+        req = urllib.request.Request(upstream, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                status_code = int(getattr(resp, "status", 502))
+                body = resp.read().decode("utf-8", errors="ignore")
+            upstream_ok = (200 <= status_code < 300) and ('"ok"' in body.lower())
+            return JSONResponse(
+                {
+                    "ok": upstream_ok,
+                    "mode": "gateway",
+                    "parking_base_url": parking_base_url,
+                    "upstream_status": status_code,
+                },
+                status_code=(200 if upstream_ok else 502),
+            )
+        except urllib.error.URLError as e:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "mode": "gateway",
+                    "parking_base_url": parking_base_url,
+                    "detail": f"upstream unreachable: {e.reason}",
+                },
+                status_code=502,
+            )
 
 
 def _mount_parking_if_enabled() -> None:
