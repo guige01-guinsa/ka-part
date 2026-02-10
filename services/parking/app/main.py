@@ -2,18 +2,21 @@ import os
 import json
 import logging
 import re
+import sqlite3
 import urllib.parse
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import uuid
 import html as _html
+from io import BytesIO
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional, Literal
+from typing import Optional, Literal, Any
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from openpyxl import load_workbook
 
 from .db import init_db, seed_demo, seed_users, connect, normalize_site_code
 from .auth import make_session, pbkdf2_verify, read_session
@@ -42,6 +45,29 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 logger = logging.getLogger("ka-part.parking")
 _PLATE_RE = re.compile(r"[^0-9A-Za-z가-힣]")
 _VERDICT_OPTIONS = {"OK", "UNREGISTERED", "BLOCKED", "EXPIRED", "TEMP"}
+_STATUS_OPTIONS = {"active", "temp", "blocked"}
+_STATUS_LABEL_KO = {
+    "active": "정상등록",
+    "temp": "임시등록",
+    "blocked": "차단차량",
+}
+_VERDICT_LABEL_KO = {
+    "OK": "정상등록",
+    "UNREGISTERED": "미등록",
+    "BLOCKED": "차단차량",
+    "EXPIRED": "기간만료",
+    "TEMP": "임시등록",
+}
+
+_EXCEL_HEADER_ALIASES = {
+    "plate": {"차량번호", "번호판", "차량번호판", "plate", "carnumber", "numberplate"},
+    "status": {"상태", "등록상태", "status"},
+    "unit": {"동호수", "동/호수", "호수", "세대", "unit"},
+    "owner_name": {"소유자", "차주", "성명", "owner", "ownername"},
+    "valid_from": {"적용시작일", "시작일", "유효시작일", "validfrom", "fromdate"},
+    "valid_to": {"적용종료일", "종료일", "유효종료일", "validto", "todate"},
+    "note": {"비고", "메모", "note", "memo"},
+}
 
 
 def app_url(path: str) -> str:
@@ -202,6 +228,107 @@ def resolve_site_scope(request: Request, x_site_code: str | None = None) -> str:
     if x_site_code:
         return normalize_site_code(x_site_code)
     return DEFAULT_SITE_CODE
+
+
+def _is_manager_session(sess: dict[str, Any] | None) -> bool:
+    role = str((sess or {}).get("r") or "").strip().lower()
+    return role in {"admin", "guard"}
+
+
+def _require_manager_session(request: Request) -> dict[str, Any]:
+    sess = read_session(request)
+    if not sess:
+        raise HTTPException(status_code=401, detail="Login required")
+    if not _is_manager_session(sess):
+        raise HTTPException(status_code=403, detail="관리자/단지관리자 권한이 필요합니다.")
+    return sess
+
+
+def _to_ko_status(status: str | None) -> str:
+    return _STATUS_LABEL_KO.get(str(status or "").strip().lower(), "미정")
+
+
+def _to_ko_verdict(verdict: str | None) -> str:
+    return _VERDICT_LABEL_KO.get(str(verdict or "").strip().upper(), str(verdict or ""))
+
+
+def _status_from_input(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return "active"
+    if raw in _STATUS_OPTIONS:
+        return raw
+
+    if raw in {"정상", "정상등록", "등록", "사용", "상시"}:
+        return "active"
+    if raw in {"임시", "임시등록", "temporary"}:
+        return "temp"
+    if raw in {"차단", "차단차량", "금지", "blocked"}:
+        return "blocked"
+
+    raise ValueError("상태 값은 active/temp/blocked 또는 정상등록/임시등록/차단차량 중 하나여야 합니다.")
+
+
+def _clean_optional_text(value: Any, max_len: int) -> str | None:
+    txt = str(value or "").strip()
+    if not txt:
+        return None
+    if len(txt) > max_len:
+        raise ValueError(f"텍스트 길이는 {max_len}자 이하만 가능합니다.")
+    return txt
+
+
+def _to_iso_date(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+
+    txt = str(value).strip()
+    if not txt:
+        return None
+
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(txt, fmt).date().isoformat()
+        except ValueError:
+            continue
+
+    raise ValueError("날짜 형식은 YYYY-MM-DD 형식으로 입력하세요.")
+
+
+def _vehicle_row_to_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    src = dict(row)
+    return {
+        "site_code": src.get("site_code"),
+        "plate": src.get("plate"),
+        "status": src.get("status"),
+        "status_ko": _to_ko_status(src.get("status")),
+        "unit": src.get("unit"),
+        "owner_name": src.get("owner_name"),
+        "valid_from": src.get("valid_from"),
+        "valid_to": src.get("valid_to"),
+        "note": src.get("note"),
+        "updated_at": src.get("updated_at"),
+    }
+
+
+def _normalize_excel_header(v: Any) -> str:
+    txt = str(v or "").strip().lower()
+    return re.sub(r"[^0-9a-z가-힣]", "", txt)
+
+
+def _header_field_name(header: Any) -> str | None:
+    normalized = _normalize_excel_header(header)
+    if not normalized:
+        return None
+    for field, aliases in _EXCEL_HEADER_ALIASES.items():
+        if normalized in {_normalize_excel_header(x) for x in aliases}:
+            return field
+    return None
 
 
 def normalize_plate(value: str) -> str:
@@ -403,6 +530,45 @@ class SessionViolationIn(BaseModel):
     memo: Optional[str] = None
 
 
+class VehicleUpsertIn(BaseModel):
+    plate: str
+    status: str = "active"
+    unit: Optional[str] = None
+    owner_name: Optional[str] = None
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
+    note: Optional[str] = None
+
+
+def _normalize_vehicle_payload(payload: VehicleUpsertIn) -> dict[str, Any]:
+    plate = normalize_plate(payload.plate)
+    if len(plate) < 4:
+        raise HTTPException(status_code=400, detail="차량번호 형식이 올바르지 않습니다.")
+
+    try:
+        status = _status_from_input(payload.status)
+        unit = _clean_optional_text(payload.unit, 40)
+        owner_name = _clean_optional_text(payload.owner_name, 60)
+        valid_from = _to_iso_date(payload.valid_from)
+        valid_to = _to_iso_date(payload.valid_to)
+        note = _clean_optional_text(payload.note, 200)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if valid_from and valid_to and valid_from > valid_to:
+        raise HTTPException(status_code=400, detail="적용시작일은 적용종료일보다 클 수 없습니다.")
+
+    return {
+        "plate": plate,
+        "status": status,
+        "unit": unit,
+        "owner_name": owner_name,
+        "valid_from": valid_from,
+        "valid_to": valid_to,
+        "note": note,
+    }
+
+
 @app.post("/api/violations/upload", response_model=ViolationOut)
 def create_violation_with_photo(
     request: Request,
@@ -483,9 +649,765 @@ def list_violations_session(request: Request, limit: int = 20):
             """,
             (site_code, use_limit),
         ).fetchall()
-    return {"ok": True, "items": [dict(r) for r in rows]}
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["verdict_ko"] = _to_ko_verdict(d.get("verdict"))
+        items.append(d)
+    return {"ok": True, "items": items}
+
+
+@app.get("/api/session/vehicles")
+def list_vehicles_session(request: Request, q: str = "", limit: int = 200):
+    sess = _require_manager_session(request)
+    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    use_limit = max(1, min(int(limit), 1000))
+    q_plate = normalize_plate(q)
+    q_text = str(q or "").strip()
+
+    with connect() as con:
+        if q_text:
+            rows = con.execute(
+                """
+                SELECT site_code, plate, status, unit, owner_name, valid_from, valid_to, note, updated_at
+                FROM vehicles
+                WHERE site_code = ?
+                  AND (
+                    plate LIKE ?
+                    OR IFNULL(owner_name, '') LIKE ?
+                    OR IFNULL(unit, '') LIKE ?
+                  )
+                ORDER BY updated_at DESC, plate ASC
+                LIMIT ?
+                """,
+                (
+                    site_code,
+                    f"%{q_plate or q_text.upper()}%",
+                    f"%{q_text}%",
+                    f"%{q_text}%",
+                    use_limit,
+                ),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT site_code, plate, status, unit, owner_name, valid_from, valid_to, note, updated_at
+                FROM vehicles
+                WHERE site_code = ?
+                ORDER BY updated_at DESC, plate ASC
+                LIMIT ?
+                """,
+                (site_code, use_limit),
+            ).fetchall()
+
+    return {"ok": True, "items": [_vehicle_row_to_dict(r) for r in rows], "count": len(rows)}
+
+
+@app.post("/api/session/vehicles")
+def create_vehicle_session(request: Request, payload: VehicleUpsertIn):
+    sess = _require_manager_session(request)
+    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    data = _normalize_vehicle_payload(payload)
+
+    with connect() as con:
+        exists = con.execute(
+            "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
+            (site_code, data["plate"]),
+        ).fetchone()
+        if exists:
+            raise HTTPException(status_code=409, detail="이미 등록된 차량번호입니다. 수정 기능을 사용하세요.")
+
+        con.execute(
+            """
+            INSERT INTO vehicles(site_code, plate, unit, owner_name, status, valid_from, valid_to, note, updated_at)
+            VALUES(?,?,?,?,?,?,?, ?, datetime('now'))
+            """,
+            (
+                site_code,
+                data["plate"],
+                data["unit"],
+                data["owner_name"],
+                data["status"],
+                data["valid_from"],
+                data["valid_to"],
+                data["note"],
+            ),
+        )
+        row = con.execute(
+            """
+            SELECT site_code, plate, status, unit, owner_name, valid_from, valid_to, note, updated_at
+            FROM vehicles
+            WHERE site_code=? AND plate=?
+            """,
+            (site_code, data["plate"]),
+        ).fetchone()
+    return {"ok": True, "item": _vehicle_row_to_dict(row)}
+
+
+@app.put("/api/session/vehicles/{plate}")
+def update_vehicle_session(plate: str, request: Request, payload: VehicleUpsertIn):
+    sess = _require_manager_session(request)
+    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    target_plate = normalize_plate(plate)
+    if len(target_plate) < 4:
+        raise HTTPException(status_code=400, detail="차량번호 형식이 올바르지 않습니다.")
+
+    data = _normalize_vehicle_payload(payload)
+    if data["plate"] != target_plate:
+        raise HTTPException(status_code=400, detail="수정 시 차량번호는 기존 차량번호와 같아야 합니다.")
+
+    with connect() as con:
+        exists = con.execute(
+            "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
+            (site_code, target_plate),
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="수정할 차량을 찾지 못했습니다.")
+
+        con.execute(
+            """
+            UPDATE vehicles
+            SET unit=?, owner_name=?, status=?, valid_from=?, valid_to=?, note=?, updated_at=datetime('now')
+            WHERE site_code=? AND plate=?
+            """,
+            (
+                data["unit"],
+                data["owner_name"],
+                data["status"],
+                data["valid_from"],
+                data["valid_to"],
+                data["note"],
+                site_code,
+                target_plate,
+            ),
+        )
+        row = con.execute(
+            """
+            SELECT site_code, plate, status, unit, owner_name, valid_from, valid_to, note, updated_at
+            FROM vehicles
+            WHERE site_code=? AND plate=?
+            """,
+            (site_code, target_plate),
+        ).fetchone()
+    return {"ok": True, "item": _vehicle_row_to_dict(row)}
+
+
+@app.delete("/api/session/vehicles/{plate}")
+def delete_vehicle_session(plate: str, request: Request):
+    sess = _require_manager_session(request)
+    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    target_plate = normalize_plate(plate)
+    if len(target_plate) < 4:
+        raise HTTPException(status_code=400, detail="차량번호 형식이 올바르지 않습니다.")
+
+    with connect() as con:
+        exists = con.execute(
+            "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
+            (site_code, target_plate),
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="삭제할 차량을 찾지 못했습니다.")
+
+        con.execute(
+            "DELETE FROM vehicles WHERE site_code=? AND plate=?",
+            (site_code, target_plate),
+        )
+    return {"ok": True, "plate": target_plate}
+
+
+@app.post("/api/session/vehicles/import_excel")
+async def import_vehicles_excel_session(request: Request, file: UploadFile = File(...)):
+    sess = _require_manager_session(request)
+    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    filename = str(file.filename or "").strip()
+    if not filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드할 수 있습니다.")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="업로드된 파일이 비어 있습니다.")
+
+    try:
+        wb = load_workbook(filename=BytesIO(raw), data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"엑셀 파일을 읽을 수 없습니다: {exc}") from exc
+
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        raise HTTPException(status_code=400, detail="엑셀 시트에 데이터가 없습니다.")
+
+    headers = list(rows[0] or [])
+    idx_field: dict[int, str] = {}
+    unknown_headers: list[str] = []
+    for idx, h in enumerate(headers):
+        field = _header_field_name(h)
+        if field and field not in idx_field.values():
+            idx_field[idx] = field
+        elif str(h or "").strip():
+            unknown_headers.append(str(h).strip())
+
+    if "plate" not in idx_field.values():
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "message": "필수 컬럼 '차량번호'를 찾지 못했습니다.",
+                "guidance": {
+                    "required_columns": ["차량번호(필수)"],
+                    "optional_columns": ["상태", "동호수", "소유자", "적용시작일", "적용종료일", "비고"],
+                    "status_guide": "상태는 정상등록/임시등록/차단차량 또는 active/temp/blocked 값을 사용하세요.",
+                    "date_guide": "날짜는 YYYY-MM-DD 형식을 권장합니다.",
+                },
+                "unknown_headers": unknown_headers,
+            },
+        )
+
+    parsed: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    skipped_empty = 0
+
+    for row_index, row in enumerate(rows[1:], start=2):
+        if not row or all((v is None) or (str(v).strip() == "") for v in row):
+            skipped_empty += 1
+            continue
+
+        raw_item: dict[str, Any] = {}
+        for idx, field in idx_field.items():
+            raw_item[field] = row[idx] if idx < len(row) else None
+
+        try:
+            plate = normalize_plate(raw_item.get("plate"))
+            if len(plate) < 4:
+                raise ValueError("차량번호 형식이 올바르지 않습니다.")
+            status = _status_from_input(raw_item.get("status"))
+            unit = _clean_optional_text(raw_item.get("unit"), 40)
+            owner_name = _clean_optional_text(raw_item.get("owner_name"), 60)
+            valid_from = _to_iso_date(raw_item.get("valid_from"))
+            valid_to = _to_iso_date(raw_item.get("valid_to"))
+            note = _clean_optional_text(raw_item.get("note"), 200)
+
+            if valid_from and valid_to and valid_from > valid_to:
+                raise ValueError("적용시작일은 적용종료일보다 클 수 없습니다.")
+
+            parsed.append(
+                {
+                    "plate": plate,
+                    "status": status,
+                    "unit": unit,
+                    "owner_name": owner_name,
+                    "valid_from": valid_from,
+                    "valid_to": valid_to,
+                    "note": note,
+                }
+            )
+        except ValueError as exc:
+            errors.append(
+                {
+                    "row": row_index,
+                    "message": str(exc),
+                    "sample": {
+                        "차량번호": str(raw_item.get("plate") or ""),
+                        "상태": str(raw_item.get("status") or ""),
+                        "동호수": str(raw_item.get("unit") or ""),
+                    },
+                }
+            )
+
+    inserted = 0
+    updated = 0
+    with connect() as con:
+        for item in parsed:
+            exists = con.execute(
+                "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
+                (site_code, item["plate"]),
+            ).fetchone()
+            con.execute(
+                """
+                INSERT INTO vehicles(site_code, plate, unit, owner_name, status, valid_from, valid_to, note, updated_at)
+                VALUES(?,?,?,?,?,?,?, ?, datetime('now'))
+                ON CONFLICT(site_code, plate) DO UPDATE SET
+                  unit=excluded.unit,
+                  owner_name=excluded.owner_name,
+                  status=excluded.status,
+                  valid_from=excluded.valid_from,
+                  valid_to=excluded.valid_to,
+                  note=excluded.note,
+                  updated_at=datetime('now')
+                """,
+                (
+                    site_code,
+                    item["plate"],
+                    item["unit"],
+                    item["owner_name"],
+                    item["status"],
+                    item["valid_from"],
+                    item["valid_to"],
+                    item["note"],
+                ),
+            )
+            if exists:
+                updated += 1
+            else:
+                inserted += 1
+
+    return {
+        "ok": len(errors) == 0,
+        "message": "엑셀 가져오기를 완료했습니다." if not errors else "일부 행에서 형식 오류가 있어 안내를 확인하세요.",
+        "inserted": inserted,
+        "updated": updated,
+        "skipped_empty": skipped_empty,
+        "error_count": len(errors),
+        "errors": errors[:30],
+        "guidance": {
+            "required_columns": ["차량번호(필수)"],
+            "optional_columns": ["상태", "동호수", "소유자", "적용시작일", "적용종료일", "비고"],
+            "status_guide": "상태는 정상등록/임시등록/차단차량 또는 active/temp/blocked 값을 사용하세요.",
+            "date_guide": "날짜는 YYYY-MM-DD 형식을 권장합니다.",
+        },
+        "unknown_headers": unknown_headers,
+    }
+
 
 def esc(v): return _html.escape(str(v)) if v is not None else ""
+
+
+ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>주차관리 DB</title>
+  <style>
+    :root { --bg:#0a1a23; --panel:#112735; --line:#27465a; --text:#e9f2f7; --muted:#8fb0c2; --ok:#16a34a; --warn:#b45309; --bad:#dc2626; --btn:#1d4ed8; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Noto Sans KR",system-ui,sans-serif; color:var(--text); background:radial-gradient(circle at top, #173a4e, #0a1a23 58%); }
+    .wrap { max-width:1100px; margin:0 auto; padding:16px; display:grid; gap:12px; }
+    .card { background:rgba(17,39,53,.94); border:1px solid var(--line); border-radius:14px; padding:14px; }
+    .head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+    .title { margin:0; font-size:24px; }
+    .sub { color:var(--muted); font-size:13px; }
+    .nav { display:flex; gap:8px; flex-wrap:wrap; }
+    .btn { border:1px solid var(--line); background:var(--btn); color:#fff; border-radius:10px; padding:9px 12px; font-weight:700; cursor:pointer; text-decoration:none; }
+    .btn.ghost { background:transparent; color:var(--text); }
+    .btn.warn { background:var(--warn); border-color:#92400e; }
+    .btn.bad { background:var(--bad); border-color:#7f1d1d; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .field { display:grid; gap:6px; width:100%; }
+    .field.w50 { width:calc(50% - 4px); }
+    label { color:var(--muted); font-size:12px; }
+    input, select { width:100%; border:1px solid var(--line); border-radius:10px; background:#0d2230; color:var(--text); padding:9px 11px; }
+    table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+    th, td { border:1px solid var(--line); padding:7px 8px; text-align:left; vertical-align:top; }
+    th { background:#0f2431; color:#cae2ef; }
+    tr.sel { background:rgba(29,78,216,.25); }
+    .msg { min-height:22px; margin-top:8px; color:#b8d7e8; white-space:pre-wrap; }
+    .msg.ok { color:#8ee6a6; }
+    .msg.err { color:#ffb4b4; }
+    .hintbox { border:1px dashed var(--line); background:#0c2130; border-radius:10px; padding:10px; font-size:12px; color:var(--muted); line-height:1.6; }
+    .perm { color:#ffd4a8; font-size:13px; }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns:1fr; }
+      .field.w50 { width:100%; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <div class="head">
+        <div>
+          <h1 class="title">주차관리 DB</h1>
+          <div class="sub" id="ctxLine"></div>
+        </div>
+        <div class="nav">
+          <a id="btnBack" class="btn ghost" href="/pwa/">시설관리로 돌아가기</a>
+          <a id="btnScanner" class="btn ghost" href="./scanner">번호판 스캐너</a>
+          <button id="btnRefreshAll" class="btn ghost" type="button">새로고침</button>
+          <button id="btnLogout" class="btn ghost" type="button">로그아웃</button>
+        </div>
+      </div>
+      <div class="perm" id="permLine"></div>
+    </section>
+
+    <section class="card">
+      <h2 style="margin:0;">차량정보 DB 관리</h2>
+      <div class="hintbox" id="importGuide">
+        엑셀 컬럼 안내
+        - 필수: 차량번호
+        - 선택: 상태, 동호수, 소유자, 적용시작일, 적용종료일, 비고
+        - 상태값: 정상등록/임시등록/차단차량 (또는 active/temp/blocked)
+        - 날짜: YYYY-MM-DD 형식 권장
+      </div>
+      <div id="managerOnly">
+        <div class="row">
+          <input type="file" id="excelFile" accept=".xlsx" />
+          <button id="btnImportExcel" class="btn warn" type="button">엑셀 불러오기</button>
+        </div>
+        <div class="grid">
+          <div>
+            <div class="row">
+              <div class="field w50">
+                <label>차량번호</label>
+                <input id="fPlate" placeholder="예: 123가4567" />
+              </div>
+              <div class="field w50">
+                <label>등록상태</label>
+                <select id="fStatus">
+                  <option value="active">정상등록</option>
+                  <option value="temp">임시등록</option>
+                  <option value="blocked">차단차량</option>
+                </select>
+              </div>
+              <div class="field w50">
+                <label>동호수</label>
+                <input id="fUnit" placeholder="예: 101-1203" />
+              </div>
+              <div class="field w50">
+                <label>소유자</label>
+                <input id="fOwner" placeholder="예: 홍길동" />
+              </div>
+              <div class="field w50">
+                <label>적용시작일</label>
+                <input id="fFrom" type="date" />
+              </div>
+              <div class="field w50">
+                <label>적용종료일</label>
+                <input id="fTo" type="date" />
+              </div>
+              <div class="field">
+                <label>비고</label>
+                <input id="fNote" placeholder="선택 입력" />
+              </div>
+            </div>
+            <div class="row">
+              <button id="btnCreate" class="btn" type="button">신규등록</button>
+              <button id="btnUpdate" class="btn warn" type="button">선택수정</button>
+              <button id="btnDelete" class="btn bad" type="button">선택삭제</button>
+              <button id="btnClear" class="btn ghost" type="button">입력초기화</button>
+            </div>
+          </div>
+          <div>
+            <div class="field">
+              <label>검색 (차량번호/동호수/소유자)</label>
+              <input id="qVehicle" placeholder="검색어 입력 후 Enter" />
+            </div>
+            <div class="msg" id="msgVehicle"></div>
+          </div>
+        </div>
+      </div>
+      <div class="msg" id="msgImport"></div>
+      <table id="tbVehicles">
+        <thead>
+          <tr>
+            <th>차량번호</th>
+            <th>등록상태</th>
+            <th>동호수</th>
+            <th>소유자</th>
+            <th>적용시작일</th>
+            <th>적용종료일</th>
+            <th>비고</th>
+            <th>갱신시각</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2 style="margin:0;">위반기록</h2>
+      <div class="row">
+        <button id="btnReloadViolations" class="btn ghost" type="button">위반기록 새로고침</button>
+      </div>
+      <table id="tbViolations">
+        <thead>
+          <tr>
+            <th>발생시각</th>
+            <th>차량번호</th>
+            <th>판정</th>
+            <th>위치</th>
+            <th>메모</th>
+            <th>등록자</th>
+            <th>사진</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>window.__ADMIN_BOOT__ = __ADMIN_BOOT__;</script>
+  <script>
+  (function(){
+    const boot = window.__ADMIN_BOOT__ || {};
+    const $ = (id) => document.getElementById(id);
+    const state = { selectedPlate: "", vehicles: [] };
+    const isManager = !!boot.is_manager;
+
+    function setMsg(id, text, ok) {
+      const el = $(id);
+      if (!el) return;
+      el.textContent = text || "";
+      el.className = "msg" + (text ? (ok ? " ok" : " err") : "");
+    }
+
+    function esc(v){
+      return String(v ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    async function api(url, opts){
+      const res = await fetch(url, Object.assign({ credentials: "include" }, opts || {}));
+      const txt = await res.text();
+      let data = {};
+      try { data = JSON.parse(txt); } catch (_) {}
+      if (!res.ok) throw new Error((data && data.detail) || txt || `HTTP ${res.status}`);
+      return data;
+    }
+
+    function ctxLine(){
+      const roleMap = { admin: "관리자", guard: "단지관리자", viewer: "일반사용자" };
+      const role = roleMap[String(boot.role || "")] || String(boot.role || "-");
+      const site = [boot.site_code || "-", boot.site_name || ""].filter(Boolean).join(" / ");
+      $("ctxLine").textContent = `단지: ${site} · 사용자: ${boot.display_name || "-"} · 권한: ${role}`;
+      $("permLine").textContent = isManager
+        ? "관리자/단지관리자 권한으로 차량 DB CRUD/엑셀가져오기를 사용할 수 있습니다."
+        : "현재 권한은 차량 DB CRUD/엑셀가져오기를 사용할 수 없습니다.";
+      $("btnBack").setAttribute("href", boot.back_url || "/pwa/");
+      $("btnScanner").setAttribute("href", boot.scanner_url || "./scanner");
+    }
+
+    function fillForm(item){
+      $("fPlate").value = item.plate || "";
+      $("fStatus").value = item.status || "active";
+      $("fUnit").value = item.unit || "";
+      $("fOwner").value = item.owner_name || "";
+      $("fFrom").value = item.valid_from || "";
+      $("fTo").value = item.valid_to || "";
+      $("fNote").value = item.note || "";
+      state.selectedPlate = item.plate || "";
+    }
+
+    function clearForm(){
+      fillForm({ status: "active" });
+      state.selectedPlate = "";
+      document.querySelectorAll("#tbVehicles tbody tr").forEach((tr)=>tr.classList.remove("sel"));
+    }
+
+    function payloadFromForm(){
+      return {
+        plate: ($("fPlate").value || "").trim(),
+        status: ($("fStatus").value || "active").trim(),
+        unit: ($("fUnit").value || "").trim() || null,
+        owner_name: ($("fOwner").value || "").trim() || null,
+        valid_from: ($("fFrom").value || "").trim() || null,
+        valid_to: ($("fTo").value || "").trim() || null,
+        note: ($("fNote").value || "").trim() || null,
+      };
+    }
+
+    function renderVehicles(items){
+      state.vehicles = items || [];
+      const tbody = $("#tbVehicles tbody");
+      if (!tbody) return;
+      if (!items || !items.length){
+        tbody.innerHTML = `<tr><td colspan="8">차량 데이터가 없습니다.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = items.map((it) => `
+        <tr data-plate="${esc(it.plate)}">
+          <td>${esc(it.plate)}</td>
+          <td>${esc(it.status_ko || it.status)}</td>
+          <td>${esc(it.unit || "-")}</td>
+          <td>${esc(it.owner_name || "-")}</td>
+          <td>${esc(it.valid_from || "-")}</td>
+          <td>${esc(it.valid_to || "-")}</td>
+          <td>${esc(it.note || "-")}</td>
+          <td>${esc(it.updated_at || "-")}</td>
+        </tr>
+      `).join("");
+
+      tbody.querySelectorAll("tr[data-plate]").forEach((tr) => {
+        tr.addEventListener("click", () => {
+          tbody.querySelectorAll("tr").forEach((x)=>x.classList.remove("sel"));
+          tr.classList.add("sel");
+          const p = tr.getAttribute("data-plate");
+          const found = state.vehicles.find((v) => String(v.plate) === String(p));
+          if (found) fillForm(found);
+        });
+      });
+    }
+
+    function renderViolations(items){
+      const tbody = $("#tbViolations tbody");
+      if (!tbody) return;
+      if (!items || !items.length){
+        tbody.innerHTML = `<tr><td colspan="7">위반기록이 없습니다.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = items.map((it) => `
+        <tr>
+          <td>${esc(it.created_at || "-")}</td>
+          <td>${esc(it.plate || "-")}</td>
+          <td>${esc(it.verdict_ko || it.verdict || "-")}</td>
+          <td>${esc(it.location || "-")}</td>
+          <td>${esc(it.memo || "-")}</td>
+          <td>${esc(it.inspector || "-")}</td>
+          <td>${it.photo_path ? `<a href="${esc(it.photo_path)}" target="_blank" rel="noopener">보기</a>` : "-"}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function loadVehicles(){
+      if (!isManager) return;
+      const q = ($("qVehicle").value || "").trim();
+      const u = new URL("./api/session/vehicles", location.href);
+      if (q) u.searchParams.set("q", q);
+      u.searchParams.set("limit", "500");
+      const data = await api(u.toString());
+      renderVehicles(data.items || []);
+      setMsg("msgVehicle", `차량 ${data.count || 0}건`, true);
+    }
+
+    async function loadViolations(){
+      const u = new URL("./api/session/violations/recent", location.href);
+      u.searchParams.set("limit", "100");
+      const data = await api(u.toString());
+      const items = (data.items || []).map((x) => Object.assign({}, x, {
+        verdict_ko: ({ OK:"정상등록", UNREGISTERED:"미등록", BLOCKED:"차단차량", EXPIRED:"기간만료", TEMP:"임시등록" }[x.verdict] || x.verdict || "-"),
+      }));
+      renderViolations(items);
+    }
+
+    async function createVehicle(){
+      const payload = payloadFromForm();
+      const data = await api("./api/session/vehicles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setMsg("msgVehicle", `신규 등록 완료: ${data.item.plate}`, true);
+      await loadVehicles();
+      clearForm();
+    }
+
+    async function updateVehicle(){
+      const payload = payloadFromForm();
+      const plate = state.selectedPlate || payload.plate;
+      if (!plate) throw new Error("수정할 차량을 선택하세요.");
+      const data = await api(`./api/session/vehicles/${encodeURIComponent(plate)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setMsg("msgVehicle", `수정 완료: ${data.item.plate}`, true);
+      await loadVehicles();
+    }
+
+    async function deleteVehicle(){
+      const plate = state.selectedPlate || ($("fPlate").value || "").trim();
+      if (!plate) throw new Error("삭제할 차량을 선택하세요.");
+      if (!confirm(`차량 ${plate} 를 삭제하시겠습니까?`)) return;
+      await api(`./api/session/vehicles/${encodeURIComponent(plate)}`, { method: "DELETE" });
+      setMsg("msgVehicle", `삭제 완료: ${plate}`, true);
+      await loadVehicles();
+      clearForm();
+    }
+
+    async function importExcel(){
+      const fileInput = $("excelFile");
+      const file = fileInput && fileInput.files && fileInput.files[0];
+      if (!file) throw new Error("엑셀(.xlsx) 파일을 선택하세요.");
+      const fd = new FormData();
+      fd.append("file", file);
+      const data = await api("./api/session/vehicles/import_excel", { method: "POST", body: fd });
+      const lines = [];
+      lines.push(data.message || "가져오기 결과");
+      lines.push(`신규등록: ${data.inserted || 0}건, 수정: ${data.updated || 0}건, 빈행건너뜀: ${data.skipped_empty || 0}건`);
+      if (data.error_count) {
+        lines.push(`형식오류: ${data.error_count}건`);
+        (data.errors || []).slice(0, 5).forEach((e) => {
+          lines.push(`- ${e.row}행: ${e.message}`);
+        });
+      }
+      if ((data.unknown_headers || []).length) {
+        lines.push(`인식되지 않은 컬럼: ${(data.unknown_headers || []).join(", ")}`);
+      }
+      setMsg("msgImport", lines.join("\n"), !data.error_count);
+      await loadVehicles();
+      fileInput.value = "";
+    }
+
+    function bindEvents(){
+      $("btnRefreshAll").addEventListener("click", async () => {
+        try {
+          await loadVehicles();
+          await loadViolations();
+        } catch (e) {
+          setMsg("msgVehicle", `새로고침 실패: ${e.message || e}`, false);
+        }
+      });
+
+      $("btnReloadViolations").addEventListener("click", async () => {
+        try { await loadViolations(); } catch (e) {}
+      });
+
+      $("btnLogout").addEventListener("click", async () => {
+        try {
+          await fetch(boot.logout_url || "./logout", { method: "POST", credentials: "include" });
+        } catch (_) {}
+        location.href = boot.back_url || "/pwa/";
+      });
+
+      if (!isManager) return;
+
+      $("btnCreate").addEventListener("click", async () => {
+        try { await createVehicle(); } catch (e) { setMsg("msgVehicle", `신규등록 실패: ${e.message || e}`, false); }
+      });
+      $("btnUpdate").addEventListener("click", async () => {
+        try { await updateVehicle(); } catch (e) { setMsg("msgVehicle", `수정 실패: ${e.message || e}`, false); }
+      });
+      $("btnDelete").addEventListener("click", async () => {
+        try { await deleteVehicle(); } catch (e) { setMsg("msgVehicle", `삭제 실패: ${e.message || e}`, false); }
+      });
+      $("btnClear").addEventListener("click", () => clearForm());
+      $("btnImportExcel").addEventListener("click", async () => {
+        try { await importExcel(); } catch (e) { setMsg("msgImport", `엑셀 가져오기 실패: ${e.message || e}`, false); }
+      });
+      $("qVehicle").addEventListener("keydown", async (e) => {
+        if (e.key !== "Enter") return;
+        try { await loadVehicles(); } catch (err) { setMsg("msgVehicle", `검색 실패: ${err.message || err}`, false); }
+      });
+    }
+
+    async function init(){
+      ctxLine();
+      if (!isManager) {
+        $("managerOnly").style.display = "none";
+      } else {
+        clearForm();
+      }
+      bindEvents();
+      if (isManager) {
+        await loadVehicles();
+      }
+      await loadViolations();
+    }
+
+    init().catch((e) => {
+      setMsg("msgVehicle", `초기화 실패: ${e.message || e}`, false);
+    });
+  })();
+  </script>
+</body>
+</html>
+"""
+
 
 @app.get("/admin2", response_class=HTMLResponse)
 def admin2(request: Request):
@@ -498,36 +1420,22 @@ def admin2(request: Request):
     if s.get("r") not in {"admin", "guard", "viewer"}:
         raise HTTPException(status_code=403, detail="Forbidden")
 
+    role = str(s.get("r") or "").strip().lower()
     site_code = normalize_site_code(s.get("sc") or DEFAULT_SITE_CODE)
     site_name = str(s.get("site_name") or "").strip()
-    display_name = str(s.get("display_name") or s.get("u") or "").strip() or "user"
-    try:
-        with connect() as con:
-            vs = con.execute(
-                "SELECT * FROM vehicles WHERE site_code=? ORDER BY updated_at DESC LIMIT 200",
-                (site_code,),
-            ).fetchall()
-            logs = con.execute(
-                "SELECT * FROM violations WHERE site_code=? ORDER BY created_at DESC LIMIT 100",
-                (site_code,),
-            ).fetchall()
-    except Exception as exc:
-        logger.exception("parking admin2 query failed for site_code=%s: %s", site_code, exc)
-        return integration_required_page(status_code=503)
-    v_rows = "".join([f"<tr><td>{esc(r['plate'])}</td><td>{esc(r['status'])}</td><td>{esc(r['unit'])}</td><td>{esc(r['owner_name'])}</td></tr>" for r in vs])
-    l_rows = "".join([f"<tr><td>{esc(r['created_at'])}</td><td>{esc(r['plate'])}</td><td>{esc(r['verdict'])}</td><td>{esc(r['photo_path'] or '-')}</td></tr>" for r in logs])
-    logout_path = app_url("/logout")
-    top_link = (
-        f"""<a href="{logout_path}" onclick="fetch('{logout_path}',{{method:'POST'}});return false;">Logout</a>"""
-        if LOCAL_LOGIN_ENABLED
-        else """<a href="/pwa/">시설관리로 돌아가기</a>"""
-    )
-    scanner_path = app_url("/scanner")
-    top_nav = f"""{top_link} | <a href="{scanner_path}">번호판 스캐너</a>"""
-    site_line = f"{site_code}" if not site_name else f"{site_code} / {site_name}"
-    return f"""<h2>Admin ({esc(site_line)})</h2><p>사용자: {esc(display_name)}</p>{top_nav}
-    <h3>Vehicles</h3><table border=1><tr><th>Plate</th><th>Status</th><th>Unit</th><th>Owner</th></tr>{v_rows}</table>
-    <h3>Violations</h3><table border=1><tr><th>At</th><th>Plate</th><th>Verdict</th><th>Photo</th></tr>{l_rows}</table>"""
+    display_name = str(s.get("display_name") or s.get("u") or "").strip() or "사용자"
+    context = {
+        "role": role,
+        "is_manager": _is_manager_session(s),
+        "site_code": site_code,
+        "site_name": site_name,
+        "display_name": display_name,
+        "scanner_url": app_url("/scanner"),
+        "logout_url": app_url("/logout"),
+        "back_url": "/pwa/",
+    }
+    html = ADMIN2_HTML_TEMPLATE.replace("__ADMIN_BOOT__", json.dumps(context, ensure_ascii=False))
+    return HTMLResponse(html, status_code=200)
 
 
 SCANNER_HTML_TEMPLATE = r"""<!doctype html>
@@ -613,6 +1521,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     const $ = (id) => document.getElementById(id);
     const state = { stream: null, last: null };
     const ILLEGAL = new Set(["UNREGISTERED", "BLOCKED", "EXPIRED"]);
+    const VERDICT_KO = { OK:"정상등록", UNREGISTERED:"미등록", BLOCKED:"차단차량", EXPIRED:"기간만료", TEMP:"임시등록" };
     const boot = window.__BOOT__ || {};
 
     const video = $("video");
@@ -693,12 +1602,13 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       state.last = data;
       plateInput.value = data.plate || plate;
       const suffix = source ? ` [${source}]` : "";
+      const verdictKo = VERDICT_KO[data.verdict] || data.verdict || "-";
       if (ILLEGAL.has(data.verdict)) {
-        setResult("bad", `불법주차 의심 차량 (${data.verdict})${suffix} - ${data.message}`);
+        setResult("bad", `불법주차 의심 차량 (${verdictKo})${suffix} - ${data.message}`);
       } else if (data.verdict === "OK" || data.verdict === "TEMP") {
-        setResult("ok", `정상/임시 등록 차량 (${data.verdict})${suffix} - ${data.message}`);
+        setResult("ok", `정상/임시 등록 차량 (${verdictKo})${suffix} - ${data.message}`);
       } else {
-        setResult("warn", `판정: ${data.verdict}${suffix}`);
+        setResult("warn", `판정: ${verdictKo}${suffix}`);
       }
       await loadRecent();
     }
@@ -726,7 +1636,8 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-      setResult("bad", `위반기록 저장 완료: ${data.plate} (${data.verdict})`);
+      const verdictKo = VERDICT_KO[data.verdict] || data.verdict || "-";
+      setResult("bad", `위반기록 저장 완료: ${data.plate} (${verdictKo})`);
       await loadRecent();
     }
 
