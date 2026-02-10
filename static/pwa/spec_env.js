@@ -13,6 +13,7 @@
     "tr5",
     "tr6",
     "main_vcb",
+    "dc_panel",
     "meter",
     "facility",
     "facility_check",

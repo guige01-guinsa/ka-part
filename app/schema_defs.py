@@ -20,6 +20,7 @@ SCHEMA_TAB_ORDER = [
     "tr5",
     "tr6",
     "main_vcb",
+    "dc_panel",
     "meter",
     "facility",
     "facility_check",
@@ -28,7 +29,7 @@ SCHEMA_TAB_ORDER = [
     "facility_telecom",
 ]
 
-DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "meter", "facility_check"]
+DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "dc_panel", "meter", "facility_check"]
 DEFAULT_HIDDEN_TAB_KEYS = ["home", "facility", "facility_fire", "facility_mechanical", "facility_telecom"]
 
 FIELD_TYPE_SET = {"text", "number", "textarea", "select", "date"}
@@ -124,6 +125,16 @@ SCHEMA_DEFS = {
         ],
         "rows": [
             ["main_vcb_kv", "main_vcb_l1_a", "main_vcb_l2_a", "main_vcb_l3_a"],
+        ],
+    },
+    "dc_panel": {
+        "title": "정류반(DC)",
+        "fields": [
+            {"k": "dc_panel_v", "label": "V(DC)", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 1000},
+            {"k": "dc_panel_a", "label": "A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 2000},
+        ],
+        "rows": [
+            ["dc_panel_v", "dc_panel_a"],
         ],
     },
     "meter": {
@@ -349,6 +360,14 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
             "main_vcb_l1_a": "main_vcb_l1_a",
             "main_vcb_l2_a": "main_vcb_l2_a",
             "main_vcb_l3_a": "main_vcb_l3_a",
+        },
+    },
+    "dc_panel": {
+        "table": "dc_panel_reads",
+        "key_cols": ["site_name", "entry_date"],
+        "column_map": {
+            "dc_panel_v": "dc_panel_v",
+            "dc_panel_a": "dc_panel_a",
         },
     },
     "meter": {
