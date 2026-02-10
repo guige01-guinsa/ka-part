@@ -56,8 +56,7 @@
       ["lv6_temp"],
     ],
     main_vcb: [
-      ["main_vcb_kv", "main_vcb_l1_a", "main_vcb_l2_a"],
-      ["main_vcb_l3_a"],
+      ["main_vcb_kv", "main_vcb_l1_a", "main_vcb_l2_a", "main_vcb_l3_a"],
     ],
     meter: [
       ["AISS_L1_A", "AISS_L2_A", "AISS_L3_A"],

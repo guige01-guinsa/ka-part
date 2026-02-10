@@ -115,7 +115,7 @@ SCHEMA_DEFS = {
         "rows": _lv_rows("lv6"),
     },
     "main_vcb": {
-        "title": "특고(Main VCB)",
+        "title": "특고(Main)",
         "fields": [
             {"k": "main_vcb_kv", "label": "KV", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 300},
             {"k": "main_vcb_l1_a", "label": "L1-A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 4000},
@@ -123,8 +123,7 @@ SCHEMA_DEFS = {
             {"k": "main_vcb_l3_a", "label": "L3-A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 4000},
         ],
         "rows": [
-            ["main_vcb_kv", "main_vcb_l1_a", "main_vcb_l2_a"],
-            ["main_vcb_l3_a"],
+            ["main_vcb_kv", "main_vcb_l1_a", "main_vcb_l2_a", "main_vcb_l3_a"],
         ],
     },
     "meter": {
