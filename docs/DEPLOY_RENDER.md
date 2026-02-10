@@ -50,14 +50,37 @@ curl.exe -I https://www.ka-part.com/pwa/
 curl.exe -I https://www.ka-part.com/parking/admin2
 ```
 
-## 6) 주차 서비스(ka-part.com 내장 마운트) 환경변수
-Render 환경변수에 아래 값을 추가/확인:
+## 6) Render Runtime 설정 확인
 
-- `ENABLE_PARKING_EMBED=1`
-- `PARKING_ROOT_PATH=/parking`
-- `PARKING_API_KEY=<강한 랜덤 문자열>`
-- `PARKING_SECRET_KEY=<강한 랜덤 문자열>`
-- `PARKING_CONTEXT_SECRET=<강한 랜덤 문자열>`  # ka-part -> parking context token 서명키
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+
+## 7) 주차 연동 모드별 환경변수 체크리스트
+
+### A. 내장 모드 (ka-part 단일 서비스, 기본)
+
+입력 순서:
+
+1. `ENABLE_PARKING_EMBED=1`
+2. `PARKING_ROOT_PATH=/parking`
+3. `PARKING_API_KEY=<강한 랜덤 문자열>`
+4. `PARKING_SECRET_KEY=<강한 랜덤 문자열>`
+5. `PARKING_CONTEXT_SECRET=<강한 랜덤 문자열>`
+6. `PARKING_CONTEXT_MAX_AGE=300`
+
+### B. 외부 parking_man 게이트웨이 모드 (독립 운영)
+
+입력 순서:
+
+1. `ENABLE_PARKING_EMBED=0`
+2. `PARKING_BASE_URL=https://<parking-man-domain>`
+3. `PARKING_SSO_PATH=/sso`
+4. `PARKING_CONTEXT_SECRET=<parking_man과 동일값>`
+5. `PARKING_CONTEXT_MAX_AGE=300`
+
+`PARKING_SSO_PATH` 규칙:
+- parking_man이 도메인 루트(`/sso`)로 서비스되면 `/sso`
+- parking_man 자체가 `/parking` 하위로 서비스되면 `/parking/sso`
 
 설정 후 Deploy Hook 또는 재배포를 실행합니다.
 
