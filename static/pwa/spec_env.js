@@ -127,6 +127,20 @@
     return qs.toString();
   }
 
+  async function syncSiteIdentity(silent = true) {
+    const site = getSiteName();
+    const siteCode = getSiteCode();
+    if (!site && !siteCode) {
+      if (!silent) setMsg("site_name 또는 site_code를 입력하세요.", true);
+      return null;
+    }
+    const qs = buildSiteQuery(site, siteCode);
+    const data = await jfetch(`/api/site_identity?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
+    return data || null;
+  }
+
   function getConfigFromEditor() {
     const raw = ($("#envJson").value || "").trim();
     if (!raw) return {};
@@ -703,16 +717,24 @@
   }
 
   async function reloadConfig() {
+    const rawSite = getSiteName();
+    const rawSiteCode = getSiteCode();
+    if (!rawSite && !rawSiteCode) {
+      setMsg("site_name 또는 site_code를 입력하세요.", true);
+      return;
+    }
+    await syncSiteIdentity(true);
     const site = getSiteName();
     const siteCode = getSiteCode();
     if (!site) {
-      setMsg("site_name을 입력하세요.", true);
+      setMsg("site_name을 확인하세요.", true);
       return;
     }
     localStorage.setItem(SITE_KEY, site);
     setSiteCode(siteCode);
     const qs = buildSiteQuery(site, siteCode);
     const data = await jfetch(`/api/site_env?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setConfigToEditor(data.config || {});
     setActiveSchema(data.schema || {});
@@ -722,10 +744,17 @@
   }
 
   async function saveConfig() {
+    const rawSite = getSiteName();
+    const rawSiteCode = getSiteCode();
+    if (!rawSite && !rawSiteCode) {
+      setMsg("site_name 또는 site_code를 입력하세요.", true);
+      return;
+    }
+    await syncSiteIdentity(true);
     const site = getSiteName();
     const siteCode = getSiteCode();
     if (!site) {
-      setMsg("site_name을 입력하세요.", true);
+      setMsg("site_name을 확인하세요.", true);
       return;
     }
     let cfg = {};
@@ -739,6 +768,7 @@
       method: "PUT",
       body: JSON.stringify({ site_name: site, site_code: siteCode || "", config: cfg }),
     });
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setConfigToEditor(data.config || {});
     setActiveSchema(data.schema || {});
@@ -749,10 +779,17 @@
   }
 
   async function deleteConfig() {
+    const rawSite = getSiteName();
+    const rawSiteCode = getSiteCode();
+    if (!rawSite && !rawSiteCode) {
+      setMsg("site_name 또는 site_code를 입력하세요.", true);
+      return;
+    }
+    await syncSiteIdentity(true);
     const site = getSiteName();
     const siteCode = getSiteCode();
     if (!site) {
-      setMsg("site_name을 입력하세요.", true);
+      setMsg("site_name을 확인하세요.", true);
       return;
     }
     const ok = confirm(`${site}${siteCode ? ` [${siteCode}]` : ""} 단지의 제원설정을 삭제할까요?`);
@@ -760,6 +797,7 @@
     const qs = buildSiteQuery(site, siteCode);
     await jfetch(`/api/site_env?${qs}`, { method: "DELETE" });
     const data = await jfetch(`/api/schema?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setConfigToEditor((data && data.site_env_config) || {});
     setActiveSchema((data && data.schema) || {});
@@ -769,14 +807,22 @@
   }
 
   async function previewSchema() {
+    const rawSite = getSiteName();
+    const rawSiteCode = getSiteCode();
+    if (!rawSite && !rawSiteCode) {
+      setMsg("site_name 또는 site_code를 입력하세요.", true);
+      return;
+    }
+    await syncSiteIdentity(true);
     const site = getSiteName();
     const siteCode = getSiteCode();
     if (!site) {
-      setMsg("site_name을 입력하세요.", true);
+      setMsg("site_name을 확인하세요.", true);
       return;
     }
     const qs = buildSiteQuery(site, siteCode);
     const data = await jfetch(`/api/schema?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setActiveSchema(data.schema || {});
     renderPreview({ site_name: site, site_code: data.site_code || siteCode, schema: data.schema || {} });
@@ -805,8 +851,13 @@
 
     $("#templateSelect").addEventListener("change", updateTemplateDescAndScope);
     $("#btnTemplateApply").addEventListener("click", applySelectedTemplate);
+    $("#siteName")?.addEventListener("change", () => {
+      setSiteName(getSiteName());
+      syncSiteIdentity(true).catch(() => {});
+    });
     $("#siteCode")?.addEventListener("change", () => {
       setSiteCode(getSiteCode());
+      syncSiteIdentity(true).catch(() => {});
     });
     $("#btnTplAllOn").addEventListener("click", () => {
       setTemplateSelectionAll(true);
@@ -874,20 +925,27 @@
     const qCode = (u.searchParams.get("site_code") || "").trim().toUpperCase();
     const stored = (localStorage.getItem(SITE_KEY) || "").trim();
     const storedCode = (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
-    setSiteName(qSite || stored || "미지정단지");
+    setSiteName(qSite || stored || String(me.site_name || "").trim());
     setSiteCode(qCode || storedCode || "");
     enforceSitePolicy();
 
     wire();
     await loadBaseSchema();
-    try {
-      await reloadConfig();
-    } catch (e) {
-      setMsg(e.message || String(e), true);
-      return;
-    }
     await loadTemplates();
     await loadSiteList().catch(() => {});
+    if (getSiteName() || getSiteCode()) {
+      await syncSiteIdentity(true).catch(() => {});
+      try {
+        await reloadConfig();
+      } catch (e) {
+        setMsg(e.message || String(e), true);
+      }
+      return;
+    }
+    setConfigToEditor({});
+    setActiveSchema({});
+    renderPreview({ site_name: "", site_code: "", schema: {} });
+    setMsg("site_name 또는 site_code를 입력한 뒤 [불러오기]를 누르세요.");
   }
 
   init().catch((e) => setMsg(e.message || String(e), true));

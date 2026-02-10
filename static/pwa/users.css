@@ -145,6 +145,74 @@ h2 { margin: 0 0 10px; font-size: 16px; }
 }
 .line2 { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
 
+.query-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.sheet-wrap {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--bg-soft) 64%, black 36%);
+}
+
+.sheet {
+  width: 100%;
+  min-width: 1300px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.sheet th,
+.sheet td {
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  padding: 8px 10px;
+  font-size: 12px;
+  text-align: left;
+  vertical-align: middle;
+  word-break: break-word;
+}
+
+.sheet th:last-child,
+.sheet td:last-child {
+  border-right: 0;
+}
+
+.sheet thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: #dce8ff;
+  background: color-mix(in srgb, var(--bg) 86%, var(--bg-soft) 14%);
+  font-weight: 800;
+}
+
+.sheet tbody tr:hover {
+  background: color-mix(in srgb, var(--primary) 11%, transparent);
+}
+
+.sheet tbody tr.inactive {
+  opacity: 0.62;
+}
+
+.sheet .cell-center {
+  text-align: center;
+}
+
+.sheet .cell-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sheet .cell-actions .btn {
+  padding: 5px 8px;
+  font-size: 11px;
+  border-radius: 9px;
+}
+
 @media (max-width: 640px) {
   .grid { grid-template-columns: 1fr; }
+  .query-grid { grid-template-columns: 1fr; }
 }

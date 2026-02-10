@@ -12,9 +12,28 @@
   let editingId = null;
   let recommendedCount = 9;
   let me = null;
+  let availableSites = [];
+  let availableRegions = [];
+
+  const filterState = {
+    active_only: false,
+    site_code: "",
+    site_name: "",
+    region: "",
+    keyword: "",
+  };
 
   async function jfetch(url, opts = {}) {
     return KAAuth.requestJson(url, opts);
+  }
+
+  function escapeHtml(v) {
+    return String(v)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
   }
 
   function setMsg(msg, isErr = false) {
@@ -22,6 +41,12 @@
     if (!el) return;
     el.textContent = msg || "";
     el.classList.toggle("err", !!isErr);
+  }
+
+  function permissionLabel(user) {
+    const key = String(user.permission_level || (user.is_admin ? "admin" : user.is_site_admin ? "site_admin" : "user"));
+    const found = permissionLevels.find((x) => x.key === key);
+    return found ? found.label : key;
   }
 
   function clearForm() {
@@ -62,99 +87,6 @@
     setMsg("");
   }
 
-  function updateMeta() {
-    const el = $("#metaLine");
-    if (!el) return;
-    const count = users.length;
-    const active = users.filter((u) => u.is_active).length;
-    const adminCount = users.filter((u) => u.is_admin && u.is_active).length;
-    const siteAdminCount = users.filter((u) => !u.is_admin && u.is_site_admin && u.is_active).length;
-    const userCount = users.filter((u) => !u.is_admin && !u.is_site_admin && u.is_active).length;
-    el.textContent = `등록 ${count}명 (활성 ${active}명 / 관리자 ${adminCount}명 / 단지관리자 ${siteAdminCount}명 / 사용자 ${userCount}명 / 권장 ${recommendedCount}명)`;
-    el.classList.toggle("warn", active > recommendedCount);
-  }
-
-  function permissionLabel(user) {
-    const key = String(user.permission_level || (user.is_admin ? "admin" : user.is_site_admin ? "site_admin" : "user"));
-    const found = permissionLevels.find((x) => x.key === key);
-    return found ? found.label : key;
-  }
-
-  function itemHtml(u) {
-    const activeText = u.is_active ? "활성" : "비활성";
-    const level = permissionLabel(u);
-    const levelTag = `<span class="badge">${escapeHtml(level)}</span>`;
-    return `
-      <div class="item ${u.is_active ? "" : "inactive"}" data-id="${u.id}">
-        <div class="line1">
-          <div>
-            <div class="name">${escapeHtml(u.name || "")} <span class="login">(${escapeHtml(u.login_id || "")})</span> ${levelTag}</div>
-            <div class="line2">${escapeHtml(u.role || "")} / ${escapeHtml(u.phone || "-")} / ${activeText}</div>
-            <div class="line2">${escapeHtml(u.site_name || "-")}${u.site_code ? ` <code>[${escapeHtml(u.site_code)}]</code>` : ""} / 관리소 ${escapeHtml(
-      u.office_phone || "-"
-    )} / FAX ${escapeHtml(u.office_fax || "-")}</div>
-            <div class="line2">주소: ${escapeHtml(u.address || "-")}</div>
-          </div>
-          <div class="actions">
-            <button class="btn" data-action="edit" data-id="${u.id}" type="button">수정</button>
-            <button class="btn danger" data-action="delete" data-id="${u.id}" type="button">삭제</button>
-          </div>
-        </div>
-        <div class="line2">${escapeHtml(u.note || "")}</div>
-      </div>
-    `;
-  }
-
-  function escapeHtml(v) {
-    return String(v)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
-  }
-
-  function renderUsers() {
-    const wrap = $("#userList");
-    if (!wrap) return;
-    if (!users.length) {
-      wrap.innerHTML = '<div class="line2">등록된 사용자가 없습니다.</div>';
-      return;
-    }
-    wrap.innerHTML = users.map(itemHtml).join("");
-  }
-
-  async function loadRoles() {
-    const data = await jfetch("/api/user_roles");
-    roles = Array.isArray(data.roles) ? data.roles : [];
-    permissionLevels = Array.isArray(data.permission_levels) && data.permission_levels.length ? data.permission_levels : permissionLevels;
-    recommendedCount = Number(data.recommended_staff_count || 9);
-    const sel = $("#userRole");
-    sel.innerHTML = "";
-    for (const role of roles) {
-      const o = document.createElement("option");
-      o.value = role;
-      o.textContent = role;
-      sel.appendChild(o);
-    }
-    const permSel = $("#userPermission");
-    permSel.innerHTML = "";
-    for (const p of permissionLevels) {
-      const o = document.createElement("option");
-      o.value = String(p.key || "");
-      o.textContent = String(p.label || p.key || "");
-      permSel.appendChild(o);
-    }
-  }
-
-  async function loadUsers() {
-    const data = await jfetch("/api/users");
-    users = Array.isArray(data.users) ? data.users : [];
-    recommendedCount = Number(data.recommended_staff_count || recommendedCount);
-    updateMeta();
-    renderUsers();
-  }
-
   function payloadFromForm() {
     const pw = ($("#userPassword").value || "").trim();
     const payload = {
@@ -175,6 +107,201 @@
     return payload;
   }
 
+  function updateMeta() {
+    const el = $("#metaLine");
+    if (!el) return;
+    const count = users.length;
+    const active = users.filter((u) => u.is_active).length;
+    const adminCount = users.filter((u) => u.is_admin && u.is_active).length;
+    const siteAdminCount = users.filter((u) => !u.is_admin && u.is_site_admin && u.is_active).length;
+    const userCount = users.filter((u) => !u.is_admin && !u.is_site_admin && u.is_active).length;
+    el.textContent = `조회 ${count}명 (활성 ${active}명 / 관리자 ${adminCount}명 / 단지관리자 ${siteAdminCount}명 / 사용자 ${userCount}명 / 권장 ${recommendedCount}명)`;
+    el.classList.toggle("warn", active > recommendedCount);
+  }
+
+  function renderFilterSummary() {
+    const el = $("#filterSummary");
+    if (!el) return;
+    const parts = [];
+    if (filterState.site_code) parts.push(`단지코드=${filterState.site_code}`);
+    if (filterState.site_name) parts.push(`단지명=${filterState.site_name}`);
+    if (filterState.region) parts.push(`지역=${filterState.region}`);
+    if (filterState.keyword) parts.push(`키워드=${filterState.keyword}`);
+    if (filterState.active_only) parts.push("활성만");
+    el.textContent = parts.length ? `조회조건: ${parts.join(" / ")}` : "조회조건: 전체";
+  }
+
+  function rowHtml(u, idx) {
+    const activeText = u.is_active ? "활성" : "비활성";
+    const region = String(u.region || "").trim() || "-";
+    return `
+      <tr class="${u.is_active ? "" : "inactive"}" data-id="${u.id}">
+        <td class="cell-center">${idx + 1}</td>
+        <td>${escapeHtml(permissionLabel(u))}</td>
+        <td>${escapeHtml(u.login_id || "")}</td>
+        <td>${escapeHtml(u.name || "")}</td>
+        <td>${escapeHtml(u.role || "")}</td>
+        <td>${escapeHtml(u.phone || "-")}</td>
+        <td>${escapeHtml(u.site_code || "-")}</td>
+        <td>${escapeHtml(u.site_name || "-")}</td>
+        <td>${escapeHtml(region)}</td>
+        <td>${escapeHtml(u.office_phone || "-")}</td>
+        <td>${escapeHtml(u.office_fax || "-")}</td>
+        <td>${escapeHtml(u.address || "-")}</td>
+        <td>${activeText}</td>
+        <td>
+          <div class="cell-actions">
+            <button class="btn" data-action="edit" data-id="${u.id}" type="button">수정</button>
+            <button class="btn danger" data-action="delete" data-id="${u.id}" type="button">삭제</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  function renderUsersSheet() {
+    const body = $("#userSheetBody");
+    if (!body) return;
+    if (!users.length) {
+      body.innerHTML = '<tr><td colspan="14" class="cell-center">조회된 사용자가 없습니다.</td></tr>';
+      return;
+    }
+    body.innerHTML = users.map((u, idx) => rowHtml(u, idx)).join("");
+  }
+
+  function uniqueSiteNames(sites) {
+    const seen = new Set();
+    const out = [];
+    for (const s of sites) {
+      const name = String(s.site_name || "").trim();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+    }
+    return out.sort((a, b) => a.localeCompare(b));
+  }
+
+  function setSelectOptions(selectEl, items, currentValue, valueKey, labelBuilder) {
+    if (!selectEl) return;
+    const options = ['<option value="">전체</option>'];
+    for (const item of items) {
+      const value = String(item[valueKey] || "").trim();
+      if (!value) continue;
+      options.push(`<option value="${escapeHtml(value)}">${escapeHtml(labelBuilder(item))}</option>`);
+    }
+    selectEl.innerHTML = options.join("");
+    if (currentValue) selectEl.value = currentValue;
+  }
+
+  function syncSiteFilterPairByCode() {
+    const code = ($("#filterSiteCode")?.value || "").trim().toUpperCase();
+    if (!code) return;
+    const hit = availableSites.find((x) => String(x.site_code || "").trim().toUpperCase() === code);
+    if (!hit) return;
+    const name = String(hit.site_name || "").trim();
+    if (name) $("#filterSiteName").value = name;
+  }
+
+  function syncSiteFilterPairByName() {
+    const name = ($("#filterSiteName")?.value || "").trim();
+    if (!name) return;
+    const hits = availableSites.filter((x) => String(x.site_name || "").trim() === name);
+    if (hits.length !== 1) return;
+    const code = String(hits[0].site_code || "").trim().toUpperCase();
+    if (code) $("#filterSiteCode").value = code;
+  }
+
+  function updateFilterControls() {
+    const codeSel = $("#filterSiteCode");
+    const nameSel = $("#filterSiteName");
+    const regionSel = $("#filterRegion");
+    if (!codeSel || !nameSel || !regionSel) return;
+
+    setSelectOptions(
+      codeSel,
+      availableSites,
+      filterState.site_code,
+      "site_code",
+      (x) => `${x.site_code || ""}${x.site_name ? ` (${x.site_name})` : ""} · ${Number(x.count || 0)}명`
+    );
+
+    const siteNames = uniqueSiteNames(availableSites).map((name) => ({ site_name: name }));
+    setSelectOptions(nameSel, siteNames, filterState.site_name, "site_name", (x) => String(x.site_name || ""));
+
+    const regions = availableRegions.map((x) => ({ region: String(x.region || "").trim(), count: Number(x.count || 0) }));
+    setSelectOptions(regionSel, regions, filterState.region, "region", (x) => `${x.region} · ${x.count}명`);
+
+    $("#filterKeyword").value = filterState.keyword || "";
+    $("#filterActiveOnly").checked = !!filterState.active_only;
+  }
+
+  function collectFilterStateFromUI() {
+    filterState.site_code = ($("#filterSiteCode")?.value || "").trim().toUpperCase();
+    filterState.site_name = ($("#filterSiteName")?.value || "").trim();
+    filterState.region = ($("#filterRegion")?.value || "").trim();
+    filterState.keyword = ($("#filterKeyword")?.value || "").trim();
+    filterState.active_only = !!$("#filterActiveOnly")?.checked;
+  }
+
+  function resetFilterState() {
+    filterState.site_code = "";
+    filterState.site_name = "";
+    filterState.region = "";
+    filterState.keyword = "";
+    filterState.active_only = false;
+  }
+
+  function buildUserQuery() {
+    const qs = new URLSearchParams();
+    if (filterState.active_only) qs.set("active_only", "1");
+    if (filterState.site_code) qs.set("site_code", filterState.site_code);
+    if (filterState.site_name) qs.set("site_name", filterState.site_name);
+    if (filterState.region) qs.set("region", filterState.region);
+    if (filterState.keyword) qs.set("keyword", filterState.keyword);
+    return qs.toString();
+  }
+
+  async function loadRoles() {
+    const data = await jfetch("/api/user_roles");
+    roles = Array.isArray(data.roles) ? data.roles : [];
+    permissionLevels = Array.isArray(data.permission_levels) && data.permission_levels.length ? data.permission_levels : permissionLevels;
+    recommendedCount = Number(data.recommended_staff_count || 9);
+
+    const roleSel = $("#userRole");
+    roleSel.innerHTML = "";
+    for (const role of roles) {
+      const o = document.createElement("option");
+      o.value = role;
+      o.textContent = role;
+      roleSel.appendChild(o);
+    }
+
+    const permSel = $("#userPermission");
+    permSel.innerHTML = "";
+    for (const p of permissionLevels) {
+      const o = document.createElement("option");
+      o.value = String(p.key || "");
+      o.textContent = String(p.label || p.key || "");
+      permSel.appendChild(o);
+    }
+  }
+
+  async function loadUsers() {
+    const query = buildUserQuery();
+    const data = await jfetch(query ? `/api/users?${query}` : "/api/users");
+    users = Array.isArray(data.users) ? data.users : [];
+    recommendedCount = Number(data.recommended_staff_count || recommendedCount);
+
+    const f = data && typeof data.filters === "object" ? data.filters : {};
+    availableSites = Array.isArray(f.sites) ? f.sites : [];
+    availableRegions = Array.isArray(f.regions) ? f.regions : [];
+
+    updateFilterControls();
+    updateMeta();
+    renderUsersSheet();
+    renderFilterSummary();
+  }
+
   async function saveUser() {
     const body = payloadFromForm();
     if (editingId == null && !body.password) {
@@ -185,6 +312,7 @@
       setMsg("비밀번호는 8자 이상이어야 합니다.", true);
       return;
     }
+
     if (editingId == null) {
       await jfetch("/api/users", { method: "POST", body: JSON.stringify(body) });
       setMsg("등록했습니다.");
@@ -192,6 +320,7 @@
       await jfetch(`/api/users/${editingId}`, { method: "PATCH", body: JSON.stringify(body) });
       setMsg("수정했습니다.");
     }
+
     await loadUsers();
     clearForm();
   }
@@ -215,6 +344,33 @@
     $("#btnReload").addEventListener("click", () => loadUsers().catch((e) => setMsg(e.message, true)));
     $("#btnReset").addEventListener("click", clearForm);
     $("#btnSaveUser").addEventListener("click", () => saveUser().catch((e) => setMsg(e.message, true)));
+
+    $("#btnApplyFilter").addEventListener("click", () => {
+      collectFilterStateFromUI();
+      loadUsers().catch((e) => setMsg(e.message, true));
+    });
+
+    $("#btnClearFilter").addEventListener("click", () => {
+      resetFilterState();
+      updateFilterControls();
+      loadUsers().catch((e) => setMsg(e.message, true));
+    });
+
+    $("#filterSiteCode").addEventListener("change", () => {
+      syncSiteFilterPairByCode();
+    });
+
+    $("#filterSiteName").addEventListener("change", () => {
+      syncSiteFilterPairByName();
+    });
+
+    $("#filterKeyword").addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      collectFilterStateFromUI();
+      loadUsers().catch((err) => setMsg(err.message, true));
+    });
+
     $("#btnLogout").addEventListener("click", () => {
       const run = async () => {
         try {
@@ -226,7 +382,7 @@
       run().catch(() => {});
     });
 
-    $("#userList").addEventListener("click", (e) => {
+    $("#userSheetBody").addEventListener("click", (e) => {
       const btn = e.target.closest("button[data-action]");
       if (!btn) return;
       const id = Number(btn.dataset.id);
@@ -248,6 +404,7 @@
     }
     await loadRoles();
     clearForm();
+    updateFilterControls();
     await loadUsers();
     wire();
   }

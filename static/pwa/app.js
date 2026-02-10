@@ -132,24 +132,40 @@
     return String(authUser.site_code || "").trim().toUpperCase();
   }
 
-  function enforceSiteNamePolicy() {
-    const el = $("#siteName");
-    if (!el || !authUser) return;
+  function enforceSiteIdentityPolicy() {
+    const nameEl = $("#siteName");
+    const codeEl = $("#siteCode");
+    if ((!nameEl && !codeEl) || !authUser) return;
     if (hasAdminPermission(authUser)) {
-      el.readOnly = false;
-      el.removeAttribute("aria-readonly");
-      el.title = "";
+      if (nameEl) {
+        nameEl.readOnly = false;
+        nameEl.removeAttribute("aria-readonly");
+        nameEl.title = "";
+      }
+      if (codeEl) {
+        codeEl.readOnly = false;
+        codeEl.removeAttribute("aria-readonly");
+        codeEl.title = "";
+      }
       return;
     }
-    const assigned = assignedSiteNameForUser();
-    if (!assigned) {
+    const assignedName = assignedSiteNameForUser();
+    if (!assignedName) {
       throw new Error("계정에 소속 단지가 지정되지 않았습니다. 관리자에게 문의하세요.");
     }
-    setSiteName(assigned);
-    el.value = assigned;
-    el.readOnly = true;
-    el.setAttribute("aria-readonly", "true");
-    el.title = "소속 단지는 관리자만 변경할 수 있습니다.";
+    const assignedCode = assignedSiteCodeForUser();
+    setSiteName(assignedName);
+    setSiteCode(assignedCode);
+    if (nameEl) {
+      nameEl.readOnly = true;
+      nameEl.setAttribute("aria-readonly", "true");
+      nameEl.title = "단지명 입력/수정은 관리자만 가능합니다.";
+    }
+    if (codeEl) {
+      codeEl.readOnly = true;
+      codeEl.setAttribute("aria-readonly", "true");
+      codeEl.title = "단지코드 입력/수정은 관리자만 가능합니다.";
+    }
   }
 
   async function ensureAuth() {
@@ -161,7 +177,7 @@
     if (btnSpec && !hasSiteAdminPermission(authUser)) btnSpec.style.display = "none";
     const btnBackup = $("#btnBackup");
     if (btnBackup && !hasSiteAdminPermission(authUser)) btnBackup.style.display = "none";
-    enforceSiteNamePolicy();
+    enforceSiteIdentityPolicy();
     const assignedCode = assignedSiteCodeForUser();
     if (assignedCode) setSiteCode(assignedCode);
   }
@@ -219,32 +235,28 @@
     return (el && el.value ? el.value : "").trim();
   }
 
+  function getSiteCodeRaw() {
+    const el = $("#siteCode");
+    return (el && el.value ? el.value : "").trim().toUpperCase();
+  }
+
   function getSiteCode() {
+    const inputCode = getSiteCodeRaw();
+    if (inputCode) return inputCode;
     return (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
   }
 
-  function getHomeComplexName() {
-    const el = document.getElementById("f-home-complex_name");
-    return el ? String(el.value || "").trim() : "";
-  }
-
-  function syncHomeSiteCodeDisplay(code = null) {
-    const el = document.getElementById("f-home-complex_code");
-    if (!el) return;
-    const next = code === null ? getSiteCode() : String(code || "").trim().toUpperCase();
-    el.value = next;
+  function syncHomeSiteIdentityDisplay(name = null, code = null) {
+    const nameEl = document.getElementById("f-home-complex_name");
+    const codeEl = document.getElementById("f-home-complex_code");
+    const nextName = name === null ? getSiteNameRaw() || getSiteName() : String(name || "").trim();
+    const nextCode = code === null ? getSiteCode() : String(code || "").trim().toUpperCase();
+    if (nameEl) nameEl.value = nextName;
+    if (codeEl) codeEl.value = nextCode;
   }
 
   function resolveSiteNameForSave() {
-    const currentSite = getSiteNameRaw();
-    if (currentSite) return currentSite;
-
-    const homeComplexName = getHomeComplexName();
-    if (homeComplexName) {
-      setSiteName(homeComplexName);
-      return homeComplexName;
-    }
-    return "";
+    return getSiteNameRaw();
   }
 
   function setSiteName(name) {
@@ -257,9 +269,11 @@
 
   function setSiteCode(code) {
     const clean = (code || "").trim().toUpperCase();
+    const el = $("#siteCode");
+    if (el) el.value = clean;
     if (clean) localStorage.setItem(SITE_CODE_KEY, clean);
     else localStorage.removeItem(SITE_CODE_KEY);
-    syncHomeSiteCodeDisplay(clean);
+    syncHomeSiteIdentityDisplay(null, clean);
     return clean;
   }
 
@@ -292,6 +306,52 @@
     const stored = (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
     if (stored) return setSiteCode(stored);
     return setSiteCode("");
+  }
+
+  function updateAddressBarSiteQuery() {
+    const u = new URL(window.location.href);
+    const siteName = getSiteNameRaw();
+    const siteCode = getSiteCodeRaw();
+    if (siteName) u.searchParams.set("site_name", siteName);
+    else u.searchParams.delete("site_name");
+    if (siteCode) u.searchParams.set("site_code", siteCode);
+    else u.searchParams.delete("site_code");
+    const next = `${u.pathname}${u.search ? `?${u.searchParams.toString()}` : ""}`;
+    window.history.replaceState({}, "", next);
+  }
+
+  function enforceHomeSiteIdentityPolicy() {
+    const homeName = document.getElementById("f-home-complex_name");
+    const homeCode = document.getElementById("f-home-complex_code");
+    if (!homeName && !homeCode) return;
+    const canEdit = !!(authUser && hasAdminPermission(authUser));
+    if (homeName) {
+      homeName.readOnly = true;
+      homeName.setAttribute("aria-readonly", "true");
+      homeName.title = canEdit ? "단지명은 상단 입력창에서 변경됩니다." : "단지명 입력/수정은 관리자만 가능합니다.";
+    }
+    if (homeCode) {
+      homeCode.readOnly = true;
+      homeCode.setAttribute("aria-readonly", "true");
+      homeCode.title = canEdit ? "단지코드는 상단 입력창에서 변경됩니다." : "단지코드 입력/수정은 관리자만 가능합니다.";
+    }
+    syncHomeSiteIdentityDisplay();
+  }
+
+  async function syncSiteIdentity({ requireInput = true } = {}) {
+    const currentSite = getSiteNameRaw();
+    const currentCode = getSiteCodeRaw();
+    if (requireInput && !currentSite && !currentCode) {
+      throw new Error("단지명 또는 단지코드를 입력하세요.");
+    }
+    const qs = buildSiteQuery(currentSite, currentCode);
+    const data = await jfetch(`/api/site_identity?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
+    enforceSiteIdentityPolicy();
+    enforceHomeSiteIdentityPolicy();
+    updateAddressBarSiteQuery();
+    return data || {};
   }
 
   function getDateStart() {
@@ -560,7 +620,8 @@
         el.value = values[field.k] ?? "";
       }
     }
-    syncHomeSiteCodeDisplay();
+    syncHomeSiteIdentityDisplay();
+    enforceHomeSiteIdentityPolicy();
   }
 
   function getActivePanel() {
@@ -640,7 +701,8 @@
       const el = document.getElementById(`f-home-${f.k}`);
       if (el && obj[f.k] !== undefined) el.value = obj[f.k];
     }
-    syncHomeSiteCodeDisplay();
+    syncHomeSiteIdentityDisplay();
+    enforceHomeSiteIdentityPolicy();
   }
 
   function clearHomeDraft() {
@@ -654,7 +716,8 @@
       const el = document.getElementById(`f-home-${f.k}`);
       if (el) el.value = "";
     }
-    syncHomeSiteCodeDisplay();
+    syncHomeSiteIdentityDisplay();
+    enforceHomeSiteIdentityPolicy();
   }
 
   async function loadOne(site, date) {
@@ -685,6 +748,7 @@
   }
 
   async function doLoad() {
+    await syncSiteIdentity({ requireInput: true });
     await loadRange();
   }
 
@@ -723,9 +787,10 @@
   }
 
   async function doSave() {
+    await syncSiteIdentity({ requireInput: true });
     const siteNameForSave = resolveSiteNameForSave();
     if (!siteNameForSave) {
-      alert("홈에 있는 단지명이 없어 저장할 수 없습니다. 단지명을 입력해 주세요.");
+      alert("단지명 또는 단지코드를 먼저 입력하세요.");
       toast("단지명 누락: 저장할 수 없습니다.");
       return;
     }
@@ -746,6 +811,7 @@
   }
 
   async function doDelete() {
+    await syncSiteIdentity({ requireInput: true });
     const date = getPickedDate();
     const ok = confirm(`${date} 데이터를 삭제할까요?`);
     if (!ok) return;
@@ -756,6 +822,7 @@
   }
 
   async function doExport() {
+    await syncSiteIdentity({ requireInput: true });
     const url = `/api/export?site_name=${encodeURIComponent(getSiteName())}&date_from=${encodeURIComponent(
       getDateStart()
     )}&date_to=${encodeURIComponent(getDateEnd())}`;
@@ -763,6 +830,7 @@
   }
 
   async function doPdf() {
+    await syncSiteIdentity({ requireInput: true });
     const url = `/api/pdf?site_name=${encodeURIComponent(getSiteName())}&date=${encodeURIComponent(getPickedDate())}`;
     await downloadWithAuth(url, "report.pdf");
   }
@@ -825,19 +893,31 @@
       activateTab(btn.dataset.tab, true);
     });
 
-    $("#siteName")?.addEventListener("change", () => {
-      if (authUser && !hasAdminPermission(authUser)) {
-        const assigned = assignedSiteNameForUser();
-        if (assigned) setSiteName(assigned);
-        toast("소속 단지는 관리자만 변경할 수 있습니다.");
+    const onSiteIdentityChange = async (source) => {
+      const isAdmin = authUser && hasAdminPermission(authUser);
+      if (!isAdmin) {
+        setSiteName(assignedSiteNameForUser());
+        setSiteCode(assignedSiteCodeForUser());
+        enforceSiteIdentityPolicy();
+        enforceHomeSiteIdentityPolicy();
+        toast("단지명/단지코드 입력·수정은 관리자만 가능합니다.");
         return;
       }
-      const next = setSiteName(getSiteName());
-      setSiteCode("");
-      const u = new URL(window.location.href);
-      u.searchParams.set("site_name", next);
-      u.searchParams.delete("site_code");
-      window.location.href = `${u.pathname}?${u.searchParams.toString()}`;
+      if (source === "siteName") {
+        setSiteName(getSiteNameRaw());
+      } else if (source === "siteCode") {
+        setSiteCode(getSiteCodeRaw());
+      }
+      await syncSiteIdentity({ requireInput: true });
+      await loadRange().catch(() => {});
+      toast("단지명/단지코드가 자동 매핑되었습니다.");
+    };
+
+    $("#siteName")?.addEventListener("change", () => {
+      onSiteIdentityChange("siteName").catch((err) => alert("단지정보 동기화 오류: " + err.message));
+    });
+    $("#siteCode")?.addEventListener("change", () => {
+      onSiteIdentityChange("siteCode").catch((err) => alert("단지정보 동기화 오류: " + err.message));
     });
 
     document.getElementById("panel-home")?.addEventListener("input", (e) => {
@@ -910,9 +990,10 @@
 
   async function init() {
     await ensureAuth();
-    const siteName = resolveSiteName();
-    const siteCode = resolveSiteCode();
-    const data = await jfetch(`/api/schema?${buildSiteQuery(siteName, siteCode)}`);
+    resolveSiteName();
+    resolveSiteCode();
+    await syncSiteIdentity({ requireInput: false });
+    const data = await jfetch(`/api/schema?${buildSiteQuery(getSiteNameRaw(), getSiteCode())}`);
     const schema = data && data.schema ? data.schema : null;
     if (data && data.site_name) setSiteName(String(data.site_name));
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
@@ -920,7 +1001,7 @@
     TABS = normalizeTabsFromSchema(schema);
     if (!TABS.length) throw new Error("스키마 탭이 비어있습니다.");
     render();
-    syncHomeSiteCodeDisplay();
+    enforceHomeSiteIdentityPolicy();
     wire();
     startMaintenancePolling();
     syncStickyOffset();

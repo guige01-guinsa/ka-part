@@ -655,6 +655,111 @@ def resolve_or_create_site_code(site_name: str, *, preferred_code: str | None = 
         con.close()
 
 
+def find_site_code_by_name(site_name: str) -> str | None:
+    clean_site_name = _require_site_name_value(site_name)
+    con = _connect()
+    try:
+        queries = [
+            (
+                """
+                SELECT site_code
+                FROM site_registry
+                WHERE site_name=?
+                LIMIT 1
+                """,
+                (clean_site_name,),
+            ),
+            (
+                """
+                SELECT site_code
+                FROM site_env_configs
+                WHERE site_name=?
+                  AND site_code IS NOT NULL
+                  AND TRIM(site_code)<>''
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (clean_site_name,),
+            ),
+            (
+                """
+                SELECT site_code
+                FROM staff_users
+                WHERE site_name=?
+                  AND site_code IS NOT NULL
+                  AND TRIM(site_code)<>''
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+                """,
+                (clean_site_name,),
+            ),
+        ]
+        for sql, params in queries:
+            row = con.execute(sql, params).fetchone()
+            if not row:
+                continue
+            code = _clean_site_code_value(row["site_code"])
+            if code:
+                return code
+        return None
+    finally:
+        con.close()
+
+
+def find_site_name_by_code(site_code: str) -> str | None:
+    clean_site_code = _clean_site_code_value(site_code)
+    if not clean_site_code:
+        return None
+
+    con = _connect()
+    try:
+        queries = [
+            (
+                """
+                SELECT site_name
+                FROM site_registry
+                WHERE site_code=?
+                LIMIT 1
+                """,
+                (clean_site_code,),
+            ),
+            (
+                """
+                SELECT site_name
+                FROM site_env_configs
+                WHERE site_code=?
+                  AND site_name IS NOT NULL
+                  AND TRIM(site_name)<>''
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (clean_site_code,),
+            ),
+            (
+                """
+                SELECT site_name
+                FROM staff_users
+                WHERE site_code=?
+                  AND site_name IS NOT NULL
+                  AND TRIM(site_name)<>''
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+                """,
+                (clean_site_code,),
+            ),
+        ]
+        for sql, params in queries:
+            row = con.execute(sql, params).fetchone()
+            if not row:
+                continue
+            name = str(row["site_name"] or "").strip()
+            if name:
+                return name
+        return None
+    finally:
+        con.close()
+
+
 def count_staff_users_for_site(site_name: str, *, site_code: str | None = None) -> int:
     clean_site_name = _require_site_name_value(site_name)
     clean_site_code = _clean_site_code_value(site_code)

@@ -36,10 +36,11 @@ from ..db import (
     ensure_site,
     get_auth_user_by_token,
     get_latest_signup_phone_verification,
+    find_site_code_by_name,
+    find_site_name_by_code,
     get_site_env_config,
     get_site_env_record,
     get_first_staff_user_for_site,
-    get_latest_home_complex_name,
     get_staff_user_by_phone,
     get_staff_user,
     get_staff_user_by_login,
@@ -288,6 +289,48 @@ def _clean_bool(value: Any, default: bool = False) -> bool:
     return s in ("1", "true", "y", "yes", "on")
 
 
+def _clean_query_text(value: Any, *, max_len: int = 80) -> str:
+    txt = str(value or "").strip()
+    if len(txt) > max_len:
+        raise HTTPException(status_code=400, detail=f"query text length must be <= {max_len}")
+    return txt
+
+
+_REGION_ALIASES = {
+    "서울": "서울특별시",
+    "부산": "부산광역시",
+    "대구": "대구광역시",
+    "인천": "인천광역시",
+    "광주": "광주광역시",
+    "대전": "대전광역시",
+    "울산": "울산광역시",
+    "세종": "세종특별자치시",
+    "경기": "경기도",
+    "강원": "강원특별자치도",
+    "충북": "충청북도",
+    "충남": "충청남도",
+    "전북": "전북특별자치도",
+    "전남": "전라남도",
+    "경북": "경상북도",
+    "경남": "경상남도",
+    "제주": "제주특별자치도",
+}
+
+
+def _normalize_region_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    token = re.split(r"[\s,]+", raw, maxsplit=1)[0].strip()
+    if not token:
+        return ""
+    return _REGION_ALIASES.get(token, token)
+
+
+def _region_from_address(address: Any) -> str:
+    return _normalize_region_label(address)
+
+
 def _permission_level_from_user(user: Dict[str, Any]) -> str:
     if int(user.get("is_admin") or 0) == 1:
         return "admin"
@@ -409,6 +452,103 @@ def _resolve_allowed_site_code(user: Dict[str, Any], requested_site_code: Any) -
     return ""
 
 
+def _resolve_spec_env_site_target(
+    user: Dict[str, Any],
+    requested_site_name: Any,
+    requested_site_code: Any,
+    *,
+    require_any: bool = True,
+    for_write: bool = False,
+) -> Tuple[str, str]:
+    raw_site_name = str(requested_site_name or "").strip()
+    raw_site_code = str(requested_site_code or "").strip().upper()
+
+    if int(user.get("is_admin") or 0) == 1:
+        clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
+        clean_site_code = _clean_site_code(raw_site_code, required=False)
+
+        if not clean_site_name and not clean_site_code:
+            if require_any:
+                raise HTTPException(status_code=400, detail="site_name 또는 site_code 중 하나를 입력하세요.")
+            return "", ""
+
+        if clean_site_name and not clean_site_code:
+            # 관리자 입력 편의: site_name 단독 입력 시 site_code를 자동 매핑/생성
+            clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
+        elif clean_site_code and not clean_site_name:
+            resolved_name = find_site_name_by_code(clean_site_code)
+            if not resolved_name:
+                raise HTTPException(status_code=404, detail="입력한 site_code에 해당하는 site_name을 찾을 수 없습니다.")
+            clean_site_name = _clean_site_name(resolved_name, required=True)
+
+        mapped_name = find_site_name_by_code(clean_site_code) if clean_site_code else None
+        if mapped_name and _clean_site_name(mapped_name, required=True) != clean_site_name:
+            raise HTTPException(status_code=409, detail="입력한 site_code가 다른 site_name에 연결되어 있습니다.")
+        mapped_code = find_site_code_by_name(clean_site_name) if clean_site_name else None
+        if mapped_code and _clean_site_code(mapped_code, required=False) != clean_site_code:
+            raise HTTPException(status_code=409, detail="입력한 site_name이 다른 site_code에 연결되어 있습니다.")
+
+        if for_write and clean_site_name:
+            clean_site_code = _resolve_site_code_for_site(clean_site_name, clean_site_code)
+
+        return clean_site_name, clean_site_code
+
+    clean_site_name = _resolve_allowed_site_name(user, raw_site_name, required=False)
+    clean_site_code = _resolve_allowed_site_code(user, raw_site_code)
+    if not clean_site_code:
+        clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
+        uid = int(user.get("id") or 0)
+        if uid > 0 and clean_site_code:
+            set_staff_user_site_code(uid, clean_site_code)
+    return clean_site_name, clean_site_code
+
+
+def _resolve_site_identity_for_main(user: Dict[str, Any], requested_site_name: Any, requested_site_code: Any) -> Tuple[str, str]:
+    raw_site_name = str(requested_site_name or "").strip()
+    raw_site_code = str(requested_site_code or "").strip().upper()
+    is_admin = int(user.get("is_admin") or 0) == 1
+
+    if is_admin:
+        clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
+        clean_site_code = _clean_site_code(raw_site_code, required=False)
+
+        if clean_site_name and not clean_site_code:
+            clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
+            return clean_site_name, clean_site_code
+
+        if clean_site_code and not clean_site_name:
+            resolved_name = find_site_name_by_code(clean_site_code)
+            if not resolved_name:
+                raise HTTPException(status_code=404, detail="입력한 site_code에 매핑된 site_name이 없습니다.")
+            clean_site_name = _clean_site_name(resolved_name, required=True)
+            return clean_site_name, clean_site_code
+
+        if clean_site_name and clean_site_code:
+            clean_site_code = _resolve_site_code_for_site(clean_site_name, clean_site_code)
+            return clean_site_name, clean_site_code
+
+        fallback_name = str(user.get("site_name") or "").strip()
+        fallback_code = _clean_site_code(user.get("site_code"), required=False)
+        return fallback_name, fallback_code
+
+    assigned_site_name = _normalized_assigned_site_name(user)
+    assigned_site_code = _clean_site_code(user.get("site_code"), required=False)
+
+    if raw_site_name:
+        requested_name = _clean_site_name(raw_site_name, required=True)
+        if requested_name != assigned_site_name:
+            raise HTTPException(status_code=403, detail="단지명/단지코드 입력·수정은 관리자만 가능합니다.")
+    if raw_site_code:
+        requested_code = _clean_site_code(raw_site_code, required=True)
+        if not assigned_site_code or requested_code != assigned_site_code:
+            raise HTTPException(status_code=403, detail="단지명/단지코드 입력·수정은 관리자만 가능합니다.")
+
+    if not assigned_site_code:
+        assigned_site_code = _clean_site_code(find_site_code_by_name(assigned_site_name), required=False)
+
+    return assigned_site_name, assigned_site_code
+
+
 def _schema_allowed_keys(schema: Dict[str, Dict[str, Any]]) -> Dict[str, set[str]]:
     out: Dict[str, set[str]] = {}
     for tab_key in schema.keys():
@@ -465,35 +605,29 @@ def _home_only_site_env_config() -> Dict[str, Any]:
 
 
 def _verify_first_site_registrant_for_spec_env(user: Dict[str, Any], site_name: str, site_code: str = "") -> Dict[str, Any]:
+    target_site_name = _clean_site_name(site_name, required=True)
+    target_site_code = _clean_site_code(site_code, required=False)
+
     if int(user.get("is_admin") or 0) == 1:
-        return {"verified": True, "home_site_name": site_name, "first_user_id": None}
+        return {"verified": True, "home_site_name": target_site_name, "first_user_id": None}
 
     if int(user.get("is_site_admin") or 0) != 1:
         raise HTTPException(status_code=403, detail="제원설정 권한이 없습니다.")
 
     assigned_site_name = _normalized_assigned_site_name(user)
     assigned_site_code = _clean_site_code(user.get("site_code"), required=False)
-    target_site_name = _clean_site_name(site_name or assigned_site_name, required=True)
-    target_site_code = _clean_site_code(site_code or assigned_site_code, required=False)
-
-    home_complex_name = _clean_site_name(get_latest_home_complex_name(target_site_name) or target_site_name, required=True)
-    if home_complex_name != assigned_site_name:
-        raise HTTPException(
-            status_code=403,
-            detail="홈 탭 단지명 재확인에 실패했습니다. 소속 단지와 홈 단지명이 일치할 때만 제원설정을 사용할 수 있습니다.",
-        )
-
-    first_user = get_first_staff_user_for_site(home_complex_name, site_code=target_site_code or assigned_site_code or None)
-    if not first_user:
-        raise HTTPException(status_code=403, detail="최초가입자 정보를 찾을 수 없습니다. 관리자에게 문의하세요.")
-    if int(first_user.get("id") or 0) != int(user.get("id") or 0):
-        raise HTTPException(status_code=403, detail="해당 단지의 최초가입자만 제원설정을 사용할 수 있습니다.")
+    if target_site_name != assigned_site_name:
+        raise HTTPException(status_code=403, detail="소속 단지의 제원설정만 접근할 수 있습니다.")
+    if assigned_site_code and target_site_code and target_site_code != assigned_site_code:
+        raise HTTPException(status_code=403, detail="소속 단지코드의 제원설정만 접근할 수 있습니다.")
+    if not target_site_code:
+        target_site_code = assigned_site_code
 
     return {
         "verified": True,
-        "home_site_name": home_complex_name,
-        "first_user_id": int(first_user.get("id") or 0),
-        "first_login_id": str(first_user.get("login_id") or ""),
+        "home_site_name": target_site_name,
+        "first_user_id": int(user.get("id") or 0),
+        "first_login_id": str(user.get("login_id") or ""),
     }
 
 
@@ -646,15 +780,13 @@ def api_base_schema(request: Request):
 @router.get("/site_env")
 def api_site_env(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
     user, _token = _require_site_env_manager(request)
-    if int(user.get("is_admin") or 0) == 1:
-        clean_site_name = _clean_site_name(site_name, required=True)
-        clean_site_code = _clean_site_code(site_code, required=False)
-    else:
-        clean_site_name = _resolve_allowed_site_name(user, site_name, required=False)
-        clean_site_code = _resolve_allowed_site_code(user, site_code)
+    clean_site_name, clean_site_code = _resolve_spec_env_site_target(
+        user, site_name, site_code, require_any=True, for_write=False
+    )
     verify = _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
 
     row = get_site_env_record(clean_site_name, site_code=clean_site_code or None)
+    resolved_site_name = str((row or {}).get("site_name") or "").strip() or clean_site_name
     resolved_site_code = _clean_site_code((row or {}).get("site_code"), required=False) or clean_site_code
     schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
     if row is None and int(user.get("is_site_admin") or 0) == 1 and int(user.get("is_admin") or 0) != 1:
@@ -665,7 +797,7 @@ def api_site_env(request: Request, site_name: str = Query(default=""), site_code
         )
     return {
         "ok": True,
-        "site_name": clean_site_name,
+        "site_name": resolved_site_name,
         "site_code": resolved_site_code,
         "config": env_cfg,
         "schema": schema,
@@ -673,17 +805,25 @@ def api_site_env(request: Request, site_name: str = Query(default=""), site_code
     }
 
 
+@router.get("/site_identity")
+def api_site_identity(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
+    user, _token = _require_auth(request)
+    clean_site_name, clean_site_code = _resolve_site_identity_for_main(user, site_name, site_code)
+    return {
+        "ok": True,
+        "site_name": clean_site_name,
+        "site_code": clean_site_code,
+        "editable": int(user.get("is_admin") or 0) == 1,
+    }
+
+
 @router.put("/site_env")
 def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     user, _token = _require_site_env_manager(request)
-    if int(user.get("is_admin") or 0) == 1:
-        clean_site_name = _clean_site_name(payload.get("site_name"), required=True)
-        clean_site_code = _clean_site_code(payload.get("site_code"), required=False)
-    else:
-        clean_site_name = _resolve_allowed_site_name(user, payload.get("site_name"), required=False)
-        clean_site_code = _resolve_allowed_site_code(user, payload.get("site_code"))
+    clean_site_name, clean_site_code = _resolve_spec_env_site_target(
+        user, payload.get("site_name"), payload.get("site_code"), require_any=True, for_write=True
+    )
     verify = _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
-    clean_site_code = _resolve_site_code_for_site(clean_site_name, clean_site_code)
     raw_cfg = payload.get("config", payload.get("env", payload if isinstance(payload, dict) else {}))
     cfg = normalize_site_env_config(raw_cfg if isinstance(raw_cfg, dict) else {})
     row = upsert_site_env_config(clean_site_name, cfg, site_code=clean_site_code or None)
@@ -703,16 +843,10 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
 @router.delete("/site_env")
 def api_site_env_delete(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
     user, _token = _require_site_env_manager(request)
-    if int(user.get("is_admin") or 0) == 1:
-        raw_site_name = (str(site_name or "")).strip()
-        clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
-        clean_site_code = _clean_site_code(site_code, required=False)
-    else:
-        clean_site_name = _resolve_allowed_site_name(user, site_name, required=False)
-        clean_site_code = _resolve_allowed_site_code(user, site_code)
+    clean_site_name, clean_site_code = _resolve_spec_env_site_target(
+        user, site_name, site_code, require_any=True, for_write=False
+    )
     _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
-    if not clean_site_name and not clean_site_code:
-        raise HTTPException(status_code=400, detail="site_name or site_code is required")
     ok = delete_site_env_config(clean_site_name, site_code=clean_site_code or None)
     return {"ok": ok, "site_name": clean_site_name, "site_code": clean_site_code}
 
@@ -724,7 +858,6 @@ def api_site_env_list(request: Request):
     if int(user.get("is_admin") or 0) != 1:
         assigned_name = _normalized_assigned_site_name(user)
         assigned_code = _clean_site_code(user.get("site_code"), required=False)
-        _verify_first_site_registrant_for_spec_env(user, assigned_name, assigned_code)
         filtered: List[Dict[str, Any]] = []
         for r in rows:
             row_code = _clean_site_code(r.get("site_code"), required=False)
@@ -1206,10 +1339,96 @@ def api_user_roles(request: Request):
 
 
 @router.get("/users")
-def api_users(request: Request, active_only: int = Query(default=0)):
+def api_users(
+    request: Request,
+    active_only: int = Query(default=0),
+    site_code: str = Query(default=""),
+    site_name: str = Query(default=""),
+    region: str = Query(default=""),
+    keyword: str = Query(default=""),
+):
     _require_admin(request)
-    users = [_public_user(x) for x in list_staff_users(active_only=bool(active_only))]
-    return {"ok": True, "recommended_staff_count": 9, "count": len(users), "users": users}
+    clean_site_code = _clean_site_code(site_code, required=False)
+    clean_site_name = _clean_query_text(site_name, max_len=80)
+    clean_region = _normalize_region_label(_clean_query_text(region, max_len=40))
+    clean_keyword = _clean_query_text(keyword, max_len=80).lower()
+
+    source_users = [_public_user(x) for x in list_staff_users(active_only=bool(active_only))]
+    for u in source_users:
+        u["region"] = _region_from_address(u.get("address"))
+
+    site_bucket: Dict[str, Dict[str, Any]] = {}
+    region_bucket: Dict[str, int] = {}
+    for u in source_users:
+        row_code = _clean_site_code(u.get("site_code"), required=False)
+        row_name = str(u.get("site_name") or "").strip()
+        if row_code or row_name:
+            key = f"{row_code}|{row_name}"
+            item = site_bucket.get(key)
+            if not item:
+                item = {"site_code": row_code, "site_name": row_name, "count": 0}
+                site_bucket[key] = item
+            item["count"] = int(item["count"]) + 1
+
+        row_region = _normalize_region_label(u.get("region"))
+        if row_region:
+            region_bucket[row_region] = int(region_bucket.get(row_region) or 0) + 1
+
+    users = source_users
+    if clean_site_code:
+        users = [u for u in users if _clean_site_code(u.get("site_code"), required=False) == clean_site_code]
+    if clean_site_name:
+        users = [u for u in users if str(u.get("site_name") or "").strip() == clean_site_name]
+    if clean_region:
+        users = [u for u in users if _normalize_region_label(u.get("region")) == clean_region]
+    if clean_keyword:
+        def _hit(u: Dict[str, Any]) -> bool:
+            hay = " ".join(
+                [
+                    str(u.get("login_id") or ""),
+                    str(u.get("name") or ""),
+                    str(u.get("role") or ""),
+                    str(u.get("phone") or ""),
+                    str(u.get("site_code") or ""),
+                    str(u.get("site_name") or ""),
+                    str(u.get("address") or ""),
+                    str(u.get("office_phone") or ""),
+                    str(u.get("office_fax") or ""),
+                ]
+            ).lower()
+            return clean_keyword in hay
+
+        users = [u for u in users if _hit(u)]
+
+    sites = sorted(
+        site_bucket.values(),
+        key=lambda x: (
+            str(x.get("site_code") or "").strip(),
+            str(x.get("site_name") or "").strip(),
+        ),
+    )
+    regions = sorted(
+        [{"region": k, "count": v} for k, v in region_bucket.items()],
+        key=lambda x: str(x.get("region") or ""),
+    )
+
+    return {
+        "ok": True,
+        "recommended_staff_count": 9,
+        "count": len(users),
+        "users": users,
+        "filters": {
+            "applied": {
+                "active_only": bool(active_only),
+                "site_code": clean_site_code,
+                "site_name": clean_site_name,
+                "region": clean_region,
+                "keyword": clean_keyword,
+            },
+            "sites": sites,
+            "regions": regions,
+        },
+    }
 
 
 @router.post("/users")
