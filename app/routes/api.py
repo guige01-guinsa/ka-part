@@ -96,6 +96,9 @@ if not _raw_sso_path:
     # - external parking_man gateway: /sso
     _raw_sso_path = "/parking/sso" if (PARKING_EMBED_ENABLED and (not PARKING_BASE_URL)) else "/sso"
 PARKING_SSO_PATH = _raw_sso_path if _raw_sso_path.startswith("/") else f"/{_raw_sso_path}"
+# Safety guard: embedded mode cannot use root /sso on ka-part host.
+if PARKING_EMBED_ENABLED and (not PARKING_BASE_URL) and PARKING_SSO_PATH == "/sso":
+    PARKING_SSO_PATH = "/parking/sso"
 _parking_ctx_ser = URLSafeTimedSerializer(PARKING_CONTEXT_SECRET, salt="parking-context")
 
 
