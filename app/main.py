@@ -7,11 +7,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .db import init_db
+from .backup_manager import (
+    get_maintenance_status,
+    start_backup_scheduler,
+    stop_backup_scheduler,
+)
 from .routes.api import router as api_router
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -24,8 +29,36 @@ logger = logging.getLogger("ka-part")
 @app.on_event("startup")
 def _startup():
     init_db()
+    start_backup_scheduler()
+
+
+@app.on_event("shutdown")
+def _shutdown():
+    stop_backup_scheduler()
 
 app.include_router(api_router, prefix="/api")
+
+
+@app.middleware("http")
+async def _maintenance_guard(request: Request, call_next):
+    path = request.url.path or ""
+    if path.startswith("/api"):
+        status = get_maintenance_status()
+        if bool(status.get("active")):
+            allow = (
+                path.startswith("/api/backup")
+                or path in {"/api/health", "/api/auth/me", "/api/auth/logout"}
+            )
+            if not allow:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "detail": str(status.get("message") or "서버 점검 중입니다. 잠시 후 다시 시도해 주세요."),
+                        "maintenance": status,
+                    },
+                    status_code=503,
+                )
+    return await call_next(request)
 
 # PWA static
 app.mount("/pwa", StaticFiles(directory="static/pwa", html=True), name="pwa")

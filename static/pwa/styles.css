@@ -61,6 +61,22 @@ body {
   margin-bottom: 8px;
 }
 
+.maintenance-banner {
+  display: none;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 72%, var(--line));
+  background: color-mix(in srgb, var(--danger) 20%, var(--bg-soft));
+  color: #ffd9d9;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.maintenance-banner.show {
+  display: block;
+}
+
 .btn {
   border: 1px solid var(--line);
   border-radius: 12px;

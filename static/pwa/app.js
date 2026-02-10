@@ -47,6 +47,7 @@
   let rangeDates = [];
   let rangeIndex = -1;
   let authUser = null;
+  let maintenancePollTimer = null;
 
   function hasAdminPermission(user) {
     return !!(user && user.is_admin);
@@ -130,6 +131,8 @@
     if (btnUsers && !hasAdminPermission(authUser)) btnUsers.style.display = "none";
     const btnSpec = $("#btnSpecEnv");
     if (btnSpec && !hasSiteAdminPermission(authUser)) btnSpec.style.display = "none";
+    const btnBackup = $("#btnBackup");
+    if (btnBackup && !hasSiteAdminPermission(authUser)) btnBackup.style.display = "none";
     enforceSiteNamePolicy();
     const assignedCode = assignedSiteCodeForUser();
     if (assignedCode) setSiteCode(assignedCode);
@@ -742,6 +745,41 @@
     document.documentElement.style.setProperty("--tabs-top", `${h}px`);
   }
 
+  function renderMaintenanceBanner(payload) {
+    const banner = $("#maintenanceBanner");
+    if (!banner) return;
+    const maintenance = payload && payload.maintenance ? payload.maintenance : payload;
+    const active = !!(maintenance && maintenance.active);
+    if (!active) {
+      banner.classList.remove("show");
+      banner.textContent = "";
+      return;
+    }
+    const msg = String(maintenance.message || "서버 점검 중입니다. 잠시 후 다시 시도해 주세요.");
+    banner.textContent = msg;
+    banner.classList.add("show");
+  }
+
+  async function refreshMaintenanceStatus() {
+    try {
+      const data = await jfetch("/api/backup/status");
+      renderMaintenanceBanner(data);
+    } catch (_e) {
+      // ignore poll errors
+    }
+  }
+
+  function startMaintenancePolling() {
+    refreshMaintenanceStatus().catch(() => {});
+    if (maintenancePollTimer) {
+      clearInterval(maintenancePollTimer);
+      maintenancePollTimer = null;
+    }
+    maintenancePollTimer = setInterval(() => {
+      refreshMaintenanceStatus().catch(() => {});
+    }, 20000);
+  }
+
   function wire() {
     const today = ymdToday();
     const ds = $("#dateStart");
@@ -804,6 +842,12 @@
       const qs = buildSiteQuery(site, siteCode);
       window.location.href = qs ? `/pwa/spec_env.html?${qs}` : "/pwa/spec_env.html";
     });
+    $("#btnBackup")?.addEventListener("click", () => {
+      const site = getSiteName();
+      const siteCode = getSiteCode();
+      const qs = buildSiteQuery(site, siteCode);
+      window.location.href = qs ? `/pwa/backup.html?${qs}` : "/pwa/backup.html";
+    });
     $("#btnParking")?.addEventListener("click", () => {
       const run = async () => {
         const data = await jfetch("/api/parking/context");
@@ -850,6 +894,7 @@
     render();
     syncHomeSiteCodeDisplay();
     wire();
+    startMaintenancePolling();
     syncStickyOffset();
     applyHomeDraft(loadHomeDraft());
     await doLoad().catch(() => {});

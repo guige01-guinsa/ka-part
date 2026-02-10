@@ -12,9 +12,18 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from itsdangerous import URLSafeTimedSerializer
 
+from ..backup_manager import (
+    clear_maintenance_mode,
+    get_backup_item,
+    get_maintenance_status,
+    list_backup_history,
+    list_backup_targets,
+    resolve_backup_file,
+    run_manual_backup,
+)
 from ..db import (
     cleanup_expired_sessions,
     count_staff_admins,
@@ -446,6 +455,10 @@ def _require_site_env_manager(request: Request) -> Tuple[Dict[str, Any], str]:
     return user, token
 
 
+def _can_manage_backup(user: Dict[str, Any]) -> bool:
+    return int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1
+
+
 def _home_only_site_env_config() -> Dict[str, Any]:
     hide_tabs = [tab for tab in SCHEMA_TAB_ORDER if tab != "home"]
     return normalize_site_env_config({"hide_tabs": hide_tabs, "tabs": {"home": {"title": "홈"}}})
@@ -734,6 +747,189 @@ def api_site_env_list(request: Request):
             for r in rows
         ],
     }
+
+
+@router.get("/backup/status")
+def api_backup_status(request: Request):
+    user, _token = _require_auth(request)
+    return {
+        "ok": True,
+        "maintenance": get_maintenance_status(),
+        "can_manage_backup": _can_manage_backup(user),
+        "permission_level": _permission_level_from_user(user),
+        "schedules": [
+            {"key": "daily_full", "label": "전체 시스템 DB 자동백업", "when": "매일 00:00"},
+            {"key": "weekly_site", "label": "단지관리자 단지코드 자동백업", "when": "매주 금요일 00:20"},
+        ],
+    }
+
+
+@router.get("/backup/options")
+def api_backup_options(request: Request):
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+
+    is_admin = int(user.get("is_admin") or 0) == 1
+    site_code = _clean_site_code(user.get("site_code"), required=False)
+    site_name = _clean_site_name(user.get("site_name"), required=False)
+    targets = list_backup_targets()
+    if not is_admin:
+        if not site_code:
+            raise HTTPException(status_code=403, detail="소속 단지코드가 없어 백업할 수 없습니다.")
+        targets = [x for x in targets if bool(x.get("site_scoped"))]
+
+    return {
+        "ok": True,
+        "is_admin": is_admin,
+        "site_code": site_code,
+        "site_name": site_name,
+        "allowed_scopes": ["full", "site"] if is_admin else ["site"],
+        "targets": targets,
+    }
+
+
+@router.post("/backup/run")
+def api_backup_run(request: Request, payload: Dict[str, Any] = Body(default={})):
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+
+    is_admin = int(user.get("is_admin") or 0) == 1
+    target_payload = payload.get("target_keys", payload.get("targets", []))
+    if isinstance(target_payload, str):
+        target_keys = [target_payload]
+    elif isinstance(target_payload, list):
+        target_keys = [str(x or "").strip().lower() for x in target_payload if str(x or "").strip()]
+    else:
+        raise HTTPException(status_code=400, detail="target_keys must be list")
+
+    scope = str(payload.get("scope") or ("full" if is_admin else "site")).strip().lower()
+    if not is_admin:
+        scope = "site"
+    if scope not in {"full", "site"}:
+        raise HTTPException(status_code=400, detail="scope must be full or site")
+
+    available_targets = list_backup_targets()
+    allowed_keys = {
+        str(x["key"]).strip().lower()
+        for x in available_targets
+        if is_admin or bool(x.get("site_scoped"))
+    }
+    selected_keys = target_keys or sorted(allowed_keys)
+    invalid = [k for k in selected_keys if k not in allowed_keys]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"invalid target_keys: {', '.join(invalid)}")
+    if not selected_keys:
+        raise HTTPException(status_code=400, detail="선택 가능한 백업 대상이 없습니다.")
+
+    if scope == "site":
+        if is_admin:
+            site_code = _clean_site_code(payload.get("site_code"), required=True)
+            site_name = _clean_site_name(payload.get("site_name"), required=False)
+        else:
+            site_code = _clean_site_code(user.get("site_code"), required=False)
+            site_name = _clean_site_name(user.get("site_name"), required=False)
+            if not site_code:
+                raise HTTPException(status_code=403, detail="소속 단지코드가 없어 백업할 수 없습니다.")
+    else:
+        site_code = ""
+        site_name = ""
+
+    actor_login = _clean_login_id(user.get("login_id") or "backup-runner")
+    try:
+        result = run_manual_backup(
+            actor=actor_login,
+            trigger="manual",
+            target_keys=selected_keys,
+            scope=scope,
+            site_code=site_code,
+            site_name=site_name,
+            with_maintenance=(scope == "full"),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"backup failed: {e}") from e
+
+    return {"ok": True, "result": result, "maintenance": get_maintenance_status()}
+
+
+@router.get("/backup/history")
+def api_backup_history(
+    request: Request,
+    limit: int = Query(default=50),
+    scope: str = Query(default=""),
+    site_code: str = Query(default=""),
+):
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+
+    is_admin = int(user.get("is_admin") or 0) == 1
+    clean_scope = str(scope or "").strip().lower()
+    if clean_scope and clean_scope not in {"full", "site"}:
+        raise HTTPException(status_code=400, detail="scope must be full or site")
+
+    if is_admin:
+        clean_site_code = _clean_site_code(site_code, required=False)
+    else:
+        clean_scope = "site"
+        clean_site_code = _clean_site_code(user.get("site_code"), required=False)
+        if not clean_site_code:
+            raise HTTPException(status_code=403, detail="소속 단지코드가 없어 백업이력을 조회할 수 없습니다.")
+
+    items = list_backup_history(
+        limit=max(1, min(int(limit), 200)),
+        scope=clean_scope,
+        site_code=clean_site_code,
+    )
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@router.get("/backup/download")
+def api_backup_download(request: Request, path: str = Query(...)):
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+
+    item = get_backup_item(path)
+    if not item:
+        raise HTTPException(status_code=404, detail="backup file not found")
+
+    is_admin = int(user.get("is_admin") or 0) == 1
+    if not is_admin:
+        assigned_code = _clean_site_code(user.get("site_code"), required=False)
+        item_scope = str(item.get("scope") or "").strip().lower()
+        item_code = str(item.get("site_code") or "").strip().upper()
+        if not assigned_code:
+            raise HTTPException(status_code=403, detail="소속 단지코드가 없어 다운로드할 수 없습니다.")
+        if item_scope != "site" or item_code != assigned_code:
+            raise HTTPException(status_code=403, detail="소속 단지코드 백업파일만 다운로드할 수 있습니다.")
+
+    try:
+        target = resolve_backup_file(str(item.get("relative_path") or path))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    filename = str(item.get("download_name") or target.name)
+    return FileResponse(
+        path=target,
+        media_type="application/zip",
+        filename=filename,
+    )
+
+
+@router.post("/backup/maintenance/clear")
+def api_backup_maintenance_clear(request: Request):
+    user, _token = _require_admin(request)
+    actor_login = _clean_login_id(user.get("login_id") or "admin")
+    status = clear_maintenance_mode(updated_by=actor_login)
+    return {"ok": True, "maintenance": status}
 
 
 @router.get("/auth/bootstrap_status")

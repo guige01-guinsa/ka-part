@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>DB 백업 관리</title>
+  <link rel="stylesheet" href="/pwa/backup.css?v=20260210a" />
+</head>
+<body>
+  <header class="top">
+    <div class="title">DB 백업 관리</div>
+    <div class="actions">
+      <a class="btn" href="/pwa/">메인으로</a>
+      <button id="btnReload" class="btn" type="button">새로고침</button>
+      <button id="btnRunBackup" class="btn primary" type="button">백업 실행</button>
+      <button id="btnLogout" class="btn" type="button">로그아웃</button>
+    </div>
+    <div id="metaLine" class="meta">로딩 중...</div>
+    <div id="maintenanceLine" class="maintenance"></div>
+  </header>
+
+  <main class="main">
+    <section class="card">
+      <h2>백업 권한/대상</h2>
+      <div id="targetList" class="target-list"></div>
+      <div class="hint">관리자는 대상 DB를 선택해 전체 또는 단지코드 범위 백업을 실행할 수 있습니다.</div>
+      <div class="hint">단지관리자는 소속 단지코드 범위 백업만 실행/조회/다운로드할 수 있습니다.</div>
+    </section>
+
+    <section class="card">
+      <h2>실행 옵션</h2>
+      <div class="grid">
+        <label class="field">
+          <span>백업 범위</span>
+          <select id="scopeSelect">
+            <option value="full">전체 시스템</option>
+            <option value="site">단지코드 범위</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>단지코드</span>
+          <input id="siteCode" type="text" maxlength="32" placeholder="예: APT00001" />
+        </label>
+        <label class="field grow">
+          <span>단지명</span>
+          <input id="siteName" type="text" placeholder="예: OO아파트" />
+        </label>
+      </div>
+      <div id="scheduleInfo" class="hint"></div>
+      <div id="msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>백업 이력</h2>
+      <div class="hint">최신 백업 파일을 내려받을 수 있습니다.</div>
+      <div id="historyList" class="history-list"></div>
+    </section>
+  </main>
+
+  <script src="/pwa/auth.js?v=20260207i"></script>
+  <script src="/pwa/backup.js?v=20260210a"></script>
+</body>
+</html>

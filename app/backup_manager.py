@@ -1,0 +1,958 @@
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import sqlite3
+import threading
+import uuid
+import zipfile
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, Iterable, List
+
+from .db import DB_PATH as FACILITY_DB_PATH
+
+logger = logging.getLogger("ka-part.backup")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_ROOT / "data"
+BACKUP_ROOT = Path(os.getenv("KA_BACKUP_DIR", str(PROJECT_ROOT / "backups"))).resolve()
+FULL_BACKUP_DIR = BACKUP_ROOT / "full"
+SITE_BACKUP_DIR = BACKUP_ROOT / "site"
+TMP_BACKUP_DIR = BACKUP_ROOT / ".tmp"
+RUNTIME_STATE_PATH = DATA_DIR / "backup_runtime_state.json"
+MAINT_STATE_PATH = DATA_DIR / "maintenance_state.json"
+
+_RUN_LOCK = threading.Lock()
+_MAINT_LOCK = threading.Lock()
+_SCHED_THREAD: threading.Thread | None = None
+_SCHED_STOP_EVENT = threading.Event()
+
+
+def _now() -> datetime:
+    return datetime.now()
+
+
+def _now_iso() -> str:
+    return _now().replace(microsecond=0).isoformat(sep=" ")
+
+
+def _sanitize_token(value: str, *, default: str = "backup") -> str:
+    raw = str(value or "").strip().lower()
+    cleaned = re.sub(r"[^a-z0-9_.-]+", "_", raw)
+    return cleaned or default
+
+
+def _ensure_dirs() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    FULL_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    SITE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    TMP_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_json(path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        if not path.exists():
+            return dict(default)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            merged = dict(default)
+            merged.update(data)
+            return merged
+    except Exception:
+        logger.exception("Failed to read json file: %s", path)
+    return dict(default)
+
+
+def _save_json(path: Path, payload: Dict[str, Any]) -> None:
+    _ensure_dirs()
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _maintenance_default() -> Dict[str, Any]:
+    return {
+        "active": False,
+        "message": "",
+        "reason": "",
+        "started_at": "",
+        "updated_at": "",
+        "updated_by": "",
+    }
+
+
+def get_maintenance_status() -> Dict[str, Any]:
+    with _MAINT_LOCK:
+        return _load_json(MAINT_STATE_PATH, _maintenance_default())
+
+
+def set_maintenance_mode(*, active: bool, message: str, reason: str, updated_by: str) -> Dict[str, Any]:
+    with _MAINT_LOCK:
+        state = _load_json(MAINT_STATE_PATH, _maintenance_default())
+        now_iso = _now_iso()
+        next_state = dict(state)
+        next_state["active"] = bool(active)
+        next_state["message"] = str(message or "").strip()
+        next_state["reason"] = str(reason or "").strip()
+        if bool(active):
+            if not str(state.get("started_at") or "").strip():
+                next_state["started_at"] = now_iso
+        else:
+            next_state["started_at"] = ""
+        next_state["updated_at"] = now_iso
+        next_state["updated_by"] = str(updated_by or "").strip() or "system"
+        _save_json(MAINT_STATE_PATH, next_state)
+        return dict(next_state)
+
+
+def clear_maintenance_mode(updated_by: str = "system") -> Dict[str, Any]:
+    return set_maintenance_mode(
+        active=False,
+        message="",
+        reason="manual_clear",
+        updated_by=updated_by,
+    )
+
+
+def _runtime_default() -> Dict[str, Any]:
+    return {
+        "full_last_date": "",
+        "site_last_week": "",
+        "updated_at": "",
+    }
+
+
+def _load_runtime_state() -> Dict[str, Any]:
+    return _load_json(RUNTIME_STATE_PATH, _runtime_default())
+
+
+def _save_runtime_state(state: Dict[str, Any]) -> None:
+    payload = dict(_runtime_default())
+    payload.update(state or {})
+    payload["updated_at"] = _now_iso()
+    _save_json(RUNTIME_STATE_PATH, payload)
+
+
+def _resolve_parking_db_path() -> Path:
+    default_path = PROJECT_ROOT / "services" / "parking" / "app" / "data" / "parking.db"
+    raw = str(os.getenv("PARKING_DB_PATH") or str(default_path)).strip()
+    path = Path(raw)
+    if not path.is_absolute():
+        path = (PROJECT_ROOT / path).resolve()
+    return path
+
+
+def _backup_targets() -> List[Dict[str, Any]]:
+    facility_path = Path(FACILITY_DB_PATH).resolve()
+    parking_path = _resolve_parking_db_path()
+    targets: List[Dict[str, Any]] = [
+        {
+            "key": "facility",
+            "label": "시설관리 DB",
+            "path": str(facility_path),
+            "exists": facility_path.exists(),
+            "site_scoped": True,
+        },
+        {
+            "key": "parking",
+            "label": "주차관리 DB",
+            "path": str(parking_path),
+            "exists": parking_path.exists(),
+            "site_scoped": True,
+        },
+    ]
+    for item in targets:
+        try:
+            item["size_bytes"] = int(Path(item["path"]).stat().st_size) if item["exists"] else 0
+        except Exception:
+            item["size_bytes"] = 0
+    return targets
+
+
+def list_backup_targets() -> List[Dict[str, Any]]:
+    return [dict(x) for x in _backup_targets()]
+
+
+def _targets_by_key() -> Dict[str, Dict[str, Any]]:
+    return {str(x["key"]): x for x in _backup_targets()}
+
+
+def _sqlite_backup_copy(src_path: Path, dst_path: Path) -> None:
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(f"file:{src_path.as_posix()}?mode=ro", uri=True)
+    try:
+        dst = sqlite3.connect(str(dst_path))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
+def _sqlite_quick_check(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {"ok": False, "detail": "missing"}
+    try:
+        con = sqlite3.connect(str(path))
+        try:
+            row = con.execute("PRAGMA quick_check").fetchone()
+        finally:
+            con.close()
+        result = str(row[0] if row else "").strip().lower()
+        if result == "ok":
+            return {"ok": True, "detail": "ok"}
+        return {"ok": False, "detail": result or "quick_check failed"}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)}
+
+
+def run_live_db_checks() -> Dict[str, Any]:
+    targets = _backup_targets()
+    checks: List[Dict[str, Any]] = []
+    all_ok = True
+    for t in targets:
+        path = Path(str(t["path"]))
+        check = _sqlite_quick_check(path)
+        item = {
+            "key": t["key"],
+            "label": t["label"],
+            "path": str(path),
+            "ok": bool(check["ok"]),
+            "detail": check["detail"],
+        }
+        checks.append(item)
+        if not item["ok"]:
+            all_ok = False
+    return {"ok": all_ok, "checks": checks, "checked_at": _now_iso()}
+
+
+def _trigger_label(trigger: str) -> str:
+    t = str(trigger or "").strip().lower()
+    if t == "manual":
+        return "수동 실행"
+    if t == "daily_0000":
+        return "자동 실행(매일 00:00)"
+    if t == "weekly_friday":
+        return "자동 실행(매주 금요일)"
+    return t or "unknown"
+
+
+def _scope_label(scope: str) -> str:
+    s = str(scope or "").strip().lower()
+    if s == "full":
+        return "전체 시스템"
+    if s == "site":
+        return "단지코드 범위"
+    return s or "unknown"
+
+
+def _sidecar_path(zip_path: Path) -> Path:
+    return zip_path.with_suffix(zip_path.suffix + ".meta.json")
+
+
+def _write_sidecar(zip_path: Path, metadata: Dict[str, Any]) -> None:
+    sidecar = _sidecar_path(zip_path)
+    payload = dict(metadata)
+    payload["relative_path"] = str(zip_path.relative_to(BACKUP_ROOT)).replace("\\", "/")
+    payload["file_name"] = zip_path.name
+    payload["file_size_bytes"] = int(zip_path.stat().st_size) if zip_path.exists() else 0
+    sidecar.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _table_exists(con: sqlite3.Connection, table: str) -> bool:
+    row = con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (str(table),),
+    ).fetchone()
+    return bool(row)
+
+
+def _rows_to_dicts(rows: Iterable[sqlite3.Row]) -> List[Dict[str, Any]]:
+    return [dict(r) for r in rows]
+
+
+def _query_all(con: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
+    rows = con.execute(sql, params).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def _query_by_site_names(con: sqlite3.Connection, table: str, site_names: List[str]) -> List[Dict[str, Any]]:
+    if not site_names or not _table_exists(con, table):
+        return []
+    ph = ",".join(["?"] * len(site_names))
+    sql = f"SELECT * FROM {table} WHERE site_name IN ({ph})"
+    rows = con.execute(sql, tuple(site_names)).fetchall()
+    return _rows_to_dicts(rows)
+
+
+def _collect_site_names(con: sqlite3.Connection, site_code: str, fallback_site_name: str = "") -> List[str]:
+    names: set[str] = set()
+    queries = [
+        ("site_registry", "SELECT site_name FROM site_registry WHERE site_code=?"),
+        ("staff_users", "SELECT site_name FROM staff_users WHERE site_code=?"),
+        ("site_env_configs", "SELECT site_name FROM site_env_configs WHERE site_code=?"),
+    ]
+    for table, sql in queries:
+        if not _table_exists(con, table):
+            continue
+        rows = con.execute(sql, (site_code,)).fetchall()
+        for row in rows:
+            value = str(row[0] or "").strip()
+            if value:
+                names.add(value)
+    fallback = str(fallback_site_name or "").strip()
+    if fallback:
+        names.add(fallback)
+    return sorted(names)
+
+
+def _export_facility_site_data(site_code: str, site_name: str = "") -> Dict[str, Any]:
+    db_path = Path(FACILITY_DB_PATH).resolve()
+    out: Dict[str, Any] = {
+        "db_key": "facility",
+        "db_label": "시설관리 DB",
+        "db_path": str(db_path),
+        "site_code": site_code,
+        "site_name": site_name,
+        "generated_at": _now_iso(),
+        "tables": {},
+    }
+    if not db_path.exists():
+        out["ok"] = False
+        out["detail"] = "시설관리 DB 파일이 없습니다."
+        return out
+
+    con = sqlite3.connect(str(db_path))
+    con.row_factory = sqlite3.Row
+    try:
+        names = _collect_site_names(con, site_code, site_name)
+        out["site_names"] = names
+
+        tables: Dict[str, Any] = {}
+        if _table_exists(con, "site_registry"):
+            tables["site_registry"] = _query_all(
+                con, "SELECT * FROM site_registry WHERE site_code=?", (site_code,)
+            )
+        if _table_exists(con, "site_env_configs"):
+            tables["site_env_configs"] = _query_all(
+                con, "SELECT * FROM site_env_configs WHERE site_code=?", (site_code,)
+            )
+        if _table_exists(con, "staff_users"):
+            tables["staff_users"] = _query_all(
+                con,
+                "SELECT * FROM staff_users WHERE site_code=?",
+                (site_code,),
+            )
+
+        sites_rows: List[Dict[str, Any]] = []
+        if names and _table_exists(con, "sites"):
+            ph = ",".join(["?"] * len(names))
+            sites_rows = _query_all(
+                con,
+                f"SELECT * FROM sites WHERE name IN ({ph})",
+                tuple(names),
+            )
+        tables["sites"] = sites_rows
+        site_ids = [int(r.get("id") or 0) for r in sites_rows if int(r.get("id") or 0) > 0]
+        entry_rows: List[Dict[str, Any]] = []
+        if site_ids and _table_exists(con, "entries"):
+            ph = ",".join(["?"] * len(site_ids))
+            entry_rows = _query_all(
+                con,
+                f"SELECT * FROM entries WHERE site_id IN ({ph})",
+                tuple(site_ids),
+            )
+        tables["entries"] = entry_rows
+
+        entry_ids = [int(r.get("id") or 0) for r in entry_rows if int(r.get("id") or 0) > 0]
+        entry_value_rows: List[Dict[str, Any]] = []
+        if entry_ids and _table_exists(con, "entry_values"):
+            ph = ",".join(["?"] * len(entry_ids))
+            entry_value_rows = _query_all(
+                con,
+                f"SELECT * FROM entry_values WHERE entry_id IN ({ph})",
+                tuple(entry_ids),
+            )
+        tables["entry_values"] = entry_value_rows
+
+        for tab_table in [
+            "transformer_450_reads",
+            "transformer_400_reads",
+            "power_meter_reads",
+            "facility_checks",
+            "facility_subtasks",
+        ]:
+            tables[tab_table] = _query_by_site_names(con, tab_table, names)
+
+        row_counts: Dict[str, int] = {}
+        total_rows = 0
+        for name, rows in tables.items():
+            count = len(rows) if isinstance(rows, list) else 0
+            row_counts[name] = count
+            total_rows += count
+        out["tables"] = tables
+        out["row_counts"] = row_counts
+        out["total_rows"] = total_rows
+        out["ok"] = True
+        out["detail"] = "ok"
+        return out
+    finally:
+        con.close()
+
+
+def _export_parking_site_data(site_code: str, site_name: str = "") -> Dict[str, Any]:
+    db_path = _resolve_parking_db_path()
+    out: Dict[str, Any] = {
+        "db_key": "parking",
+        "db_label": "주차관리 DB",
+        "db_path": str(db_path),
+        "site_code": site_code,
+        "site_name": site_name,
+        "generated_at": _now_iso(),
+        "tables": {},
+    }
+    if not db_path.exists():
+        out["ok"] = False
+        out["detail"] = "주차관리 DB 파일이 없습니다."
+        return out
+
+    con = sqlite3.connect(str(db_path))
+    con.row_factory = sqlite3.Row
+    try:
+        tables: Dict[str, Any] = {}
+        if _table_exists(con, "vehicles"):
+            tables["vehicles"] = _query_all(
+                con,
+                "SELECT * FROM vehicles WHERE site_code=? ORDER BY plate ASC",
+                (site_code,),
+            )
+        if _table_exists(con, "violations"):
+            tables["violations"] = _query_all(
+                con,
+                "SELECT * FROM violations WHERE site_code=? ORDER BY created_at DESC, id DESC",
+                (site_code,),
+            )
+        row_counts: Dict[str, int] = {}
+        total_rows = 0
+        for name, rows in tables.items():
+            count = len(rows) if isinstance(rows, list) else 0
+            row_counts[name] = count
+            total_rows += count
+        out["tables"] = tables
+        out["row_counts"] = row_counts
+        out["total_rows"] = total_rows
+        out["ok"] = True
+        out["detail"] = "ok"
+        return out
+    finally:
+        con.close()
+
+
+def _resolve_selected_targets(target_keys: Iterable[str] | None, scope: str) -> List[Dict[str, Any]]:
+    catalog = _targets_by_key()
+    keys = [str(x or "").strip().lower() for x in (target_keys or []) if str(x or "").strip()]
+    if not keys:
+        if scope == "site":
+            keys = [k for k, v in catalog.items() if bool(v.get("site_scoped"))]
+        else:
+            keys = list(catalog.keys())
+    selected: List[Dict[str, Any]] = []
+    for key in keys:
+        item = catalog.get(key)
+        if not item:
+            continue
+        if scope == "site" and not bool(item.get("site_scoped")):
+            continue
+        selected.append(dict(item))
+    dedup: Dict[str, Dict[str, Any]] = {str(x["key"]): x for x in selected}
+    return [dict(v) for v in dedup.values()]
+
+
+def _metadata_base(
+    *,
+    scope: str,
+    trigger: str,
+    actor: str,
+    target_items: List[Dict[str, Any]],
+    site_code: str = "",
+    site_name: str = "",
+    maintenance_enabled: bool = False,
+) -> Dict[str, Any]:
+    created_at = _now_iso()
+    return {
+        "ok": True,
+        "scope": scope,
+        "scope_label": _scope_label(scope),
+        "trigger": trigger,
+        "trigger_label": _trigger_label(trigger),
+        "actor": actor,
+        "created_at": created_at,
+        "site_code": site_code,
+        "site_name": site_name,
+        "target_keys": [str(x["key"]) for x in target_items],
+        "target_labels": [str(x["label"]) for x in target_items],
+        "maintenance_enabled": bool(maintenance_enabled),
+        "notes": [],
+        "checks": [],
+    }
+
+
+def _enrich_history_item(meta: Dict[str, Any], zip_path: Path) -> Dict[str, Any]:
+    item = dict(meta)
+    item["relative_path"] = str(zip_path.relative_to(BACKUP_ROOT)).replace("\\", "/")
+    item["file_name"] = zip_path.name
+    item["file_size_bytes"] = int(zip_path.stat().st_size) if zip_path.exists() else 0
+    item["download_name"] = zip_path.name
+    return item
+
+
+def _run_full_backup(
+    *,
+    target_items: List[Dict[str, Any]],
+    trigger: str,
+    actor: str,
+    maintenance_enabled: bool,
+) -> Dict[str, Any]:
+    ts = _now().strftime("%Y%m%d_%H%M%S")
+    safe_trigger = _sanitize_token(trigger, default="manual")
+    out_dir = FULL_BACKUP_DIR / _now().strftime("%Y%m%d")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = out_dir / f"full_{ts}_{safe_trigger}.zip"
+    tmp_dir = TMP_BACKUP_DIR / f"full_{ts}_{uuid.uuid4().hex[:8]}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    meta = _metadata_base(
+        scope="full",
+        trigger=trigger,
+        actor=actor,
+        target_items=target_items,
+        maintenance_enabled=maintenance_enabled,
+    )
+    maintenance_released = False
+    if maintenance_enabled:
+        set_maintenance_mode(
+            active=True,
+            message="서버 점검 중입니다. 전체 DB 백업이 진행 중입니다. 잠시 후 자동 복구됩니다.",
+            reason="daily_full_backup",
+            updated_by=actor,
+        )
+
+    try:
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for item in target_items:
+                label = str(item.get("label") or item.get("key"))
+                src = Path(str(item.get("path") or ""))
+                if not src.exists():
+                    note = f"{label}: DB 파일이 없어 제외했습니다."
+                    meta["notes"].append(note)
+                    continue
+                copied = tmp_dir / f"{item['key']}.db"
+                _sqlite_backup_copy(src, copied)
+                check = _sqlite_quick_check(copied)
+                check_item = {
+                    "key": item["key"],
+                    "label": label,
+                    "ok": bool(check["ok"]),
+                    "detail": check["detail"],
+                }
+                meta["checks"].append(check_item)
+                if not check_item["ok"]:
+                    raise RuntimeError(f"{label} 백업본 점검 실패: {check_item['detail']}")
+                zf.write(copied, arcname=f"db/{item['key']}.db")
+
+            zf.writestr("manifest.json", json.dumps(meta, ensure_ascii=False, indent=2))
+
+        live_checks = run_live_db_checks()
+        meta["post_backup_live_checks"] = live_checks
+        if maintenance_enabled:
+            if bool(live_checks.get("ok")):
+                clear_maintenance_mode(updated_by=actor)
+                maintenance_released = True
+            else:
+                set_maintenance_mode(
+                    active=True,
+                    message="백업 후 DB 점검 실패로 점검모드를 유지합니다. 관리자 확인이 필요합니다.",
+                    reason="post_backup_check_failed",
+                    updated_by=actor,
+                )
+        meta["maintenance_released"] = maintenance_released
+        _write_sidecar(zip_path, meta)
+        cleanup_old_backups()
+        return _enrich_history_item(meta, zip_path)
+    except Exception:
+        meta["ok"] = False
+        meta["notes"].append("백업 실패")
+        if maintenance_enabled:
+            set_maintenance_mode(
+                active=True,
+                message="DB 백업 실패로 점검모드를 유지합니다. 관리자 확인이 필요합니다.",
+                reason="full_backup_failed",
+                updated_by=actor,
+            )
+        if zip_path.exists():
+            try:
+                zip_path.unlink()
+            except Exception:
+                logger.exception("Failed to remove failed backup zip: %s", zip_path)
+        raise
+    finally:
+        try:
+            for p in tmp_dir.glob("*"):
+                p.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        except Exception:
+            logger.exception("Failed to cleanup backup temp dir: %s", tmp_dir)
+
+
+def _run_site_backup(
+    *,
+    target_items: List[Dict[str, Any]],
+    trigger: str,
+    actor: str,
+    site_code: str,
+    site_name: str,
+) -> Dict[str, Any]:
+    ts = _now().strftime("%Y%m%d_%H%M%S")
+    safe_trigger = _sanitize_token(trigger, default="manual")
+    clean_code = str(site_code or "").strip().upper()
+    clean_name = str(site_name or "").strip()
+    out_dir = SITE_BACKUP_DIR / (clean_code or "UNKNOWN")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = out_dir / f"site_{clean_code}_{ts}_{safe_trigger}.zip"
+
+    meta = _metadata_base(
+        scope="site",
+        trigger=trigger,
+        actor=actor,
+        target_items=target_items,
+        site_code=clean_code,
+        site_name=clean_name,
+        maintenance_enabled=False,
+    )
+
+    payloads: Dict[str, Dict[str, Any]] = {}
+    for item in target_items:
+        key = str(item.get("key") or "")
+        if key == "facility":
+            payloads[key] = _export_facility_site_data(clean_code, clean_name)
+        elif key == "parking":
+            payloads[key] = _export_parking_site_data(clean_code, clean_name)
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for key, data in payloads.items():
+            zf.writestr(f"site_data/{key}.json", json.dumps(data, ensure_ascii=False, indent=2))
+            meta["checks"].append(
+                {
+                    "key": key,
+                    "label": next((x["label"] for x in target_items if x["key"] == key), key),
+                    "ok": bool(data.get("ok")),
+                    "detail": str(data.get("detail") or ""),
+                    "rows": int(data.get("total_rows") or 0),
+                }
+            )
+        zf.writestr("manifest.json", json.dumps(meta, ensure_ascii=False, indent=2))
+
+    _write_sidecar(zip_path, meta)
+    cleanup_old_backups()
+    return _enrich_history_item(meta, zip_path)
+
+
+def run_manual_backup(
+    *,
+    actor: str,
+    trigger: str = "manual",
+    target_keys: Iterable[str] | None = None,
+    scope: str = "full",
+    site_code: str = "",
+    site_name: str = "",
+    with_maintenance: bool = False,
+) -> Dict[str, Any]:
+    clean_scope = str(scope or "").strip().lower()
+    if clean_scope not in {"full", "site"}:
+        raise ValueError("scope must be 'full' or 'site'")
+    if clean_scope == "site":
+        clean_site_code = str(site_code or "").strip().upper()
+        if not clean_site_code:
+            raise ValueError("site_code is required for site backup")
+    else:
+        clean_site_code = ""
+
+    selected = _resolve_selected_targets(target_keys, clean_scope)
+    if not selected:
+        raise ValueError("선택 가능한 백업 대상이 없습니다.")
+
+    acquired = _RUN_LOCK.acquire(blocking=False)
+    if not acquired:
+        raise RuntimeError("이미 다른 백업 작업이 실행 중입니다.")
+    try:
+        if clean_scope == "full":
+            return _run_full_backup(
+                target_items=selected,
+                trigger=trigger,
+                actor=actor,
+                maintenance_enabled=bool(with_maintenance),
+            )
+        return _run_site_backup(
+            target_items=selected,
+            trigger=trigger,
+            actor=actor,
+            site_code=clean_site_code,
+            site_name=str(site_name or "").strip(),
+        )
+    finally:
+        _RUN_LOCK.release()
+
+
+def _history_items_all() -> List[Dict[str, Any]]:
+    _ensure_dirs()
+    items: List[Dict[str, Any]] = []
+    for sidecar in BACKUP_ROOT.rglob("*.zip.meta.json"):
+        try:
+            meta = json.loads(sidecar.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                continue
+            file_name = str(meta.get("file_name") or "")
+            if not file_name:
+                file_name = sidecar.name.replace(".meta.json", "")
+            if sidecar.name.endswith(".meta.json"):
+                zip_name = sidecar.name[: -len(".meta.json")]
+                zip_path = sidecar.with_name(zip_name)
+            else:
+                zip_path = sidecar
+            if not zip_path.exists():
+                continue
+            item = dict(meta)
+            item["file_name"] = file_name
+            item["relative_path"] = str(zip_path.relative_to(BACKUP_ROOT)).replace("\\", "/")
+            item["file_size_bytes"] = int(zip_path.stat().st_size)
+            item["download_name"] = file_name
+            items.append(item)
+        except Exception:
+            logger.exception("Failed to parse backup sidecar: %s", sidecar)
+    items.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+    return items
+
+
+def list_backup_history(
+    *,
+    limit: int = 50,
+    scope: str = "",
+    site_code: str = "",
+) -> List[Dict[str, Any]]:
+    items = _history_items_all()
+    clean_scope = str(scope or "").strip().lower()
+    clean_code = str(site_code or "").strip().upper()
+    out: List[Dict[str, Any]] = []
+    for item in items:
+        if clean_scope and str(item.get("scope") or "").strip().lower() != clean_scope:
+            continue
+        if clean_code:
+            if str(item.get("site_code") or "").strip().upper() != clean_code:
+                continue
+        out.append(item)
+    safe_limit = max(1, min(int(limit), 200))
+    return out[:safe_limit]
+
+
+def resolve_backup_file(relative_path: str) -> Path:
+    raw = str(relative_path or "").strip().replace("\\", "/")
+    if not raw:
+        raise ValueError("relative_path is required")
+    target = (BACKUP_ROOT / raw).resolve()
+    root = BACKUP_ROOT.resolve()
+    if root not in target.parents and target != root:
+        raise ValueError("invalid backup path")
+    if not target.exists() or not target.is_file():
+        raise FileNotFoundError(raw)
+    return target
+
+
+def get_backup_item(relative_path: str) -> Dict[str, Any] | None:
+    try:
+        path = resolve_backup_file(relative_path)
+    except Exception:
+        return None
+    sidecar = _sidecar_path(path)
+    item: Dict[str, Any] = {}
+    if sidecar.exists():
+        try:
+            loaded = json.loads(sidecar.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                item.update(loaded)
+        except Exception:
+            logger.exception("Failed to parse sidecar: %s", sidecar)
+    item["file_name"] = path.name
+    item["relative_path"] = str(path.relative_to(BACKUP_ROOT)).replace("\\", "/")
+    item["file_size_bytes"] = int(path.stat().st_size)
+    item["download_name"] = path.name
+    return item
+
+
+def cleanup_old_backups() -> Dict[str, Any]:
+    _ensure_dirs()
+    keep_full_days = max(1, int(os.getenv("KA_BACKUP_KEEP_FULL_DAYS", "30")))
+    keep_site_days = max(1, int(os.getenv("KA_BACKUP_KEEP_SITE_DAYS", "90")))
+    now = _now()
+    removed: List[str] = []
+
+    def purge(dir_path: Path, keep_days: int) -> None:
+        threshold = now - timedelta(days=keep_days)
+        for zip_path in dir_path.rglob("*.zip"):
+            try:
+                mtime = datetime.fromtimestamp(zip_path.stat().st_mtime)
+                if mtime >= threshold:
+                    continue
+                sidecar = _sidecar_path(zip_path)
+                zip_path.unlink(missing_ok=True)
+                sidecar.unlink(missing_ok=True)
+                removed.append(str(zip_path))
+            except Exception:
+                logger.exception("Failed to purge old backup file: %s", zip_path)
+
+    purge(FULL_BACKUP_DIR, keep_full_days)
+    purge(SITE_BACKUP_DIR, keep_site_days)
+    return {
+        "ok": True,
+        "removed_count": len(removed),
+        "removed": removed,
+        "checked_at": _now_iso(),
+    }
+
+
+def list_site_admin_sites() -> List[Dict[str, str]]:
+    db_path = Path(FACILITY_DB_PATH).resolve()
+    if not db_path.exists():
+        return []
+    con = sqlite3.connect(str(db_path))
+    con.row_factory = sqlite3.Row
+    try:
+        if not _table_exists(con, "staff_users"):
+            return []
+        rows = con.execute(
+            """
+            SELECT site_code, site_name
+            FROM staff_users
+            WHERE is_site_admin=1
+              AND is_active=1
+              AND site_code IS NOT NULL
+              AND TRIM(site_code)<>''
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        out: Dict[str, str] = {}
+        for row in rows:
+            code = str(row["site_code"] or "").strip().upper()
+            if not code:
+                continue
+            if code in out:
+                continue
+            name = str(row["site_name"] or "").strip()
+            out[code] = name
+        return [{"site_code": k, "site_name": v} for k, v in out.items()]
+    finally:
+        con.close()
+
+
+def run_scheduled_backups(now: datetime | None = None) -> Dict[str, Any]:
+    current = now or _now()
+    report: Dict[str, Any] = {
+        "ok": True,
+        "ran_full": False,
+        "ran_site_weekly": False,
+        "errors": [],
+        "at": current.replace(microsecond=0).isoformat(sep=" "),
+    }
+    state = _load_runtime_state()
+    changed = False
+
+    today = current.strftime("%Y-%m-%d")
+    if current.hour == 0 and 0 <= current.minute < 15 and str(state.get("full_last_date") or "") != today:
+        try:
+            target_keys = [x["key"] for x in list_backup_targets() if bool(x.get("exists"))]
+            if target_keys:
+                run_manual_backup(
+                    actor="자동스케줄러",
+                    trigger="daily_0000",
+                    target_keys=target_keys,
+                    scope="full",
+                    with_maintenance=True,
+                )
+                state["full_last_date"] = today
+                changed = True
+                report["ran_full"] = True
+        except Exception as e:
+            report["ok"] = False
+            report["errors"].append(f"full backup: {e}")
+            logger.exception("Scheduled full backup failed")
+
+    week_key = current.strftime("%G-W%V")
+    if current.weekday() == 4 and current.hour == 0 and 20 <= current.minute < 50 and str(state.get("site_last_week") or "") != week_key:
+        try:
+            sites = list_site_admin_sites()
+            target_keys = [x["key"] for x in list_backup_targets() if bool(x.get("exists")) and bool(x.get("site_scoped"))]
+            for site in sites:
+                run_manual_backup(
+                    actor="자동스케줄러",
+                    trigger="weekly_friday",
+                    target_keys=target_keys,
+                    scope="site",
+                    site_code=str(site.get("site_code") or "").strip().upper(),
+                    site_name=str(site.get("site_name") or "").strip(),
+                    with_maintenance=False,
+                )
+            state["site_last_week"] = week_key
+            changed = True
+            report["ran_site_weekly"] = True
+            report["site_count"] = len(sites)
+        except Exception as e:
+            report["ok"] = False
+            report["errors"].append(f"site weekly backup: {e}")
+            logger.exception("Scheduled site weekly backup failed")
+
+    if changed:
+        _save_runtime_state(state)
+    try:
+        cleanup_old_backups()
+    except Exception:
+        logger.exception("Failed to cleanup old backups")
+    return report
+
+
+def _scheduler_enabled() -> bool:
+    raw = str(os.getenv("KA_BACKUP_SCHEDULER_ENABLED", "1")).strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _scheduler_loop() -> None:
+    logger.info("Backup scheduler started")
+    while not _SCHED_STOP_EVENT.wait(20):
+        try:
+            run_scheduled_backups()
+        except Exception:
+            logger.exception("Backup scheduler tick failed")
+    logger.info("Backup scheduler stopped")
+
+
+def start_backup_scheduler() -> None:
+    global _SCHED_THREAD
+    if not _scheduler_enabled():
+        logger.info("Backup scheduler disabled by KA_BACKUP_SCHEDULER_ENABLED")
+        return
+    if _SCHED_THREAD is not None and _SCHED_THREAD.is_alive():
+        return
+    _ensure_dirs()
+    _SCHED_STOP_EVENT.clear()
+    _SCHED_THREAD = threading.Thread(target=_scheduler_loop, name="ka-backup-scheduler", daemon=True)
+    _SCHED_THREAD.start()
+
+
+def stop_backup_scheduler() -> None:
+    global _SCHED_THREAD
+    if _SCHED_THREAD is None:
+        return
+    _SCHED_STOP_EVENT.set()
+    _SCHED_THREAD.join(timeout=5)
+    _SCHED_THREAD = None
