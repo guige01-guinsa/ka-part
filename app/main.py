@@ -264,6 +264,10 @@ def _mount_parking_if_enabled() -> None:
         os.environ["PARKING_UPLOAD_DIR"] = str((parking_root / upload_path).resolve())
 
     try:
+        from services.parking.app.db import init_db as parking_init_db, seed_demo as parking_seed_demo, seed_users as parking_seed_users
+        parking_init_db()
+        parking_seed_demo()
+        parking_seed_users()
         from services.parking.app.main import app as parking_app
         app.mount("/parking", parking_app)
         logger.info("Parking service mounted at /parking")

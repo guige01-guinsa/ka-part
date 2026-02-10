@@ -1,4 +1,5 @@
 import os, hmac, hashlib, base64
+from typing import Any
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from fastapi import Request, HTTPException
 
@@ -19,10 +20,20 @@ def pbkdf2_verify(password: str, stored: str) -> bool:
     dk2 = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
     return hmac.compare_digest(dk, dk2)
 
-def make_session(username: str, role: str, site_code: str | None = None) -> str:
+def make_session(
+    username: str,
+    role: str,
+    site_code: str | None = None,
+    extras: dict[str, Any] | None = None,
+) -> str:
     payload = {"u": username, "r": role}
     if site_code:
         payload["sc"] = str(site_code).strip().upper()
+    if extras:
+        for key, value in extras.items():
+            txt = str(value or "").strip()
+            if txt:
+                payload[str(key)] = txt
     return _ser.dumps(payload)
 
 def read_session(request: Request) -> dict | None:

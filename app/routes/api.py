@@ -546,7 +546,15 @@ def parking_context(request: Request):
     if (not PARKING_EMBED_ENABLED) and (not PARKING_BASE_URL):
         raise HTTPException(status_code=503, detail="parking gateway misconfigured: PARKING_BASE_URL is required")
 
-    ctx = _parking_ctx_ser.dumps({"site_code": site_code, "permission_level": permission_level})
+    ctx = _parking_ctx_ser.dumps(
+        {
+            "site_code": site_code,
+            "site_name": _clean_site_name(user.get("site_name"), required=False),
+            "permission_level": permission_level,
+            "login_id": _clean_login_id(user.get("login_id") or "ka-part-user"),
+            "user_name": _clean_name(user.get("name") or user.get("login_id") or "사용자"),
+        }
+    )
     rel = f"{PARKING_SSO_PATH}?ctx={urllib.parse.quote(ctx, safe='')}"
     parking_url = rel if not PARKING_BASE_URL else f"{PARKING_BASE_URL.rstrip('/')}{rel}"
     return {
