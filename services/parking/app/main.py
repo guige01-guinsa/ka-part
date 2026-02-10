@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 from datetime import date
 from pathlib import Path
 import uuid
@@ -24,12 +25,14 @@ DEFAULT_SITE_CODE = normalize_site_code(os.getenv("PARKING_DEFAULT_SITE_CODE", "
 LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
 CONTEXT_SECRET = os.getenv("PARKING_CONTEXT_SECRET", os.getenv("PARKING_SECRET_KEY", "change-this-secret"))
 CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
+PORTAL_URL = (os.getenv("PARKING_PORTAL_URL") or "").strip()
 _ctx_ser = URLSafeTimedSerializer(CONTEXT_SECRET, salt="parking-context")
 UPLOAD_DIR = Path(os.getenv("PARKING_UPLOAD_DIR", str(Path(__file__).resolve().parent / "uploads")))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Parking Enforcer API", version="1.0.0", root_path=ROOT_PATH)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+logger = logging.getLogger("ka-part.parking")
 
 
 def app_url(path: str) -> str:
@@ -38,6 +41,16 @@ def app_url(path: str) -> str:
     if ROOT_PATH:
         return f"{ROOT_PATH}{path}"
     return path
+
+
+def integration_required_page(status_code: int = 200) -> HTMLResponse:
+    link = (
+        f"""<p><a href="{_html.escape(PORTAL_URL)}">아파트 시설관리 시스템으로 이동</a></p>"""
+        if PORTAL_URL
+        else "<p>아파트 시설관리 시스템의 '주차관리' 메뉴를 통해 접속하세요.</p>"
+    )
+    body = f"<h2>Parking Login</h2><p>통합 로그인 전용입니다.</p>{link}"
+    return HTMLResponse(body, status_code=status_code)
 
 
 def _auto_entry_page(next_path: str) -> str:
@@ -50,9 +63,11 @@ def _auto_entry_page(next_path: str) -> str:
   <title>Parking Entry</title>
 </head>
 <body>
-  <p>주차관리 접속 처리 중입니다...</p>
+  <p id="msg">주차관리 접속 처리 중입니다...</p>
   <script>
     (async function () {{
+      const msgEl = document.getElementById("msg");
+      const setMsg = (txt) => {{ if (msgEl) msgEl.textContent = txt; }};
       const nextPath = {quoted_next};
       const loginUrl = "/pwa/login.html?next=" + encodeURIComponent(nextPath);
       let token = "";
@@ -70,13 +85,19 @@ def _auto_entry_page(next_path: str) -> str:
           method: "GET",
           headers: {{ "Authorization": "Bearer " + token }}
         }});
-        if (!res.ok) {{
-          throw new Error(String(res.status));
+        const ct = res.headers.get("content-type") || "";
+        const data = ct.includes("application/json") ? await res.json() : {{}};
+        if (res.status === 401) {{
+          window.location.replace(loginUrl);
+          return;
         }}
-        const data = await res.json();
-        window.location.replace((data && data.url) ? String(data.url) : "/parking/sso");
-      }} catch (_e) {{
-        window.location.replace(loginUrl);
+        if (!res.ok) {{
+          const detail = data && data.detail ? String(data.detail) : ("HTTP " + String(res.status));
+          throw new Error(detail);
+        }}
+        window.location.replace((data && data.url) ? String(data.url) : nextPath);
+      }} catch (e) {{
+        setMsg("주차 연동 오류: " + String((e && e.message) || e));
       }}
     }})();
   </script>
@@ -128,14 +149,14 @@ def home():
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
     if not LOCAL_LOGIN_ENABLED:
-        return RedirectResponse(url=app_url("/admin2"), status_code=302)
+        return integration_required_page(status_code=200)
     login_action = app_url("/login")
     return f"<h2>Login</h2><form method='POST' action='{login_action}'><input name='username'/><input name='password' type='password'/><button>Login</button></form>"
 
 @app.post("/login")
 def login_submit(username: str = Form(...), password: str = Form(...)):
     if not LOCAL_LOGIN_ENABLED:
-        return RedirectResponse(url=app_url("/admin2"), status_code=302)
+        return integration_required_page(status_code=403)
     u = username.strip()
     with connect() as con:
         row = con.execute("SELECT * FROM users WHERE username=?", (u,)).fetchone()
@@ -156,8 +177,14 @@ def sso_login(ctx: str):
     except BadSignature as exc:
         raise HTTPException(status_code=401, detail="Invalid context token") from exc
 
-    site_code = normalize_site_code(payload.get("site_code"))
+    raw_site_code = str(payload.get("site_code") or "").strip()
+    if not raw_site_code:
+        raise HTTPException(status_code=400, detail="Context token missing site_code")
+    site_code = normalize_site_code(raw_site_code)
+
     permission_level = str(payload.get("permission_level") or "").strip().lower()
+    if not permission_level:
+        raise HTTPException(status_code=400, detail="Context token missing permission_level")
     role = map_permission_to_role(permission_level)
     token = make_session("ka-part-user", role, site_code=site_code)
     resp = RedirectResponse(url=app_url("/admin2"), status_code=302)
@@ -166,7 +193,9 @@ def sso_login(ctx: str):
 
 @app.post("/logout")
 def logout():
-    target = app_url("/login") if LOCAL_LOGIN_ENABLED else "/pwa/"
+    target = app_url("/login")
+    if (not LOCAL_LOGIN_ENABLED) and PORTAL_URL:
+        target = PORTAL_URL
     resp = RedirectResponse(url=target, status_code=302)
     resp.delete_cookie("parking_session", path=ROOT_PATH or "/")
     return resp
@@ -268,15 +297,19 @@ def admin2(request: Request):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     site_code = normalize_site_code(s.get("sc"))
-    with connect() as con:
-        vs = con.execute(
-            "SELECT * FROM vehicles WHERE site_code=? ORDER BY updated_at DESC LIMIT 200",
-            (site_code,),
-        ).fetchall()
-        logs = con.execute(
-            "SELECT * FROM violations WHERE site_code=? ORDER BY created_at DESC LIMIT 100",
-            (site_code,),
-        ).fetchall()
+    try:
+        with connect() as con:
+            vs = con.execute(
+                "SELECT * FROM vehicles WHERE site_code=? ORDER BY updated_at DESC LIMIT 200",
+                (site_code,),
+            ).fetchall()
+            logs = con.execute(
+                "SELECT * FROM violations WHERE site_code=? ORDER BY created_at DESC LIMIT 100",
+                (site_code,),
+            ).fetchall()
+    except Exception as exc:
+        logger.exception("parking admin2 query failed for site_code=%s: %s", site_code, exc)
+        return integration_required_page(status_code=503)
     v_rows = "".join([f"<tr><td>{esc(r['plate'])}</td><td>{esc(r['status'])}</td><td>{esc(r['unit'])}</td><td>{esc(r['owner_name'])}</td></tr>" for r in vs])
     l_rows = "".join([f"<tr><td>{esc(r['created_at'])}</td><td>{esc(r['plate'])}</td><td>{esc(r['verdict'])}</td><td>{esc(r['photo_path'] or '-')}</td></tr>" for r in logs])
     logout_path = app_url("/logout")
