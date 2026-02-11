@@ -1417,7 +1417,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     </section>
   </main>
 
-  <script>window.__ADMIN_BOOT__ = __ADMIN_BOOT__;</script>
+  <script>window.__ADMIN_BOOT__ = __ADMIN_BOOT_JSON__;</script>
   <script>
   (function(){
     const boot = window.__ADMIN_BOOT__ || {};
@@ -1914,7 +1914,7 @@ def admin2(request: Request):
         "logout_url": app_url("/logout"),
         "back_url": "/pwa/",
     }
-    html = ADMIN2_HTML_TEMPLATE.replace("__ADMIN_BOOT__", json.dumps(context, ensure_ascii=False))
+    html = ADMIN2_HTML_TEMPLATE.replace("__ADMIN_BOOT_JSON__", json.dumps(context, ensure_ascii=False))
     return HTMLResponse(html, status_code=200)
 
 
