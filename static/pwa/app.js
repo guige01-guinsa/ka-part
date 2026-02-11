@@ -1001,6 +1001,15 @@
       const qs = buildSiteQuery(site, siteCode);
       window.location.href = qs ? `/pwa/backup.html?${qs}` : "/pwa/backup.html";
     });
+    $("#btnNoticeQna")?.addEventListener("click", () => {
+      const target = TABS.find((t) => t.key === "notice_qna");
+      if (!target) {
+        toast("공지/질문 탭이 현재 비활성화되어 있습니다.");
+        return;
+      }
+      activateTab(target.key, true);
+      document.getElementById("tabs")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
     $("#btnParking")?.addEventListener("click", () => {
       const run = async () => {
         const data = await jfetch("/api/parking/context");
@@ -1021,15 +1030,6 @@
         window.KAAuth.redirectLogin("/pwa/");
       };
       run().catch(() => {});
-    });
-    $("#btnExit")?.addEventListener("click", () => {
-      const ok = confirm("홈 입력값을 비우고 종료할까요?\n(종료 버튼을 누르기 전까지 입력값은 유지됩니다.)");
-      if (!ok) return;
-      clearHomeDraft();
-      const homeTab = TABS.find((t) => t.key === "home");
-      activateTab(homeTab ? "home" : TABS[0]?.key || "");
-      window.scrollTo(0, 0);
-      toast("종료 처리");
     });
   }
 
