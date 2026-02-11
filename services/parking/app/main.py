@@ -1422,6 +1422,13 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
   (function(){
     const boot = window.__ADMIN_BOOT__ || {};
     const $ = (id) => document.getElementById(id);
+    const qs = (selector) => document.querySelector(selector);
+    function on(id, eventName, handler){
+      const el = $(id);
+      if (!el) return false;
+      el.addEventListener(eventName, handler);
+      return true;
+    }
     const state = { selectedPlate: "", vehicles: [] };
     const isManager = !!boot.is_manager;
 
@@ -1521,7 +1528,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
 
     function renderVehicles(items){
       state.vehicles = items || [];
-      const tbody = $("#tbVehicles tbody");
+      const tbody = qs("#tbVehicles tbody");
       if (!tbody) return;
       if (!items || !items.length){
         tbody.innerHTML = `<tr><td colspan="8">차량 데이터가 없습니다.</td></tr>`;
@@ -1552,7 +1559,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     }
 
     function renderViolations(items){
-      const tbody = $("#tbViolations tbody");
+      const tbody = qs("#tbViolations tbody");
       if (!tbody) return;
       if (!items || !items.length){
         tbody.innerHTML = `<tr><td colspan="7">위반기록이 없습니다.</td></tr>`;
@@ -1675,7 +1682,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     }
 
     function bindEvents(){
-      $("btnRefreshAll").addEventListener("click", async () => {
+      on("btnRefreshAll", "click", async () => {
         try {
           await loadVehicles();
           await loadViolations();
@@ -1684,11 +1691,11 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         }
       });
 
-      $("btnReloadViolations").addEventListener("click", async () => {
+      on("btnReloadViolations", "click", async () => {
         try { await loadViolations(); } catch (e) {}
       });
 
-      $("btnLogout").addEventListener("click", async () => {
+      on("btnLogout", "click", async () => {
         try {
           await fetch(boot.logout_url || "./logout", { method: "POST", credentials: "include" });
         } catch (_) {}
@@ -1697,7 +1704,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
 
       if (!isManager) return;
 
-      $("btnCreate").addEventListener("click", async () => {
+      on("btnCreate", "click", async () => {
         try {
           await createVehicle();
         } catch (e) {
@@ -1707,20 +1714,23 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
           }
         }
       });
-      $("btnUpdate").addEventListener("click", async () => {
+      on("btnUpdate", "click", async () => {
         try { await updateVehicle(); } catch (e) { setMsg("msgVehicle", `수정 실패: ${friendlyErrMsg(e)}`, false); }
       });
-      $("btnDelete").addEventListener("click", async () => {
+      on("btnDelete", "click", async () => {
         try { await deleteVehicle(); } catch (e) { setMsg("msgVehicle", `삭제 실패: ${friendlyErrMsg(e)}`, false); }
       });
-      $("btnClear").addEventListener("click", () => clearForm());
-      $("btnImportExcel").addEventListener("click", async () => {
+      on("btnClear", "click", () => clearForm());
+      on("btnImportExcel", "click", async () => {
         try { await importExcel(); } catch (e) { setMsg("msgImport", `엑셀 가져오기 실패: ${friendlyErrMsg(e)}`, false); }
       });
-      $("qVehicle").addEventListener("keydown", async (e) => {
-        if (e.key !== "Enter") return;
-        try { await loadVehicles(); } catch (err) { setMsg("msgVehicle", `검색 실패: ${friendlyErrMsg(err)}`, false); }
-      });
+      const qVehicle = $("qVehicle");
+      if (qVehicle) {
+        qVehicle.addEventListener("keydown", async (e) => {
+          if (e.key !== "Enter") return;
+          try { await loadVehicles(); } catch (err) { setMsg("msgVehicle", `검색 실패: ${friendlyErrMsg(err)}`, false); }
+        });
+      }
     }
 
     async function init(){
