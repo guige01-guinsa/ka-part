@@ -674,6 +674,31 @@ def _require_site_access(request: Request, requested_site_name: Any, *, required
     return user, token, allowed_site_name
 
 
+def _resolve_main_site_target(
+    user: Dict[str, Any],
+    requested_site_name: Any,
+    requested_site_code: Any,
+    *,
+    required: bool = False,
+) -> Tuple[str, str]:
+    clean_site_name, clean_site_code = _resolve_site_identity_for_main(user, requested_site_name, requested_site_code)
+    clean_site_name = _clean_site_name(clean_site_name, required=False)
+    clean_site_code = _clean_site_code(clean_site_code, required=False)
+
+    if clean_site_code and not clean_site_name:
+        mapped_name = find_site_name_by_code(clean_site_code)
+        if mapped_name:
+            clean_site_name = _clean_site_name(mapped_name, required=True)
+
+    if clean_site_name and not clean_site_code:
+        clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
+
+    if required and not clean_site_name:
+        raise HTTPException(status_code=400, detail="site_name 또는 site_code를 확인하세요.")
+
+    return clean_site_name, clean_site_code
+
+
 @router.get("/health")
 def health():
     report = schema_alignment_report()
@@ -720,18 +745,15 @@ def parking_context(request: Request):
 
 @router.get("/schema")
 def api_schema(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
-    user, _token, clean_site_name = _require_site_access(request, site_name, required=False)
-    clean_site_code = _resolve_allowed_site_code(user, site_code)
-    resolved_site_code = clean_site_code
-    if not resolved_site_code:
-        row = get_site_env_record(clean_site_name)
-        if row:
-            resolved_site_code = _clean_site_code(row.get("site_code"), required=False)
+    user, _token = _require_auth(request)
+    clean_site_name, resolved_site_code = _resolve_main_site_target(
+        user, site_name, site_code, required=False
+    )
     schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
 
     # On first login for the first site registrant, show only the Home tab
     # until the site env is explicitly saved.
-    if int(user.get("is_site_admin") or 0) == 1 and _is_first_site_registrant(user, clean_site_name, resolved_site_code):
+    if clean_site_name and int(user.get("is_site_admin") or 0) == 1 and _is_first_site_registrant(user, clean_site_name, resolved_site_code):
         row = get_site_env_record(clean_site_name, site_code=resolved_site_code or None)
         if row is None:
             env_cfg = _home_only_site_env_config()
@@ -1576,14 +1598,17 @@ def api_users_delete(request: Request, user_id: int):
 
 @router.post("/save")
 def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
-    _user, _token, site_name = _require_site_access(request, payload.get("site_name"), required=False)
+    user, _token = _require_auth(request)
+    site_name, site_code = _resolve_main_site_target(
+        user, payload.get("site_name"), payload.get("site_code"), required=True
+    )
     entry_date = safe_ymd(payload.get("date") or "")
 
     raw_tabs = payload.get("tabs") or {}
     if not isinstance(raw_tabs, dict):
         raise HTTPException(status_code=400, detail="tabs must be object")
 
-    schema, _env_cfg = _site_schema_and_env(site_name)
+    schema, _env_cfg = _site_schema_and_env(site_name, site_code)
     tabs = normalize_tabs_payload(raw_tabs, schema_defs=schema)
     ignored_tabs = sorted(set(str(k) for k in raw_tabs.keys()) - set(tabs.keys()))
 
@@ -1597,6 +1622,7 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
     return {
         "ok": True,
         "site_name": site_name,
+        "site_code": site_code,
         "date": entry_date,
         "saved_tabs": sorted(tabs.keys()),
         "ignored_tabs": ignored_tabs,
@@ -1604,32 +1630,46 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
 
 
 @router.get("/load")
-def api_load(request: Request, site_name: str = Query(...), date: str = Query(...)):
-    _user, _token, site_name = _require_site_access(request, site_name, required=True)
+def api_load(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    date: str = Query(...),
+):
+    user, _token = _require_auth(request)
+    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
     entry_date = safe_ymd(date)
     site_id = ensure_site(site_name)
-    schema, _env_cfg = _site_schema_and_env(site_name)
+    schema, _env_cfg = _site_schema_and_env(site_name, site_code)
     tabs = load_entry(site_id, entry_date, allowed_keys_by_tab=_schema_allowed_keys(schema))
-    return {"ok": True, "site_name": site_name, "date": entry_date, "tabs": tabs}
+    return {"ok": True, "site_name": site_name, "site_code": site_code, "date": entry_date, "tabs": tabs}
 
 
 @router.delete("/delete")
-def api_delete(request: Request, site_name: str = Query(...), date: str = Query(...)):
-    _user, _token, site_name = _require_site_access(request, site_name, required=True)
+def api_delete(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    date: str = Query(...),
+):
+    user, _token = _require_auth(request)
+    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
     entry_date = safe_ymd(date)
     site_id = ensure_site(site_name)
     ok = delete_entry(site_id, entry_date)
-    return {"ok": ok}
+    return {"ok": ok, "site_name": site_name, "site_code": site_code}
 
 
 @router.get("/list_range")
 def api_list_range(
     request: Request,
-    site_name: str = Query(...),
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
 ):
-    _user, _token, site_name = _require_site_access(request, site_name, required=True)
+    user, _token = _require_auth(request)
+    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
     df = safe_ymd(date_from) if date_from else today_ymd()
     dt = safe_ymd(date_to) if date_to else today_ymd()
     if df > dt:
@@ -1637,24 +1677,26 @@ def api_list_range(
     site_id = ensure_site(site_name)
     entries = list_entries(site_id, df, dt)
     dates = [e["entry_date"] for e in entries]
-    return {"ok": True, "site_name": site_name, "date_from": df, "date_to": dt, "dates": dates}
+    return {"ok": True, "site_name": site_name, "site_code": site_code, "date_from": df, "date_to": dt, "dates": dates}
 
 
 @router.get("/export")
 def api_export(
     request: Request,
-    site_name: str = Query(...),
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
 ):
-    _user, _token, site_name = _require_site_access(request, site_name, required=True)
+    user, _token = _require_auth(request)
+    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
     df = safe_ymd(date_from) if date_from else today_ymd()
     dt = safe_ymd(date_to) if date_to else today_ymd()
     if df > dt:
         df, dt = dt, df
 
     site_id = ensure_site(site_name)
-    schema, _env_cfg = _site_schema_and_env(site_name)
+    schema, _env_cfg = _site_schema_and_env(site_name, site_code)
     allowed = _schema_allowed_keys(schema)
     entries = list_entries(site_id, df, dt)
     rows: List[Dict[str, Any]] = []
@@ -1675,11 +1717,17 @@ def api_export(
 
 
 @router.get("/pdf")
-def api_pdf(request: Request, site_name: str = Query(...), date: str = Query(...)):
-    _user, _token, site_name = _require_site_access(request, site_name, required=True)
+def api_pdf(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    date: str = Query(...),
+):
+    user, _token = _require_auth(request)
+    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
     entry_date = safe_ymd(date)
     site_id = ensure_site(site_name)
-    schema, _env_cfg = _site_schema_and_env(site_name)
+    schema, _env_cfg = _site_schema_and_env(site_name, site_code)
     tabs = load_entry(site_id, entry_date, allowed_keys_by_tab=_schema_allowed_keys(schema))
 
     pbytes = build_pdf(site_name, entry_date, tabs, schema_defs=schema)

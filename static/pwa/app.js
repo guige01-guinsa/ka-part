@@ -749,18 +749,25 @@
     enforceHomeSiteIdentityPolicy();
   }
 
-  async function loadOne(site, date) {
-    const url = `/api/load?site_name=${encodeURIComponent(site)}&date=${encodeURIComponent(date)}`;
+  async function loadOne(site, date, siteCode = "") {
+    const qs = buildSiteQuery(site, siteCode || getSiteCode());
+    const url = `/api/load?${qs}&date=${encodeURIComponent(date)}`;
     const data = await jfetch(url);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     fillTabs(data.tabs || {});
   }
 
   async function loadRange() {
-    const site = getSiteName();
+    const site = getSiteNameRaw() || getSiteName();
+    const siteCode = getSiteCodeRaw() || getSiteCode();
     const df = getDateStart();
     const dt = getDateEnd();
-    const url = `/api/list_range?site_name=${encodeURIComponent(site)}&date_from=${encodeURIComponent(df)}&date_to=${encodeURIComponent(dt)}`;
+    const qs = buildSiteQuery(site, siteCode);
+    const url = `/api/list_range?${qs}&date_from=${encodeURIComponent(df)}&date_to=${encodeURIComponent(dt)}`;
     const data = await jfetch(url);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     rangeDates = data && Array.isArray(data.dates) ? data.dates : [];
     if (!rangeDates.length) {
       fillTabs({});
@@ -772,7 +779,7 @@
     const showDate = rangeDates[rangeIndex];
     const ds = $("#dateStart");
     if (ds) ds.value = showDate;
-    await loadOne(site, showDate);
+    await loadOne(site, showDate, siteCode);
     toast(`기간 ${df}~${dt} · ${rangeDates.length}건 · 표시 ${showDate}`);
   }
 
@@ -794,7 +801,7 @@
     const showDate = rangeDates[rangeIndex];
     const ds = $("#dateStart");
     if (ds) ds.value = showDate;
-    await loadOne(getSiteName(), showDate);
+    await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
     toast(`표시 ${showDate} (${rangeIndex + 1}/${rangeDates.length})`);
   }
 
@@ -811,12 +818,12 @@
     const showDate = rangeDates[rangeIndex];
     const ds = $("#dateStart");
     if (ds) ds.value = showDate;
-    await loadOne(getSiteName(), showDate);
+    await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
     toast(`표시 ${showDate} (${rangeIndex + 1}/${rangeDates.length})`);
   }
 
   async function doSave() {
-    if (!getSiteNameRaw()) {
+    if (!getSiteNameRaw() && !getSiteCodeRaw()) {
       const msg = "단지명이 없으면 단지명과 단지코드를 확인후 다시 저장하세요";
       alert(msg);
       toast(msg);
@@ -838,6 +845,7 @@
     }
     const payload = {
       site_name: siteNameForSave,
+      site_code: getSiteCodeRaw() || getSiteCode(),
       date: getPickedDate(),
       tabs: collectAllTabs(),
     };
@@ -851,7 +859,8 @@
     const date = getPickedDate();
     const ok = confirm(`${date} 데이터를 삭제할까요?`);
     if (!ok) return;
-    const url = `/api/delete?site_name=${encodeURIComponent(getSiteName())}&date=${encodeURIComponent(date)}`;
+    const qs = buildSiteQuery(getSiteNameRaw() || getSiteName(), getSiteCodeRaw() || getSiteCode());
+    const url = `/api/delete?${qs}&date=${encodeURIComponent(date)}`;
     await jfetch(url, { method: "DELETE" });
     await loadRange().catch(() => {});
     toast("삭제 완료");
@@ -859,15 +868,15 @@
 
   async function doExport() {
     await syncSiteIdentity({ requireInput: true });
-    const url = `/api/export?site_name=${encodeURIComponent(getSiteName())}&date_from=${encodeURIComponent(
-      getDateStart()
-    )}&date_to=${encodeURIComponent(getDateEnd())}`;
+    const qs = buildSiteQuery(getSiteNameRaw() || getSiteName(), getSiteCodeRaw() || getSiteCode());
+    const url = `/api/export?${qs}&date_from=${encodeURIComponent(getDateStart())}&date_to=${encodeURIComponent(getDateEnd())}`;
     await downloadWithAuth(url, "export.xlsx");
   }
 
   async function doPdf() {
     await syncSiteIdentity({ requireInput: true });
-    const url = `/api/pdf?site_name=${encodeURIComponent(getSiteName())}&date=${encodeURIComponent(getPickedDate())}`;
+    const qs = buildSiteQuery(getSiteNameRaw() || getSiteName(), getSiteCodeRaw() || getSiteCode());
+    const url = `/api/pdf?${qs}&date=${encodeURIComponent(getPickedDate())}`;
     await downloadWithAuth(url, "report.pdf");
   }
 
