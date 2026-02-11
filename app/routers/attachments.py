@@ -17,6 +17,37 @@ UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _safe_int_env(name: str, default: int, minimum: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    try:
+        value = int(raw) if raw else int(default)
+    except Exception:
+        value = int(default)
+    return max(minimum, value)
+
+
+ATTACHMENT_MAX_BYTES = _safe_int_env("ATTACHMENT_MAX_BYTES", 20 * 1024 * 1024, 256 * 1024)
+ATTACHMENT_ALLOWED_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf",
+    ".xlsx", ".xls", ".docx", ".doc", ".pptx", ".ppt",
+    ".csv", ".txt", ".zip", ".hwp", ".hwpx",
+}
+ATTACHMENT_BLOCKED_EXTENSIONS = {
+    ".exe", ".dll", ".bat", ".cmd", ".com", ".scr", ".msi",
+    ".ps1", ".vbs", ".js", ".jar", ".sh", ".php", ".asp",
+    ".aspx", ".jsp", ".py", ".pl", ".rb",
+}
+ATTACHMENT_BLOCKED_MIME_TYPES = {
+    "application/x-msdownload",
+    "application/x-dosexec",
+    "application/x-msdos-program",
+    "application/x-sh",
+    "text/html",
+    "application/javascript",
+    "text/javascript",
+}
+
+
 # -------------------------
 # helpers
 # -------------------------
@@ -83,6 +114,47 @@ def _safe_filename(name: str) -> str:
     # 윈도우/경로문자 제거
     name = name.replace("\\", "_").replace("/", "_").replace("..", "_")
     return name.strip() or "file.bin"
+
+
+def _file_ext(name: str) -> str:
+    ext = Path(str(name or "")).suffix.lower().strip()
+    if ext == ".jfif":
+        return ".jpg"
+    return ext
+
+
+async def _validate_attachment_upload(file: UploadFile) -> tuple[str, bytes]:
+    ext = _file_ext(file.filename or "")
+    if not ext:
+        raise HTTPException(status_code=400, detail="파일 확장자가 필요합니다.")
+    if ext in ATTACHMENT_BLOCKED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"보안상 허용되지 않는 확장자입니다: {ext}")
+    if ATTACHMENT_ALLOWED_EXTENSIONS and ext not in ATTACHMENT_ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"허용되지 않는 파일 확장자입니다: {ext}")
+
+    ctype = str(file.content_type or "").split(";", 1)[0].strip().lower()
+    if ctype and ctype in ATTACHMENT_BLOCKED_MIME_TYPES:
+        raise HTTPException(status_code=400, detail=f"허용되지 않는 파일 형식입니다: {ctype}")
+
+    content = await file.read(ATTACHMENT_MAX_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="업로드 파일이 비어 있습니다.")
+    if len(content) > ATTACHMENT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"첨부파일 용량 제한({ATTACHMENT_MAX_BYTES} bytes)을 초과했습니다.",
+        )
+
+    if ext in {".jpg", ".jpeg"} and not content.startswith(b"\xff\xd8\xff"):
+        raise HTTPException(status_code=400, detail="JPG 파일 헤더가 올바르지 않습니다.")
+    if ext == ".png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(status_code=400, detail="PNG 파일 헤더가 올바르지 않습니다.")
+    if ext == ".webp" and not (len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"):
+        raise HTTPException(status_code=400, detail="WEBP 파일 헤더가 올바르지 않습니다.")
+    if ext == ".pdf" and not content.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="PDF 파일 헤더가 올바르지 않습니다.")
+
+    return ext, content
 
 
 # -------------------------
@@ -199,13 +271,14 @@ async def attachments_create(
 
         cols = _table_cols(db, "attachments")
 
-        fn = _safe_filename(file.filename or "upload.bin")
+        ext, content = await _validate_attachment_upload(file)
+        base_name = Path(file.filename or "upload.bin").stem
+        fn = _safe_filename(f"{base_name}{ext}")
         uid = str(uuid.uuid4())
         save_name = f"{uid}__{fn}"
         save_path = UPLOAD_DIR / save_name
 
         # 저장
-        content = await file.read()
         save_path.write_bytes(content)
 
         # INSERT 구성(컬럼 유무 대응)

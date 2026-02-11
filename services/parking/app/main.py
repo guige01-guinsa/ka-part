@@ -22,17 +22,78 @@ from openpyxl import load_workbook
 from .db import init_db, seed_demo, seed_users, connect, normalize_site_code
 from .auth import make_session, pbkdf2_verify, read_session
 
-API_KEY = os.getenv("PARKING_API_KEY", "change-me")
+_TRUTHY = {"1", "true", "yes", "on"}
+_WEAK_SECRET_MARKERS = {
+    "change-me",
+    "change-this-secret",
+    "ka-part-dev-secret",
+    "parking-dev-secret-change-me",
+}
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return bool(default)
+    return raw.lower() in _TRUTHY
+
+
+def _allow_insecure_defaults() -> bool:
+    return _env_enabled("ALLOW_INSECURE_DEFAULTS", False)
+
+
+def _require_secret(
+    names: tuple[str, ...],
+    label: str,
+    *,
+    min_len: int = 16,
+) -> str:
+    for key in names:
+        raw = (os.getenv(key) or "").strip()
+        if not raw:
+            continue
+        lowered = raw.lower()
+        if lowered in _WEAK_SECRET_MARKERS and not _allow_insecure_defaults():
+            raise RuntimeError(f"{label} uses an insecure default-like value ({key})")
+        if len(raw) < min_len and not _allow_insecure_defaults():
+            raise RuntimeError(f"{label} must be at least {min_len} characters ({key})")
+        return raw
+    generated = os.urandom(max(32, min_len)).hex()
+    if names:
+        os.environ.setdefault(names[0], generated)
+    return generated
+
+
+def _safe_int_env(name: str, default: int, minimum: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    try:
+        value = int(raw) if raw else int(default)
+    except Exception:
+        value = int(default)
+    return max(minimum, value)
+
+
+def _parse_csv_set(name: str, default_csv: str) -> set[str]:
+    raw = (os.getenv(name) or default_csv).strip()
+    out: set[str] = set()
+    for token in raw.split(","):
+        item = str(token or "").strip().lower()
+        if item:
+            out.add(item)
+    return out
+
+
+API_KEY = _require_secret(("PARKING_API_KEY",), "PARKING_API_KEY", min_len=20)
 ROOT_PATH = os.getenv("PARKING_ROOT_PATH", "").strip()
 if ROOT_PATH and not ROOT_PATH.startswith("/"):
     ROOT_PATH = f"/{ROOT_PATH}"
 ROOT_PATH = ROOT_PATH.rstrip("/")
 DEFAULT_SITE_CODE = normalize_site_code(os.getenv("PARKING_DEFAULT_SITE_CODE", "COMMON"))
 LOCAL_LOGIN_ENABLED = os.getenv("PARKING_LOCAL_LOGIN_ENABLED", "1").strip().lower() in ("1", "true", "yes", "on")
-CONTEXT_SECRET = (
-    os.getenv("PARKING_CONTEXT_SECRET")
-    or os.getenv("PARKING_SECRET_KEY")
-    or os.getenv("KA_PHONE_VERIFY_SECRET", "ka-part-dev-secret")
+CONTEXT_SECRET = _require_secret(
+    ("PARKING_CONTEXT_SECRET", "PARKING_SECRET_KEY", "KA_PHONE_VERIFY_SECRET"),
+    "PARKING_CONTEXT_SECRET",
+    min_len=24,
 )
 CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
 PORTAL_URL = (os.getenv("PARKING_PORTAL_URL") or "").strip()
@@ -40,6 +101,17 @@ PORTAL_LOGIN_URL = (os.getenv("PARKING_PORTAL_LOGIN_URL") or "").strip()
 _ctx_ser = URLSafeTimedSerializer(CONTEXT_SECRET, salt="parking-context")
 UPLOAD_DIR = Path(os.getenv("PARKING_UPLOAD_DIR", str(Path(__file__).resolve().parent / "uploads")))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+COOKIE_SECURE = _env_enabled("PARKING_COOKIE_SECURE", True)
+VIOLATION_UPLOAD_MAX_BYTES = _safe_int_env("PARKING_UPLOAD_MAX_BYTES", 5 * 1024 * 1024, 128 * 1024)
+EXCEL_UPLOAD_MAX_BYTES = _safe_int_env("PARKING_EXCEL_UPLOAD_MAX_BYTES", 10 * 1024 * 1024, 256 * 1024)
+_ALLOWED_PHOTO_EXTENSIONS = _parse_csv_set(
+    "PARKING_UPLOAD_ALLOWED_EXTS",
+    ".jpg,.jpeg,.png,.webp,.heic,.heif",
+)
+_ALLOWED_PHOTO_MIME_TYPES = _parse_csv_set(
+    "PARKING_UPLOAD_ALLOWED_MIME",
+    "image/jpeg,image/png,image/webp,image/heic,image/heif",
+)
 
 app = FastAPI(title="Parking Enforcer API", version="1.0.0", root_path=ROOT_PATH)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
@@ -154,35 +226,46 @@ def _auto_entry_page(next_path: str) -> str:
           // ignore
         }}
       }};
-      let token = "";
-      try {{
-        token = (localStorage.getItem("ka_part_auth_token_v1") || "").trim();
-      }} catch (_e) {{
-        token = "";
-      }}
-      if (!token) {{
-        if (readRetry() >= 2) {{
-          setMsg("로그인이 필요합니다. 시설관리 로그인 후 다시 시도하세요.");
-          return;
+      const TOKEN_KEY = "ka_part_auth_token_v1";
+      const USER_KEY = "ka_part_auth_user_v1";
+      const readStore = (store, key) => {{
+        try {{
+          return (store.getItem(key) || "").trim();
+        }} catch (_e) {{
+          return "";
         }}
-        bumpRetry();
-        window.location.replace(loginUrl);
-        return;
+      }};
+      const clearAuthStore = () => {{
+        try {{ sessionStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
+        try {{ sessionStorage.removeItem(USER_KEY); }} catch (_e) {{}}
+        try {{ localStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
+        try {{ localStorage.removeItem(USER_KEY); }} catch (_e) {{}}
+      }};
+      let token = readStore(sessionStorage, TOKEN_KEY);
+      if (!token) {{
+        const legacyToken = readStore(localStorage, TOKEN_KEY);
+        if (legacyToken) {{
+          token = legacyToken;
+          try {{ sessionStorage.setItem(TOKEN_KEY, legacyToken); }} catch (_e) {{}}
+          const legacyUser = readStore(localStorage, USER_KEY);
+          if (legacyUser) {{
+            try {{ sessionStorage.setItem(USER_KEY, legacyUser); }} catch (_e) {{}}
+          }}
+          try {{ localStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
+          try {{ localStorage.removeItem(USER_KEY); }} catch (_e) {{}}
+        }}
       }}
       try {{
+        const headers = {{}};
+        if (token) headers.Authorization = "Bearer " + token;
         const res = await fetch("/api/parking/context", {{
           method: "GET",
-          headers: {{ "Authorization": "Bearer " + token }}
+          headers
         }});
         const ct = res.headers.get("content-type") || "";
         const data = ct.includes("application/json") ? await res.json() : {{}};
         if (res.status === 401) {{
-          try {{
-            localStorage.removeItem("ka_part_auth_token_v1");
-            localStorage.removeItem("ka_part_auth_user_v1");
-          }} catch (_e) {{
-            // ignore
-          }}
+          clearAuthStore();
           if (readRetry() >= 2) {{
             setMsg("세션이 만료되었습니다. 다시 로그인하세요.");
             return;
@@ -360,6 +443,62 @@ def normalize_plate(value: str) -> str:
     return _PLATE_RE.sub("", str(value or "").upper()).strip()
 
 
+def _normalize_file_extension(filename: str) -> str:
+    ext = Path(str(filename or "")).suffix.lower().strip()
+    if ext == ".jfif":
+        return ".jpg"
+    if ext == ".heif":
+        return ".heic"
+    return ext
+
+
+def _guess_image_extension(raw: bytes) -> str | None:
+    if raw.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if len(raw) >= 12 and raw[0:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return ".webp"
+    if len(raw) >= 16 and raw[4:8] == b"ftyp":
+        brand = raw[8:12].lower()
+        if brand in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"}:
+            return ".heic"
+    return None
+
+
+def _validate_violation_photo_upload(photo: UploadFile) -> tuple[str, bytes]:
+    ext = _normalize_file_extension(photo.filename or "")
+    if ext and ext not in _ALLOWED_PHOTO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"허용되지 않는 파일 확장자입니다: {ext}")
+
+    content_type = str(photo.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type and content_type not in _ALLOWED_PHOTO_MIME_TYPES:
+        raise HTTPException(status_code=400, detail=f"허용되지 않는 파일 형식입니다: {content_type}")
+
+    raw = photo.file.read(VIOLATION_UPLOAD_MAX_BYTES + 1)
+    if not raw:
+        raise HTTPException(status_code=400, detail="업로드 파일이 비어 있습니다.")
+    if len(raw) > VIOLATION_UPLOAD_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"업로드 크기 제한({VIOLATION_UPLOAD_MAX_BYTES} bytes)을 초과했습니다.")
+
+    guessed_ext = _guess_image_extension(raw)
+    if not guessed_ext:
+        raise HTTPException(status_code=400, detail="지원하지 않는 이미지 포맷입니다.")
+
+    if ext:
+        normalized_ext = ".jpg" if ext in {".jpg", ".jpeg"} else ext
+        if normalized_ext != guessed_ext:
+            raise HTTPException(status_code=400, detail="파일 확장자와 실제 이미지 형식이 일치하지 않습니다.")
+    else:
+        ext = guessed_ext
+
+    if ext == ".jpeg":
+        ext = ".jpg"
+    if ext == ".heif":
+        ext = ".heic"
+    return ext, raw
+
+
 def check_plate_record(site_code: str, plate: str) -> "CheckResponse":
     p = normalize_plate(plate)
     if len(p) < 4:
@@ -458,7 +597,7 @@ def login_submit(username: str = Form(...), password: str = Form(...)):
         return HTMLResponse("Invalid credentials", status_code=401)
     token = make_session(u, row["role"], site_code=DEFAULT_SITE_CODE)
     resp = RedirectResponse(url=app_url("/admin2"), status_code=302)
-    resp.set_cookie("parking_session", token, httponly=True, samesite="lax", path=ROOT_PATH or "/")
+    resp.set_cookie("parking_session", token, httponly=True, secure=COOKIE_SECURE, samesite="lax", path=ROOT_PATH or "/")
     return resp
 
 
@@ -487,7 +626,7 @@ def sso_login(ctx: str):
     }
     token = make_session(session_user, role, site_code=site_code, extras=extras)
     resp = RedirectResponse(url=app_url("/admin2"), status_code=302)
-    resp.set_cookie("parking_session", token, httponly=True, samesite="lax", path=ROOT_PATH or "/")
+    resp.set_cookie("parking_session", token, httponly=True, secure=COOKIE_SECURE, samesite="lax", path=ROOT_PATH or "/")
     return resp
 
 @app.post("/logout")
@@ -496,7 +635,7 @@ def logout():
     if (not LOCAL_LOGIN_ENABLED) and PORTAL_URL:
         target = PORTAL_URL
     resp = RedirectResponse(url=target, status_code=302)
-    resp.delete_cookie("parking_session", path=ROOT_PATH or "/")
+    resp.delete_cookie("parking_session", path=ROOT_PATH or "/", secure=COOKIE_SECURE, httponly=True, samesite="lax")
     return resp
 
 class CheckResponse(BaseModel):
@@ -611,17 +750,22 @@ def create_violation_with_photo(
 ):
     require_key(x_api_key)
     site_code = resolve_site_scope(request, x_site_code)
-    p = plate.strip().upper()
-    ext = os.path.splitext(photo.filename or "")[1].lower() or ".jpg"
+    p = normalize_plate(plate)
+    if len(p) < 4:
+        raise HTTPException(status_code=400, detail="차량번호 형식이 올바르지 않습니다.")
+    verdict_value = str(verdict or "").strip().upper()
+    if verdict_value not in _VERDICT_OPTIONS:
+        raise HTTPException(status_code=400, detail="verdict 값이 올바르지 않습니다.")
+    ext, raw = _validate_violation_photo_upload(photo)
     fname = f"{uuid.uuid4().hex}{ext}"
     fpath = UPLOAD_DIR / fname
     with open(fpath, "wb") as f:
-        f.write(photo.file.read())
+        f.write(raw)
     rel = app_url(f"/uploads/{fname}")
     with connect() as con:
         cur = con.execute(
             "INSERT INTO violations (site_code, plate, verdict, rule_code, location, memo, inspector, photo_path, lat, lng) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (site_code, p, verdict, rule_code, location, memo, inspector, rel, lat, lng),
+            (site_code, p, verdict_value, rule_code, location, memo, inspector, rel, lat, lng),
         )
         vid = cur.lastrowid
         row = con.execute("SELECT * FROM violations WHERE id = ?", (vid,)).fetchone()
@@ -848,9 +992,14 @@ async def import_vehicles_excel_session(request: Request, file: UploadFile = Fil
     if not filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드할 수 있습니다.")
 
-    raw = await file.read()
+    raw = await file.read(EXCEL_UPLOAD_MAX_BYTES + 1)
     if not raw:
         raise HTTPException(status_code=400, detail="업로드된 파일이 비어 있습니다.")
+    if len(raw) > EXCEL_UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"엑셀 업로드 크기 제한({EXCEL_UPLOAD_MAX_BYTES} bytes)을 초과했습니다.",
+        )
 
     try:
         wb = load_workbook(filename=BytesIO(raw), data_only=True)

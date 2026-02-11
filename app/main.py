@@ -144,35 +144,46 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
           // ignore
         }}
       }};
-      let token = "";
-      try {{
-        token = (localStorage.getItem("ka_part_auth_token_v1") || "").trim();
-      }} catch (_e) {{
-        token = "";
-      }}
-      if (!token) {{
-        if (readRetry() >= 2) {{
-          setMsg("로그인이 필요합니다. 시설관리 로그인 후 다시 시도하세요.");
-          return;
+      const TOKEN_KEY = "ka_part_auth_token_v1";
+      const USER_KEY = "ka_part_auth_user_v1";
+      const readStore = (store, key) => {{
+        try {{
+          return (store.getItem(key) || "").trim();
+        }} catch (_e) {{
+          return "";
         }}
-        bumpRetry();
-        window.location.replace(loginUrl);
-        return;
+      }};
+      const clearAuthStore = () => {{
+        try {{ sessionStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
+        try {{ sessionStorage.removeItem(USER_KEY); }} catch (_e) {{}}
+        try {{ localStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
+        try {{ localStorage.removeItem(USER_KEY); }} catch (_e) {{}}
+      }};
+      let token = readStore(sessionStorage, TOKEN_KEY);
+      if (!token) {{
+        const legacyToken = readStore(localStorage, TOKEN_KEY);
+        if (legacyToken) {{
+          token = legacyToken;
+          try {{ sessionStorage.setItem(TOKEN_KEY, legacyToken); }} catch (_e) {{}}
+          const legacyUser = readStore(localStorage, USER_KEY);
+          if (legacyUser) {{
+            try {{ sessionStorage.setItem(USER_KEY, legacyUser); }} catch (_e) {{}}
+          }}
+          try {{ localStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
+          try {{ localStorage.removeItem(USER_KEY); }} catch (_e) {{}}
+        }}
       }}
       try {{
+        const headers = {{}};
+        if (token) headers.Authorization = "Bearer " + token;
         const res = await fetch("/api/parking/context", {{
           method: "GET",
-          headers: {{ "Authorization": "Bearer " + token }}
+          headers
         }});
         const ct = res.headers.get("content-type") || "";
         const data = ct.includes("application/json") ? await res.json() : {{}};
         if (res.status === 401) {{
-          try {{
-            localStorage.removeItem("ka_part_auth_token_v1");
-            localStorage.removeItem("ka_part_auth_user_v1");
-          }} catch (_e) {{
-            // ignore
-          }}
+          clearAuthStore();
           if (readRetry() >= 2) {{
             setMsg("세션이 만료되었습니다. 다시 로그인하세요.");
             return;
@@ -285,10 +296,14 @@ def _mount_parking_if_enabled() -> None:
     os.environ.setdefault("PARKING_DB_PATH", str(parking_root / "app" / "data" / "parking.db"))
     os.environ.setdefault("PARKING_UPLOAD_DIR", str(parking_root / "app" / "uploads"))
     os.environ.setdefault("PARKING_LOCAL_LOGIN_ENABLED", "0")
-    os.environ.setdefault(
-        "PARKING_CONTEXT_SECRET",
-        os.getenv("PARKING_SECRET_KEY", os.getenv("KA_PHONE_VERIFY_SECRET", "ka-part-dev-secret")),
-    )
+    context_secret = (
+        os.getenv("PARKING_CONTEXT_SECRET")
+        or os.getenv("PARKING_SECRET_KEY")
+        or os.getenv("KA_PHONE_VERIFY_SECRET")
+        or ""
+    ).strip()
+    if context_secret:
+        os.environ.setdefault("PARKING_CONTEXT_SECRET", context_secret)
     db_path = os.getenv("PARKING_DB_PATH", "").strip()
     if db_path and not Path(db_path).is_absolute():
         os.environ["PARKING_DB_PATH"] = str((parking_root / db_path).resolve())

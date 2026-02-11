@@ -8,6 +8,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+function New-RandomBase64 {
+    param([int]$Bytes = 32)
+    $buffer = New-Object byte[] $Bytes
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($buffer)
+    return [Convert]::ToBase64String($buffer)
+}
+
 function Set-EnvFromFile {
     param([string]$Path)
     if (-not (Test-Path $Path)) {
@@ -41,10 +48,12 @@ if (-not $env:PARKING_UPLOAD_DIR) {
     $env:PARKING_UPLOAD_DIR = ".\app\uploads"
 }
 if (-not $env:PARKING_API_KEY) {
-    $env:PARKING_API_KEY = "change-me"
+    $env:PARKING_API_KEY = New-RandomBase64 -Bytes 32
+    Write-Host "PARKING_API_KEY was missing. Generated a random process-only key."
 }
 if (-not $env:PARKING_SECRET_KEY) {
-    $env:PARKING_SECRET_KEY = "change-this-secret"
+    $env:PARKING_SECRET_KEY = New-RandomBase64 -Bytes 48
+    Write-Host "PARKING_SECRET_KEY was missing. Generated a random process-only key."
 }
 if (-not $env:PARKING_ROOT_PATH) {
     $env:PARKING_ROOT_PATH = "/parking"

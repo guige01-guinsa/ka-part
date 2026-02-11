@@ -98,8 +98,8 @@ elseif (-not [System.IO.Path]::IsPathRooted($env:PARKING_DB_PATH)) { $env:PARKIN
 if (-not $env:PARKING_UPLOAD_DIR) { $env:PARKING_UPLOAD_DIR = (Join-Path $parkingRoot "app\uploads") }
 elseif (-not [System.IO.Path]::IsPathRooted($env:PARKING_UPLOAD_DIR)) { $env:PARKING_UPLOAD_DIR = (Join-Path $parkingRoot $env:PARKING_UPLOAD_DIR) }
 if (-not $env:PARKING_LOCAL_LOGIN_ENABLED) { $env:PARKING_LOCAL_LOGIN_ENABLED = "0" }
-if (-not $env:PARKING_API_KEY) { $env:PARKING_API_KEY = "change-me" }
-if (-not $env:PARKING_SECRET_KEY) { $env:PARKING_SECRET_KEY = "change-this-secret" }
+if (-not $env:PARKING_API_KEY) { $env:PARKING_API_KEY = New-RandomBase64 -Bytes 32 }
+if (-not $env:PARKING_SECRET_KEY) { $env:PARKING_SECRET_KEY = New-RandomBase64 -Bytes 48 }
 if (-not $env:PARKING_CONTEXT_SECRET) { $env:PARKING_CONTEXT_SECRET = $env:PARKING_SECRET_KEY }
 if (-not $env:PARKING_PORTAL_LOGIN_URL) { $env:PARKING_PORTAL_LOGIN_URL = "https://www.ka-part.com/pwa/login.html?next=%2Fparking%2Fadmin2" }
 $parkingBaseUrl = [string]($env:PARKING_BASE_URL)

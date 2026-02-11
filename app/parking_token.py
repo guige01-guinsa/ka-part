@@ -8,6 +8,14 @@ from typing import Any
 
 from fastapi import HTTPException
 
+_TRUTHY = {"1", "true", "yes", "on"}
+_WEAK_SECRET_MARKERS = {
+    "change-me",
+    "change-this-secret",
+    "ka-part-dev-secret",
+    "parking-dev-secret-change-me",
+}
+
 
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
@@ -18,9 +26,24 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode((data + pad).encode("ascii"))
 
 
+def _allow_insecure_defaults() -> bool:
+    return (os.getenv("ALLOW_INSECURE_DEFAULTS") or "").strip().lower() in _TRUTHY
+
+
 def _secret() -> bytes:
-    # 운영에서는 반드시 환경변수로 강한 시크릿을 설정해야 한다.
-    return os.getenv("PARKING_TOKEN_SECRET", "parking-dev-secret-change-me").encode("utf-8")
+    raw = (os.getenv("PARKING_TOKEN_SECRET") or "").strip()
+    lowered = raw.lower()
+    if raw and lowered not in _WEAK_SECRET_MARKERS and len(raw) >= 16:
+        return raw.encode("utf-8")
+    if not raw:
+        generated = base64.urlsafe_b64encode(os.urandom(48)).decode("ascii")
+        os.environ.setdefault("PARKING_TOKEN_SECRET", generated)
+        return generated.encode("utf-8")
+    if _allow_insecure_defaults():
+        return raw.encode("utf-8")
+    if lowered in _WEAK_SECRET_MARKERS:
+        raise RuntimeError("PARKING_TOKEN_SECRET uses an insecure default-like value")
+    raise RuntimeError("PARKING_TOKEN_SECRET must be at least 16 characters")
 
 
 def token_ttl_seconds() -> int:

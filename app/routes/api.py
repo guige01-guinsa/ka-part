@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from itsdangerous import URLSafeTimedSerializer
 
 from ..backup_manager import (
@@ -107,13 +107,76 @@ PARKING_SSO_PATH = _raw_sso_path if _raw_sso_path.startswith("/") else f"/{_raw_
 if PARKING_EMBED_ENABLED and PARKING_SSO_PATH == "/sso":
     PARKING_SSO_PATH = "/parking/sso"
 
+_TRUTHY = {"1", "true", "yes", "on"}
+_WEAK_SECRET_MARKERS = {
+    "change-me",
+    "change-this-secret",
+    "ka-part-dev-secret",
+    "parking-dev-secret-change-me",
+}
+AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
+AUTH_COOKIE_SAMESITE = (os.getenv("KA_AUTH_COOKIE_SAMESITE") or "lax").strip().lower() or "lax"
+if AUTH_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
+    AUTH_COOKIE_SAMESITE = "lax"
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in _TRUTHY
+
+
+def _safe_int_env(name: str, default: int, minimum: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    try:
+        value = int(raw) if raw else int(default)
+    except Exception:
+        value = int(default)
+    return max(minimum, value)
+
+
+ALLOW_INSECURE_DEFAULTS = _env_enabled("ALLOW_INSECURE_DEFAULTS", False)
+AUTH_COOKIE_SECURE = _env_enabled("KA_AUTH_COOKIE_SECURE", True)
+AUTH_COOKIE_MAX_AGE = _safe_int_env("KA_AUTH_COOKIE_MAX_AGE", 43200, 300)
+
+
+def _require_secret_env(
+    names: Tuple[str, ...],
+    label: str,
+    *,
+    min_len: int = 16,
+) -> str:
+    for key in names:
+        value = (os.getenv(key) or "").strip()
+        if not value:
+            continue
+        lowered = value.lower()
+        if lowered in _WEAK_SECRET_MARKERS and not ALLOW_INSECURE_DEFAULTS:
+            raise RuntimeError(f"{label} uses an insecure default-like value ({key})")
+        if len(value) < min_len and not ALLOW_INSECURE_DEFAULTS:
+            raise RuntimeError(f"{label} must be at least {min_len} characters ({key})")
+        return value
+    generated = secrets.token_urlsafe(max(24, min_len))
+    if names:
+        os.environ.setdefault(names[0], generated)
+    return generated
+
+
+PARKING_CONTEXT_SECRET_VALUE = _require_secret_env(
+    ("PARKING_CONTEXT_SECRET", "PARKING_SECRET_KEY", "KA_PHONE_VERIFY_SECRET"),
+    "PARKING_CONTEXT_SECRET",
+    min_len=24,
+)
+PHONE_VERIFY_SECRET_VALUE = _require_secret_env(
+    ("KA_PHONE_VERIFY_SECRET", "PARKING_CONTEXT_SECRET", "PARKING_SECRET_KEY"),
+    "KA_PHONE_VERIFY_SECRET",
+    min_len=24,
+)
+
 
 def _parking_context_secret() -> str:
-    return (
-        os.getenv("PARKING_CONTEXT_SECRET")
-        or os.getenv("PARKING_SECRET_KEY")
-        or os.getenv("KA_PHONE_VERIFY_SECRET", "ka-part-dev-secret")
-    )
+    return PARKING_CONTEXT_SECRET_VALUE
 
 
 def _clean_login_id(value: Any) -> str:
@@ -221,8 +284,7 @@ def _phone_digits(formatted_phone: str) -> str:
 
 
 def _phone_code_hash(phone: str, code: str) -> str:
-    secret = os.getenv("KA_PHONE_VERIFY_SECRET", "ka-part-dev-secret")
-    src = f"{secret}|{phone}|{code}"
+    src = f"{PHONE_VERIFY_SECRET_VALUE}|{phone}|{code}"
     import hashlib
 
     return hashlib.sha256(src.encode("utf-8")).hexdigest()
@@ -564,10 +626,35 @@ def _extract_access_token(request: Request) -> str:
         token = auth[7:].strip()
         if token:
             return token
+    cookie_token = (request.cookies.get(AUTH_COOKIE_NAME) or "").strip()
+    if cookie_token:
+        return cookie_token
     token = (request.query_params.get("access_token") or "").strip()
     if token:
         return token
     raise HTTPException(status_code=401, detail="auth required")
+
+
+def _set_auth_cookie(resp: JSONResponse, token: str) -> None:
+    resp.set_cookie(
+        AUTH_COOKIE_NAME,
+        token,
+        max_age=AUTH_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+        path="/",
+    )
+
+
+def _clear_auth_cookie(resp: JSONResponse) -> None:
+    resp.delete_cookie(
+        AUTH_COOKIE_NAME,
+        path="/",
+        secure=AUTH_COOKIE_SECURE,
+        httponly=True,
+        samesite=AUTH_COOKIE_SAMESITE,
+    )
 
 
 def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
@@ -1182,7 +1269,15 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
         user_agent=request.headers.get("user-agent"),
         ip_address=(request.client.host if request.client else None),
     )
-    return {"ok": True, "token": session["token"], "expires_at": session["expires_at"], "user": _public_user(user)}
+    body = {
+        "ok": True,
+        "token": session["token"],
+        "expires_at": session["expires_at"],
+        "user": _public_user(user),
+    }
+    resp = JSONResponse(body)
+    _set_auth_cookie(resp, session["token"])
+    return resp
 
 
 @router.post("/auth/signup/request_phone_verification")
@@ -1346,14 +1441,27 @@ def auth_login(request: Request, payload: Dict[str, Any] = Body(...)):
         ip_address=(request.client.host if request.client else None),
     )
     fresh = get_staff_user(int(user["id"])) or user
-    return {"ok": True, "token": session["token"], "expires_at": session["expires_at"], "user": _public_user(fresh)}
+    body = {
+        "ok": True,
+        "token": session["token"],
+        "expires_at": session["expires_at"],
+        "user": _public_user(fresh),
+    }
+    resp = JSONResponse(body)
+    _set_auth_cookie(resp, session["token"])
+    return resp
 
 
 @router.post("/auth/logout")
 def auth_logout(request: Request):
-    _user, token = _require_auth(request)
-    revoke_auth_session(token)
-    return {"ok": True}
+    try:
+        _user, token = _require_auth(request)
+        revoke_auth_session(token)
+    except HTTPException:
+        pass
+    resp = JSONResponse({"ok": True})
+    _clear_auth_cookie(resp)
+    return resp
 
 
 @router.get("/auth/me")
@@ -1381,7 +1489,15 @@ def auth_change_password(request: Request, payload: Dict[str, Any] = Body(...)):
         ip_address=(request.client.host if request.client else None),
     )
     fresh = get_staff_user(int(user["id"])) or db_user
-    return {"ok": True, "token": session["token"], "expires_at": session["expires_at"], "user": _public_user(fresh)}
+    body = {
+        "ok": True,
+        "token": session["token"],
+        "expires_at": session["expires_at"],
+        "user": _public_user(fresh),
+    }
+    resp = JSONResponse(body)
+    _set_auth_cookie(resp, session["token"])
+    return resp
 
 
 @router.get("/user_roles")

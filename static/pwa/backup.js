@@ -305,13 +305,11 @@
 
   async function downloadBackup(path) {
     const token = KAAuth.getToken();
-    if (!token) {
-      KAAuth.redirectLogin("/pwa/backup.html");
-      return;
-    }
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
     const url = `/api/backup/download?path=${encodeURIComponent(path)}`;
     const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers,
     });
     if (res.status === 401) {
       KAAuth.clearSession();

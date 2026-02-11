@@ -122,9 +122,8 @@
 
   async function checkAlreadyLoggedIn() {
     const token = KAAuth.getToken();
-    if (!token) return;
     try {
-      const me = await KAAuth.requestJson("/api/auth/me");
+      const me = await KAAuth.requestJson("/api/auth/me", { noAuth: !token });
       if (me && me.user) {
         KAAuth.setSession(token, me.user);
         goNext();

@@ -224,12 +224,10 @@
 
   async function downloadWithAuth(url, fallbackName) {
     const token = window.KAAuth.getToken();
-    if (!token) {
-      window.KAAuth.redirectLogin();
-      return;
-    }
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers,
     });
     if (res.status === 401) {
       window.KAAuth.clearSession();
