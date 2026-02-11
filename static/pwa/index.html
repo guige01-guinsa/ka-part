@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <title>아파트 시설관리</title>
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=2">
-  <link rel="stylesheet" href="/pwa/styles.css?v=20260211a">
+  <link rel="stylesheet" href="/pwa/styles.css?v=20260211b">
 </head>
 <body>
   <header class="top">
@@ -42,15 +42,17 @@
         <input id="siteCode" type="text" maxlength="32" placeholder="예: APT00012" />
       </label>
 
-            <label class="field">
-        <span>시작</span>
-        <input id="dateStart" type="date" />
-      </label>
+      <div class="date-range">
+        <label class="field">
+          <span>시작</span>
+          <input id="dateStart" type="date" />
+        </label>
 
-      <label class="field">
-        <span>종료</span>
-        <input id="dateEnd" type="date" />
-      </label>
+        <label class="field">
+          <span>종료</span>
+          <input id="dateEnd" type="date" />
+        </label>
+      </div>
 
       <div class="hint">기간조회: 시작~종료 범위에서 기록 있는 날짜를 찾아 불러옵니다. 저장/삭제/PDF는 현재 표시 날짜 기준, 엑셀은 기간 출력.</div>
     </div>

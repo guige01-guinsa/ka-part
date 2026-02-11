@@ -1360,6 +1360,98 @@ def api_user_roles(request: Request):
     }
 
 
+@router.get("/users/me")
+def api_users_me(request: Request):
+    actor, _token = _require_auth(request)
+    actor = _bind_user_site_code_if_missing(actor)
+    return {"ok": True, "user": _public_user(actor)}
+
+
+@router.patch("/users/me")
+def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
+    actor, _token = _require_auth(request)
+    user_id = int(actor.get("id") or 0)
+    current = get_staff_user(user_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    restricted_keys = {
+        "login_id",
+        "site_code",
+        "site_name",
+        "is_admin",
+        "is_site_admin",
+        "permission_level",
+        "is_active",
+    }
+    blocked = sorted([str(k) for k in payload.keys() if str(k) in restricted_keys])
+    if blocked:
+        raise HTTPException(
+            status_code=403,
+            detail=f"해당 항목은 관리자만 수정할 수 있습니다: {', '.join(blocked)}",
+        )
+
+    login_id = _clean_login_id(current.get("login_id"))
+    name = _clean_name(payload.get("name", current.get("name")))
+    role = _clean_role(payload.get("role", current.get("role")))
+    phone = _normalize_phone(
+        payload["phone"] if "phone" in payload else current.get("phone"),
+        required=False,
+        field_name="phone",
+    )
+    site_code = _clean_site_code(current.get("site_code"), required=False)
+    site_name = _clean_optional_text(current.get("site_name"), 80)
+    address = _clean_optional_text(payload["address"] if "address" in payload else current.get("address"), 200)
+    office_phone = _normalize_phone(
+        payload["office_phone"] if "office_phone" in payload else current.get("office_phone"),
+        required=False,
+        field_name="office_phone",
+    )
+    office_fax = _normalize_phone(
+        payload["office_fax"] if "office_fax" in payload else current.get("office_fax"),
+        required=False,
+        field_name="office_fax",
+    )
+    note = _clean_optional_text(payload["note"] if "note" in payload else current.get("note"), 200)
+    is_admin = 1 if bool(current.get("is_admin")) else 0
+    is_site_admin = 1 if bool(current.get("is_site_admin")) else 0
+    is_active = 1 if bool(current.get("is_active")) else 0
+
+    try:
+        user = update_staff_user(
+            user_id,
+            login_id=login_id,
+            name=name,
+            role=role,
+            phone=phone,
+            site_code=site_code,
+            site_name=site_name,
+            address=address,
+            office_phone=office_phone,
+            office_fax=office_fax,
+            note=note,
+            is_admin=is_admin,
+            is_site_admin=is_site_admin,
+            is_active=is_active,
+        )
+    except Exception as e:
+        if "UNIQUE constraint failed" in str(e):
+            raise HTTPException(status_code=409, detail="login_id already exists")
+        raise
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    password_changed = False
+    new_password = _clean_password(payload.get("password"), required=False) if "password" in payload else None
+    if new_password:
+        set_staff_user_password(user_id, new_password)
+        revoke_all_user_sessions(user_id)
+        password_changed = True
+
+    fresh = get_staff_user(user_id) or user
+    return {"ok": True, "user": _public_user(fresh), "password_changed": password_changed}
+
+
 @router.get("/users")
 def api_users(
     request: Request,

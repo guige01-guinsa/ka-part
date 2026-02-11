@@ -12,6 +12,8 @@
   let editingId = null;
   let recommendedCount = 9;
   let me = null;
+  let selfProfile = null;
+  let isAdminView = false;
   let availableSites = [];
   let availableRegions = [];
 
@@ -49,9 +51,30 @@
     return found ? found.label : key;
   }
 
+  function applyMode() {
+    isAdminView = !!(me && me.is_admin);
+    $("#userListCard").hidden = !isAdminView;
+    $("#selfHint").hidden = isAdminView;
+    $("#permissionWrap").hidden = !isAdminView;
+    $("#activeWrap").hidden = !isAdminView;
+
+    $("#userPermission").disabled = !isAdminView;
+    $("#isActive").disabled = !isAdminView;
+    $("#loginId").readOnly = !isAdminView;
+    $("#userSiteCode").readOnly = !isAdminView;
+    $("#userSiteName").readOnly = !isAdminView;
+
+    $("#btnReload").textContent = isAdminView ? "새로고침" : "내정보 새로고침";
+    $("#btnSaveUser").textContent = isAdminView ? "저장" : "내 정보 저장";
+    $("#btnReset").textContent = isAdminView ? "초기화" : "다시 불러오기";
+    if (!isAdminView) {
+      $("#formTitle").textContent = "내 정보";
+    }
+  }
+
   function clearForm() {
     editingId = null;
-    $("#formTitle").textContent = "사용자 등록";
+    $("#formTitle").textContent = isAdminView ? "사용자 등록" : "내 정보";
     $("#loginId").value = "";
     $("#userName").value = "";
     $("#userPhone").value = "";
@@ -110,6 +133,18 @@
   function updateMeta() {
     const el = $("#metaLine");
     if (!el) return;
+
+    if (!isAdminView) {
+      const user = selfProfile || me || {};
+      const name = String(user.name || user.login_id || "사용자");
+      const level = permissionLabel(user);
+      const siteCode = String(user.site_code || "-");
+      const siteName = String(user.site_name || "-");
+      el.textContent = `${name} (${level}) · ${siteCode} / ${siteName}`;
+      el.classList.remove("warn");
+      return;
+    }
+
     const count = users.length;
     const active = users.filter((u) => u.is_active).length;
     const adminCount = users.filter((u) => u.is_admin && u.is_active).length;
@@ -287,6 +322,7 @@
   }
 
   async function loadUsers() {
+    if (!isAdminView) return;
     const query = buildUserQuery();
     const data = await jfetch(query ? `/api/users?${query}` : "/api/users");
     users = Array.isArray(data.users) ? data.users : [];
@@ -302,7 +338,34 @@
     renderFilterSummary();
   }
 
-  async function saveUser() {
+  async function loadSelfProfile() {
+    const data = await jfetch("/api/users/me");
+    const user = data && data.user ? data.user : null;
+    if (!user) {
+      throw new Error("내 정보를 불러오지 못했습니다.");
+    }
+    selfProfile = user;
+    fillForm(user);
+    $("#formTitle").textContent = "내 정보";
+    updateMeta();
+  }
+
+  function payloadFromSelfForm() {
+    const pw = ($("#userPassword").value || "").trim();
+    const payload = {
+      name: ($("#userName").value || "").trim(),
+      role: $("#userRole").value || "",
+      phone: ($("#userPhone").value || "").trim(),
+      address: ($("#userAddress").value || "").trim(),
+      office_phone: ($("#userOfficePhone").value || "").trim(),
+      office_fax: ($("#userOfficeFax").value || "").trim(),
+      note: ($("#userNote").value || "").trim(),
+    };
+    if (pw) payload.password = pw;
+    return payload;
+  }
+
+  async function saveAdminUser() {
     const body = payloadFromForm();
     if (editingId == null && !body.password) {
       setMsg("신규 사용자는 비밀번호를 입력해야 합니다.", true);
@@ -325,6 +388,29 @@
     clearForm();
   }
 
+  async function saveSelfUser() {
+    const body = payloadFromSelfForm();
+    if (body.password && body.password.length < 8) {
+      setMsg("비밀번호는 8자 이상이어야 합니다.", true);
+      return;
+    }
+    const willRotateSession = !!body.password;
+    const data = await jfetch("/api/users/me", { method: "PATCH", body: JSON.stringify(body) });
+    selfProfile = data && data.user ? data.user : selfProfile;
+    if (selfProfile) fillForm(selfProfile);
+    setMsg("내 정보를 수정했습니다.");
+    updateMeta();
+
+    if (willRotateSession || (data && data.password_changed)) {
+      alert("비밀번호가 변경되어 다시 로그인합니다.");
+      try {
+        await jfetch("/api/auth/logout", { method: "POST" });
+      } catch (_e) {}
+      KAAuth.clearSession();
+      KAAuth.redirectLogin("/pwa/users.html");
+    }
+  }
+
   async function removeUser(id) {
     const u = users.find((x) => Number(x.id) === Number(id));
     if (!u) return;
@@ -341,35 +427,49 @@
   }
 
   function wire() {
-    $("#btnReload").addEventListener("click", () => loadUsers().catch((e) => setMsg(e.message, true)));
-    $("#btnReset").addEventListener("click", clearForm);
-    $("#btnSaveUser").addEventListener("click", () => saveUser().catch((e) => setMsg(e.message, true)));
-
-    $("#btnApplyFilter").addEventListener("click", () => {
-      collectFilterStateFromUI();
-      loadUsers().catch((e) => setMsg(e.message, true));
+    $("#btnReload").addEventListener("click", () => {
+      const run = isAdminView ? loadUsers() : loadSelfProfile();
+      run.catch((e) => setMsg(e.message, true));
+    });
+    $("#btnReset").addEventListener("click", () => {
+      if (isAdminView) {
+        clearForm();
+      } else {
+        loadSelfProfile().catch((e) => setMsg(e.message, true));
+      }
+    });
+    $("#btnSaveUser").addEventListener("click", () => {
+      const run = isAdminView ? saveAdminUser() : saveSelfUser();
+      run.catch((e) => setMsg(e.message, true));
     });
 
-    $("#btnClearFilter").addEventListener("click", () => {
-      resetFilterState();
-      updateFilterControls();
-      loadUsers().catch((e) => setMsg(e.message, true));
-    });
+    if (isAdminView) {
+      $("#btnApplyFilter").addEventListener("click", () => {
+        collectFilterStateFromUI();
+        loadUsers().catch((e) => setMsg(e.message, true));
+      });
 
-    $("#filterSiteCode").addEventListener("change", () => {
-      syncSiteFilterPairByCode();
-    });
+      $("#btnClearFilter").addEventListener("click", () => {
+        resetFilterState();
+        updateFilterControls();
+        loadUsers().catch((e) => setMsg(e.message, true));
+      });
 
-    $("#filterSiteName").addEventListener("change", () => {
-      syncSiteFilterPairByName();
-    });
+      $("#filterSiteCode").addEventListener("change", () => {
+        syncSiteFilterPairByCode();
+      });
 
-    $("#filterKeyword").addEventListener("keydown", (e) => {
-      if (e.key !== "Enter") return;
-      e.preventDefault();
-      collectFilterStateFromUI();
-      loadUsers().catch((err) => setMsg(err.message, true));
-    });
+      $("#filterSiteName").addEventListener("change", () => {
+        syncSiteFilterPairByName();
+      });
+
+      $("#filterKeyword").addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        collectFilterStateFromUI();
+        loadUsers().catch((err) => setMsg(err.message, true));
+      });
+    }
 
     $("#btnLogout").addEventListener("click", () => {
       const run = async () => {
@@ -382,30 +482,32 @@
       run().catch(() => {});
     });
 
-    $("#userSheetBody").addEventListener("click", (e) => {
-      const btn = e.target.closest("button[data-action]");
-      if (!btn) return;
-      const id = Number(btn.dataset.id);
-      if (btn.dataset.action === "edit") {
-        const u = users.find((x) => Number(x.id) === id);
-        if (u) fillForm(u);
-      } else if (btn.dataset.action === "delete") {
-        removeUser(id).catch((err) => setMsg(err.message, true));
-      }
-    });
+    if (isAdminView) {
+      $("#userSheetBody").addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-action]");
+        if (!btn) return;
+        const id = Number(btn.dataset.id);
+        if (btn.dataset.action === "edit") {
+          const u = users.find((x) => Number(x.id) === id);
+          if (u) fillForm(u);
+        } else if (btn.dataset.action === "delete") {
+          removeUser(id).catch((err) => setMsg(err.message, true));
+        }
+      });
+    }
   }
 
   async function init() {
     me = await KAAuth.requireAuth();
-    if (!me.is_admin) {
-      alert("관리자만 접근할 수 있습니다.");
-      window.location.href = "/pwa/";
-      return;
-    }
     await loadRoles();
-    clearForm();
-    updateFilterControls();
-    await loadUsers();
+    applyMode();
+    if (isAdminView) {
+      clearForm();
+      updateFilterControls();
+      await loadUsers();
+    } else {
+      await loadSelfProfile();
+    }
     wire();
   }
 

@@ -104,7 +104,13 @@ body {
 .filters {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(320px, 2fr) minmax(170px, 1fr) minmax(170px, 1fr);
+  grid-template-columns: minmax(320px, 2fr) minmax(170px, 1fr) minmax(320px, 2fr);
+}
+
+.date-range {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .field {
@@ -319,7 +325,11 @@ body {
 
 @media (max-width: 760px) {
   .filters {
-    grid-template-columns: 2fr 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .date-range {
+    grid-column: 1 / -1;
   }
 
   .panel:not(#panel-tr1):not(#panel-tr2):not(#panel-tr3):not(#panel-tr4):not(#panel-tr5):not(#panel-tr6):not(#panel-main_vcb):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="3"] {
@@ -337,7 +347,7 @@ body {
 
 @media (max-width: 560px) {
   .filters {
-    grid-template-columns: 2fr 1fr 1fr;
+    grid-template-columns: 1fr;
     gap: 6px;
   }
 

@@ -10,6 +10,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -147,6 +148,10 @@ h2 { margin: 0 0 10px; font-size: 16px; }
 
 .query-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.field input[readonly] {
+  opacity: 0.78;
 }
 
 .sheet-wrap {
