@@ -69,6 +69,7 @@ from ..db import (
     verify_password,
 )
 from ..schema_defs import (
+    DEFAULT_INITIAL_VISIBLE_TAB_KEYS,
     SCHEMA_DEFS,
     SCHEMA_TAB_ORDER,
     build_effective_schema,
@@ -689,8 +690,18 @@ def _can_manage_backup(user: Dict[str, Any]) -> bool:
 
 
 def _home_only_site_env_config() -> Dict[str, Any]:
-    hide_tabs = [tab for tab in SCHEMA_TAB_ORDER if tab != "home"]
-    return normalize_site_env_config({"hide_tabs": hide_tabs, "tabs": {"home": {"title": "홈"}}})
+    visible = set(DEFAULT_INITIAL_VISIBLE_TAB_KEYS)
+    hide_tabs = [tab for tab in SCHEMA_TAB_ORDER if tab not in visible]
+    return normalize_site_env_config(
+        {
+            "hide_tabs": hide_tabs,
+            "tabs": {
+                "home": {"title": "홈"},
+                "notice_qna": {"title": "공지/질문"},
+                "todo": {"title": "Todo 일정관리"},
+            },
+        }
+    )
 
 
 def _verify_first_site_registrant_for_spec_env(user: Dict[str, Any], site_name: str, site_code: str = "") -> Dict[str, Any]:

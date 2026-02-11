@@ -3,8 +3,8 @@
 
   const $ = (sel) => document.querySelector(sel);
   const PREFERRED_TAB_ORDER = [
-    "notice_qna",
     "home",
+    "notice_qna",
     "todo",
     "tr1",
     "tr2",

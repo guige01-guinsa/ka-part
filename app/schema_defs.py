@@ -14,8 +14,8 @@ TODO_STATUS = ["예정", "진행중", "완료", "보류"]
 TODO_PRIORITY = ["보통", "높음", "긴급"]
 
 SCHEMA_TAB_ORDER = [
-    "notice_qna",
     "home",
+    "notice_qna",
     "todo",
     "tr1",
     "tr2",
@@ -35,7 +35,8 @@ SCHEMA_TAB_ORDER = [
 ]
 
 DEFAULT_PRIMARY_TAB_KEYS = ["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "dc_panel", "temperature", "meter", "facility_check"]
-DEFAULT_HIDDEN_TAB_KEYS = ["home", "facility", "facility_fire", "facility_mechanical", "facility_telecom"]
+DEFAULT_INITIAL_VISIBLE_TAB_KEYS = ["home", "notice_qna", "todo"]
+DEFAULT_HIDDEN_TAB_KEYS = [tab for tab in SCHEMA_TAB_ORDER if tab not in DEFAULT_INITIAL_VISIBLE_TAB_KEYS]
 
 FIELD_TYPE_SET = {"text", "number", "textarea", "select", "date"}
 
