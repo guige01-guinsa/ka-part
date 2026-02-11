@@ -1423,6 +1423,22 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     const boot = window.__ADMIN_BOOT__ || {};
     const $ = (id) => document.getElementById(id);
     const qs = (selector) => document.querySelector(selector);
+    const _inferredApiBase = (function(){
+      if (boot.api_base) return String(boot.api_base);
+      const scanner = String(boot.scanner_url || "");
+      const m = scanner.match(/^(.*)\/scanner\/?$/);
+      if (m && m[1]) return `${m[1]}/api/session`;
+      return "/parking/api/session";
+    })();
+    const API_BASE = String(_inferredApiBase || "/parking/api/session");
+    function apiUrl(path){
+      const cleaned = String(path || "").replace(/^\/+/, "");
+      if (!cleaned) return API_BASE;
+      if (/^https?:\/\//i.test(cleaned)) return cleaned;
+      if (cleaned.startsWith("/")) return cleaned;
+      if (API_BASE.endsWith("/")) return `${API_BASE}${cleaned}`;
+      return `${API_BASE}/${cleaned}`;
+    }
     function on(id, eventName, handler){
       const el = $(id);
       if (!el) return false;
@@ -1581,7 +1597,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     async function loadVehicles(){
       if (!isManager) return;
       const q = ($("qVehicle").value || "").trim();
-      const u = new URL("./api/session/vehicles", location.href);
+      const u = new URL(apiUrl("vehicles"), location.origin);
       if (q) u.searchParams.set("q", q);
       u.searchParams.set("limit", "500");
       const data = await api(u.toString());
@@ -1590,7 +1606,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     }
 
     async function loadViolations(){
-      const u = new URL("./api/session/violations/recent", location.href);
+      const u = new URL(apiUrl("violations/recent"), location.origin);
       u.searchParams.set("limit", "100");
       const data = await api(u.toString());
       const items = (data.items || []).map((x) => Object.assign({}, x, {
@@ -1605,7 +1621,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         return;
       }
       try {
-        const r = await api("./api/session/system_check");
+        const r = await api(apiUrl("system_check"));
         if (r && r.ok) {
           const pk = Array.isArray(r.vehicles_pk) ? r.vehicles_pk.join(", ") : "-";
           setSystemLine(`시스템 점검 정상 · DB쓰기:${r.can_write ? "OK" : "FAIL"} · PK:${pk} · site:${r.site_code}`, true);
@@ -1619,7 +1635,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
 
     async function createVehicle(){
       const payload = payloadFromForm();
-      const data = await api("./api/session/vehicles", {
+      const data = await api(apiUrl("vehicles"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1633,7 +1649,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       const payload = payloadFromForm();
       const plate = state.selectedPlate || payload.plate;
       if (!plate) throw new Error("수정할 차량을 선택하세요.");
-      const data = await api(`./api/session/vehicles/${encodeURIComponent(plate)}`, {
+      const data = await api(apiUrl(`vehicles/${encodeURIComponent(plate)}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1646,7 +1662,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       const plate = state.selectedPlate || ($("fPlate").value || "").trim();
       if (!plate) throw new Error("삭제할 차량을 선택하세요.");
       if (!confirm(`차량 ${plate} 를 삭제하시겠습니까?`)) return;
-      await api(`./api/session/vehicles/${encodeURIComponent(plate)}`, { method: "DELETE" });
+      await api(apiUrl(`vehicles/${encodeURIComponent(plate)}`), { method: "DELETE" });
       setMsg("msgVehicle", `삭제 완료: ${plate}`, true);
       await loadVehicles();
       clearForm();
@@ -1658,7 +1674,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       if (!file) throw new Error("엑셀(.xlsx) 파일을 선택하세요.");
       const fd = new FormData();
       fd.append("file", file);
-      const data = await api("./api/session/vehicles/import_excel", { method: "POST", body: fd });
+      const data = await api(apiUrl("vehicles/import_excel"), { method: "POST", body: fd });
       const lines = [];
       lines.push(data.message || "가져오기 결과");
       lines.push(`신규등록: ${data.inserted || 0}건, 수정: ${data.updated || 0}건, 빈행건너뜀: ${data.skipped_empty || 0}건`);
@@ -1779,6 +1795,7 @@ def admin2(request: Request):
         "site_code": site_code,
         "site_name": site_name,
         "display_name": display_name,
+        "api_base": app_url("/api/session"),
         "scanner_url": app_url("/scanner"),
         "logout_url": app_url("/logout"),
         "back_url": "/pwa/",
