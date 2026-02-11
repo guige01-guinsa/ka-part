@@ -112,6 +112,20 @@
     el._t = setTimeout(() => el.classList.remove("show"), 2200);
   }
 
+  function setTabRunStatus(tabTitle = "", isRunning = false) {
+    const el = $("#tabRunStatus");
+    if (!el) return;
+    if (isRunning && tabTitle) {
+      el.textContent = `실행여부: ${tabTitle} 실행중`;
+      el.classList.add("running");
+      el.classList.remove("idle");
+      return;
+    }
+    el.textContent = "실행여부: 대기";
+    el.classList.remove("running");
+    el.classList.add("idle");
+  }
+
   function ymdToday() {
     const d = new Date();
     const pad = (n) => String(n).padStart(2, "0");
@@ -593,6 +607,7 @@
     }
 
     if (TABS.length) activateTab(TABS[0].key);
+    else setTabRunStatus("", false);
   }
 
   function activateTab(tabKey, announce = false) {
@@ -606,6 +621,8 @@
     for (const p of document.querySelectorAll(".panel")) {
       p.classList.toggle("active", p.id === `panel-${tabKey}`);
     }
+    if (activatedTitle) setTabRunStatus(activatedTitle, true);
+    else setTabRunStatus("", false);
     if (announce && activatedTitle) {
       toast(`탭 실행: ${activatedTitle}`);
     }
@@ -799,11 +816,18 @@
   }
 
   async function doSave() {
+    if (!getSiteNameRaw()) {
+      const msg = "단지명이 없으면 단지명과 단지코드를 확인후 다시 저장하세요";
+      alert(msg);
+      toast(msg);
+      return;
+    }
     await syncSiteIdentity({ requireInput: true });
     const siteNameForSave = resolveSiteNameForSave();
     if (!siteNameForSave) {
-      alert("단지명 또는 단지코드를 먼저 입력하세요.");
-      toast("단지명 누락: 저장할 수 없습니다.");
+      const msg = "단지명이 없으면 단지명과 단지코드를 확인후 다시 저장하세요";
+      alert(msg);
+      toast(msg);
       return;
     }
 

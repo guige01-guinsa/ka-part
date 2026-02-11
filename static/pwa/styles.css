@@ -147,6 +147,23 @@ body {
   background: color-mix(in srgb, var(--bg) 90%, transparent);
 }
 
+.tab-run-status {
+  margin: 8px 12px 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-soft) 78%, black 22%);
+}
+
+.tab-run-status.running {
+  color: #d8e7ff;
+  border-color: color-mix(in srgb, var(--primary) 70%, var(--line));
+  background: color-mix(in srgb, var(--primary) 20%, var(--bg-soft));
+}
+
 .tabbtn {
   flex: 0 0 auto;
   border: 1px solid var(--line);
