@@ -14,6 +14,7 @@ TODO_STATUS = ["예정", "진행중", "완료", "보류"]
 TODO_PRIORITY = ["보통", "높음", "긴급"]
 
 SCHEMA_TAB_ORDER = [
+    "notice_qna",
     "home",
     "todo",
     "tr1",
@@ -79,6 +80,23 @@ def _lv_rows(prefix: str) -> List[List[str]]:
     ]
 
 SCHEMA_DEFS = {
+    "notice_qna": {
+        "title": "공지/질문",
+        "fields": [
+            {"k": "notice_title", "label": "공지 제목", "type": "text", "placeholder": "공지 제목 입력"},
+            {"k": "notice_body", "label": "공지 내용", "type": "textarea", "placeholder": "공지 내용을 입력하세요."},
+            {"k": "question_title", "label": "질문 제목", "type": "text", "placeholder": "질문 제목 입력"},
+            {"k": "question_body", "label": "질문 내용", "type": "textarea", "placeholder": "문의/질문 내용을 입력하세요."},
+            {"k": "answer_body", "label": "답변", "type": "textarea", "placeholder": "관리자 답변"},
+        ],
+        "rows": [
+            ["notice_title"],
+            ["notice_body"],
+            ["question_title"],
+            ["question_body"],
+            ["answer_body"],
+        ],
+    },
     "home": {
         "title": "홈",
         "fields": [
