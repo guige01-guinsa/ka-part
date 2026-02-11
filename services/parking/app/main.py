@@ -4,10 +4,11 @@ import logging
 import re
 import sqlite3
 import urllib.parse
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import uuid
 import html as _html
+import calendar
 from io import BytesIO
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form, Request
@@ -278,7 +279,7 @@ def _clean_optional_text(value: Any, max_len: int) -> str | None:
     return txt
 
 
-def _to_iso_date(value: Any) -> str | None:
+def _to_iso_date(value: Any, *, bound: str = "start") -> str | None:
     if value is None:
         return None
 
@@ -286,10 +287,18 @@ def _to_iso_date(value: Any) -> str | None:
         return value.date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
+    if isinstance(value, (int, float)):
+        # Excel serial date fallback (1900 date system).
+        serial = float(value)
+        if serial > 59:
+            base = datetime(1899, 12, 30)
+            return (base + timedelta(days=serial)).date().isoformat()
 
     txt = str(value).strip()
     if not txt:
         return None
+
+    is_end = str(bound or "").strip().lower() == "end"
 
     for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d"):
         try:
@@ -297,7 +306,23 @@ def _to_iso_date(value: Any) -> str | None:
         except ValueError:
             continue
 
-    raise ValueError("날짜 형식은 YYYY-MM-DD 형식으로 입력하세요.")
+    for fmt in ("%Y-%m", "%Y/%m", "%Y.%m", "%Y%m"):
+        try:
+            dt_val = datetime.strptime(txt, fmt)
+            year = int(dt_val.year)
+            month = int(dt_val.month)
+            day = calendar.monthrange(year, month)[1] if is_end else 1
+            return date(year, month, day).isoformat()
+        except ValueError:
+            continue
+
+    if re.fullmatch(r"\d{4}", txt):
+        year = int(txt)
+        if is_end:
+            return date(year, 12, 31).isoformat()
+        return date(year, 1, 1).isoformat()
+
+    raise ValueError("날짜 형식은 YYYY-MM-DD / YYYY-MM / YYYY 중 하나로 입력하세요.")
 
 
 def _vehicle_row_to_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
@@ -549,8 +574,8 @@ def _normalize_vehicle_payload(payload: VehicleUpsertIn) -> dict[str, Any]:
         status = _status_from_input(payload.status)
         unit = _clean_optional_text(payload.unit, 40)
         owner_name = _clean_optional_text(payload.owner_name, 60)
-        valid_from = _to_iso_date(payload.valid_from)
-        valid_to = _to_iso_date(payload.valid_to)
+        valid_from = _to_iso_date(payload.valid_from, bound="start")
+        valid_to = _to_iso_date(payload.valid_to, bound="end")
         note = _clean_optional_text(payload.note, 200)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -857,7 +882,7 @@ async def import_vehicles_excel_session(request: Request, file: UploadFile = Fil
                     "required_columns": ["차량번호(필수)"],
                     "optional_columns": ["상태", "동호수", "소유자", "적용시작일", "적용종료일", "비고"],
                     "status_guide": "상태는 정상등록/임시등록/차단차량 또는 active/temp/blocked 값을 사용하세요.",
-                    "date_guide": "날짜는 YYYY-MM-DD 형식을 권장합니다.",
+                    "date_guide": "날짜는 YYYY-MM-DD / YYYY-MM / YYYY 형식을 지원합니다. (월/년 입력 시 시작일=1일, 종료일=말일 자동보정)",
                 },
                 "unknown_headers": unknown_headers,
             },
@@ -883,8 +908,8 @@ async def import_vehicles_excel_session(request: Request, file: UploadFile = Fil
             status = _status_from_input(raw_item.get("status"))
             unit = _clean_optional_text(raw_item.get("unit"), 40)
             owner_name = _clean_optional_text(raw_item.get("owner_name"), 60)
-            valid_from = _to_iso_date(raw_item.get("valid_from"))
-            valid_to = _to_iso_date(raw_item.get("valid_to"))
+            valid_from = _to_iso_date(raw_item.get("valid_from"), bound="start")
+            valid_to = _to_iso_date(raw_item.get("valid_to"), bound="end")
             note = _clean_optional_text(raw_item.get("note"), 200)
 
             if valid_from and valid_to and valid_from > valid_to:
@@ -963,7 +988,7 @@ async def import_vehicles_excel_session(request: Request, file: UploadFile = Fil
             "required_columns": ["차량번호(필수)"],
             "optional_columns": ["상태", "동호수", "소유자", "적용시작일", "적용종료일", "비고"],
             "status_guide": "상태는 정상등록/임시등록/차단차량 또는 active/temp/blocked 값을 사용하세요.",
-            "date_guide": "날짜는 YYYY-MM-DD 형식을 권장합니다.",
+            "date_guide": "날짜는 YYYY-MM-DD / YYYY-MM / YYYY 형식을 지원합니다. (월/년 입력 시 시작일=1일, 종료일=말일 자동보정)",
         },
         "unknown_headers": unknown_headers,
     }
@@ -1038,7 +1063,8 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         - 필수: 차량번호
         - 선택: 상태, 동호수, 소유자, 적용시작일, 적용종료일, 비고
         - 상태값: 정상등록/임시등록/차단차량 (또는 active/temp/blocked)
-        - 날짜: YYYY-MM-DD 형식 권장
+        - 날짜: YYYY-MM-DD / YYYY-MM / YYYY 지원
+          (월/년 입력 시 시작일=1일, 종료일=해당 월/연도 말일 자동보정)
       </div>
       <div id="managerOnly">
         <div class="row">
@@ -1069,12 +1095,12 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
                 <input id="fOwner" placeholder="예: 홍길동" />
               </div>
               <div class="field w50">
-                <label>적용시작일</label>
-                <input id="fFrom" type="date" />
+                <label>적용시작일 (일/월/년)</label>
+                <input id="fFrom" placeholder="예: 2026-02-11 / 2026-02 / 2026" />
               </div>
               <div class="field w50">
-                <label>적용종료일</label>
-                <input id="fTo" type="date" />
+                <label>적용종료일 (일/월/년)</label>
+                <input id="fTo" placeholder="예: 2026-12-31 / 2026-12 / 2026" />
               </div>
               <div class="field">
                 <label>비고</label>
@@ -1337,6 +1363,11 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       }
       if ((data.unknown_headers || []).length) {
         lines.push(`인식되지 않은 컬럼: ${(data.unknown_headers || []).join(", ")}`);
+      }
+      if (data.guidance && typeof data.guidance === "object") {
+        const g = data.guidance;
+        if (g.status_guide) lines.push(`상태 안내: ${g.status_guide}`);
+        if (g.date_guide) lines.push(`날짜 안내: ${g.date_guide}`);
       }
       setMsg("msgImport", lines.join("\n"), !data.error_count);
       await loadVehicles();

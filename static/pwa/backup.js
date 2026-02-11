@@ -7,6 +7,7 @@
   let me = null;
   let options = null;
   let pollTimer = null;
+  let backupTimezone = "";
 
   function isAdmin(user) {
     return !!(user && user.is_admin);
@@ -56,6 +57,15 @@
     const plain = /filename=\"?([^\";]+)\"?/i.exec(value);
     if (plain && plain[1]) return plain[1];
     return fallbackName;
+  }
+
+  function formatDateTime(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "-";
+    const normalized = raw.replace(" ", "T");
+    const dt = new Date(normalized);
+    if (Number.isNaN(dt.getTime())) return raw;
+    return dt.toLocaleString("ko-KR", { hour12: false });
   }
 
   function setMetaLine() {
@@ -150,13 +160,15 @@
     const el = $("#scheduleInfo");
     if (!el) return;
     const rows = Array.isArray(schedules) ? schedules : [];
+    const tz = backupTimezone ? ` · 기준시간대: ${escapeHtml(backupTimezone)}` : "";
     if (!rows.length) {
-      el.textContent = "";
+      el.innerHTML = tz ? tz.slice(3) : "";
       return;
     }
-    el.innerHTML = rows
+    const body = rows
       .map((x) => `${escapeHtml(x.label || x.key || "")}: <strong>${escapeHtml(x.when || "-")}</strong>`)
       .join(" / ");
+    el.innerHTML = `${body}${tz}`;
   }
 
   async function jfetch(url, opts = {}) {
@@ -165,6 +177,7 @@
 
   async function refreshStatus() {
     const data = await jfetch("/api/backup/status");
+    backupTimezone = String(data.timezone || "").trim();
     setMaintenanceStatus(data);
     renderScheduleInfo(data.schedules || []);
     return data;
@@ -184,11 +197,15 @@
     const fileName = escapeHtml(item.file_name || "-");
     const scope = escapeHtml(item.scope_label || item.scope || "-");
     const trigger = escapeHtml(item.trigger_label || item.trigger || "-");
-    const when = escapeHtml(item.created_at || "-");
+    const when = escapeHtml(formatDateTime(item.created_at || ""));
     const targetLabels = Array.isArray(item.target_labels) ? item.target_labels.join(", ") : "-";
     const sitePart = item.site_code ? ` · 단지코드 ${escapeHtml(item.site_code)}` : "";
     const rel = escapeHtml(item.relative_path || "");
     const size = prettyBytes(item.file_size_bytes);
+    const rawScope = String(item.scope || "").trim().toLowerCase();
+    const restoreBtn = isAdmin(me) && rawScope === "full"
+      ? `<button class="btn danger" type="button" data-restore="${rel}">복구</button>`
+      : "";
     return `
       <div class="history-item">
         <div class="line">
@@ -196,6 +213,7 @@
           <div>
             <span class="tag">${scope}</span>
             <button class="btn" type="button" data-download="${rel}">다운로드</button>
+            ${restoreBtn}
           </div>
         </div>
         <div class="sub">${when} · ${trigger}${sitePart}</div>
@@ -254,6 +272,35 @@
     } finally {
       if (runBtn) runBtn.disabled = false;
     }
+  }
+
+  async function restoreBackup(path) {
+    const safePath = String(path || "").trim();
+    if (!safePath) {
+      setMsg("복구할 백업 파일 경로가 없습니다.", true);
+      return;
+    }
+    const ok = confirm(
+      "선택한 백업으로 DB를 복구할까요?\n" +
+      "- 전체 시스템 점검모드가 잠시 활성화됩니다.\n" +
+      "- 복구 전 현재 DB 스냅샷(pre_restore)이 자동 생성됩니다."
+    );
+    if (!ok) return;
+
+    setMsg("DB 복구 실행 중입니다...");
+    const data = await jfetch("/api/backup/restore", {
+      method: "POST",
+      body: JSON.stringify({
+        path: safePath,
+        with_maintenance: true,
+      }),
+    });
+    const result = data && data.result ? data.result : {};
+    const targets = Array.isArray(result.target_labels) ? result.target_labels.join(", ") : "-";
+    const rollback = String(result.rollback_relative_path || "").trim();
+    const rollbackInfo = rollback ? `\n복구 전 스냅샷: ${rollback}` : "";
+    setMsg(`DB 복구 완료 (대상: ${targets})${rollbackInfo}`);
+    await Promise.all([loadHistory(), refreshStatus()]);
   }
 
   async function downloadBackup(path) {
@@ -320,10 +367,17 @@
     });
     $("#historyList")?.addEventListener("click", (e) => {
       const btn = e.target.closest("button[data-download]");
-      if (!btn) return;
-      const path = String(btn.dataset.download || "").trim();
+      if (btn) {
+        const path = String(btn.dataset.download || "").trim();
+        if (!path) return;
+        downloadBackup(path).catch((err) => setMsg(err.message || String(err), true));
+        return;
+      }
+      const restoreBtn = e.target.closest("button[data-restore]");
+      if (!restoreBtn) return;
+      const path = String(restoreBtn.dataset.restore || "").trim();
       if (!path) return;
-      downloadBackup(path).catch((err) => setMsg(err.message || String(err), true));
+      restoreBackup(path).catch((err) => setMsg(err.message || String(err), true));
     });
   }
 

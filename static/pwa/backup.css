@@ -59,6 +59,11 @@ body {
   background: color-mix(in srgb, var(--primary) 24%, var(--bg-soft));
 }
 
+.btn.danger {
+  border-color: color-mix(in srgb, var(--danger) 70%, var(--line));
+  background: color-mix(in srgb, var(--danger) 24%, var(--bg-soft));
+}
+
 .meta {
   color: var(--muted);
   font-size: 12px;

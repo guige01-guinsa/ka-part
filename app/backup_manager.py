@@ -5,12 +5,14 @@ import logging
 import os
 import re
 import sqlite3
+import shutil
 import threading
 import uuid
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
+from zoneinfo import ZoneInfo
 
 from .db import DB_PATH as FACILITY_DB_PATH
 
@@ -25,18 +27,37 @@ TMP_BACKUP_DIR = BACKUP_ROOT / ".tmp"
 RUNTIME_STATE_PATH = DATA_DIR / "backup_runtime_state.json"
 MAINT_STATE_PATH = DATA_DIR / "maintenance_state.json"
 
+BACKUP_TIMEZONE = str(os.getenv("KA_BACKUP_TIMEZONE", "Asia/Seoul") or "Asia/Seoul").strip() or "Asia/Seoul"
+
 _RUN_LOCK = threading.Lock()
 _MAINT_LOCK = threading.Lock()
 _SCHED_THREAD: threading.Thread | None = None
 _SCHED_STOP_EVENT = threading.Event()
 
+try:
+    _BACKUP_TZ = ZoneInfo(BACKUP_TIMEZONE)
+except Exception as e:
+    key = BACKUP_TIMEZONE.strip().lower()
+    if key in {"asia/seoul", "kst", "utc+9", "+09:00", "gmt+9"}:
+        _BACKUP_TZ = timezone(timedelta(hours=9), name="KST")
+        logger.info("KA_BACKUP_TIMEZONE=%s unavailable (%s), fallback to fixed KST(+09:00)", BACKUP_TIMEZONE, e)
+    else:
+        _BACKUP_TZ = datetime.now().astimezone().tzinfo
+        logger.warning("Invalid KA_BACKUP_TIMEZONE=%s (%s), fallback timezone=%s", BACKUP_TIMEZONE, e, _BACKUP_TZ)
+
 
 def _now() -> datetime:
-    return datetime.now()
+    if _BACKUP_TZ is None:
+        return datetime.now()
+    return datetime.now(_BACKUP_TZ)
 
 
 def _now_iso() -> str:
     return _now().replace(microsecond=0).isoformat(sep=" ")
+
+
+def backup_timezone_name() -> str:
+    return BACKUP_TIMEZONE
 
 
 def _sanitize_token(value: str, *, default: str = "backup") -> str:
@@ -484,6 +505,7 @@ def _metadata_base(
     created_at = _now_iso()
     return {
         "ok": True,
+        "timezone": backup_timezone_name(),
         "scope": scope,
         "scope_label": _scope_label(scope),
         "trigger": trigger,
@@ -706,6 +728,199 @@ def run_manual_backup(
         _RUN_LOCK.release()
 
 
+def _read_manifest_from_zip(zip_path: Path) -> Dict[str, Any]:
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            if "manifest.json" not in zf.namelist():
+                return {}
+            with zf.open("manifest.json", "r") as fp:
+                raw = json.loads(fp.read().decode("utf-8", errors="ignore"))
+                if isinstance(raw, dict):
+                    return raw
+    except Exception:
+        logger.exception("Failed to read backup manifest: %s", zip_path)
+    return {}
+
+
+def _sqlite_restore_copy(src_path: Path, dst_path: Path) -> None:
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(f"file:{src_path.as_posix()}?mode=ro", uri=True)
+    try:
+        dst = sqlite3.connect(str(dst_path), timeout=30)
+        try:
+            dst.execute("PRAGMA busy_timeout=30000")
+            src.backup(dst)
+            dst.commit()
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
+def restore_backup_zip(
+    *,
+    actor: str,
+    relative_path: str,
+    target_keys: Iterable[str] | None = None,
+    with_maintenance: bool = True,
+) -> Dict[str, Any]:
+    zip_path = resolve_backup_file(relative_path)
+    manifest = _read_manifest_from_zip(zip_path)
+    scope = str(manifest.get("scope") or "").strip().lower()
+    if scope and scope != "full":
+        raise ValueError("전체 시스템 백업(full) 파일만 복구할 수 있습니다.")
+
+    catalog = _targets_by_key()
+    available_keys = [str(k) for k in catalog.keys()]
+    selected_keys = [str(x or "").strip().lower() for x in (target_keys or []) if str(x or "").strip()]
+    if not selected_keys:
+        m_keys = manifest.get("target_keys")
+        if isinstance(m_keys, list) and m_keys:
+            selected_keys = [str(x or "").strip().lower() for x in m_keys if str(x or "").strip()]
+    if not selected_keys:
+        selected_keys = list(available_keys)
+
+    invalid = [k for k in selected_keys if k not in available_keys]
+    if invalid:
+        raise ValueError(f"invalid target_keys: {', '.join(invalid)}")
+
+    acquired = _RUN_LOCK.acquire(blocking=False)
+    if not acquired:
+        raise RuntimeError("이미 다른 백업/복구 작업이 실행 중입니다.")
+
+    ts = _now().strftime("%Y%m%d_%H%M%S")
+    rollback_dir = FULL_BACKUP_DIR / _now().strftime("%Y%m%d")
+    rollback_dir.mkdir(parents=True, exist_ok=True)
+    rollback_zip = rollback_dir / f"pre_restore_{ts}.zip"
+    tmp_dir = TMP_BACKUP_DIR / f"restore_{ts}_{uuid.uuid4().hex[:8]}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    meta: Dict[str, Any] = {
+        "ok": True,
+        "operation": "restore",
+        "timezone": backup_timezone_name(),
+        "source_relative_path": str(relative_path or "").replace("\\", "/"),
+        "source_file_name": zip_path.name,
+        "created_at": _now_iso(),
+        "actor": str(actor or "").strip() or "system",
+        "target_keys": list(selected_keys),
+        "target_labels": [str(catalog[k]["label"]) for k in selected_keys],
+        "with_maintenance": bool(with_maintenance),
+        "checks": [],
+        "notes": [],
+        "rollback_relative_path": "",
+    }
+
+    maintenance_released = False
+    if with_maintenance:
+        set_maintenance_mode(
+            active=True,
+            message="서버 점검 중입니다. DB 복구가 진행 중입니다. 잠시 후 자동 복구됩니다.",
+            reason="db_restore",
+            updated_by=meta["actor"],
+        )
+
+    try:
+        staged: Dict[str, Path] = {}
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            members = set(zf.namelist())
+            for key in selected_keys:
+                member = f"db/{key}.db"
+                if member not in members:
+                    raise ValueError(f"백업 파일에 '{key}' DB가 없습니다.")
+                out = tmp_dir / f"restore_{key}.db"
+                with zf.open(member, "r") as src_fp, open(out, "wb") as dst_fp:
+                    shutil.copyfileobj(src_fp, dst_fp)
+                check = _sqlite_quick_check(out)
+                chk = {
+                    "key": key,
+                    "label": str(catalog[key]["label"]),
+                    "stage": "staged",
+                    "ok": bool(check["ok"]),
+                    "detail": str(check["detail"]),
+                }
+                meta["checks"].append(chk)
+                if not chk["ok"]:
+                    raise RuntimeError(f"{chk['label']} 복구본 점검 실패: {chk['detail']}")
+                staged[key] = out
+
+        # Keep a rollback snapshot before overwrite.
+        with zipfile.ZipFile(rollback_zip, "w", compression=zipfile.ZIP_DEFLATED) as rb:
+            rb_meta = {
+                "ok": True,
+                "operation": "pre_restore_snapshot",
+                "created_at": _now_iso(),
+                "timezone": backup_timezone_name(),
+                "actor": meta["actor"],
+                "source_restore_file": meta["source_relative_path"],
+                "target_keys": list(selected_keys),
+            }
+            for key in selected_keys:
+                dst_db = Path(str(catalog[key]["path"]))
+                if not dst_db.exists():
+                    continue
+                snap = tmp_dir / f"before_{key}.db"
+                _sqlite_backup_copy(dst_db, snap)
+                rb.write(snap, arcname=f"db/{key}.db")
+            rb.writestr("manifest.json", json.dumps(rb_meta, ensure_ascii=False, indent=2))
+        rb_relative = str(rollback_zip.relative_to(BACKUP_ROOT)).replace("\\", "/")
+        meta["rollback_relative_path"] = rb_relative
+
+        for key in selected_keys:
+            src_db = staged[key]
+            dst_db = Path(str(catalog[key]["path"]))
+            _sqlite_restore_copy(src_db, dst_db)
+            check = _sqlite_quick_check(dst_db)
+            chk = {
+                "key": key,
+                "label": str(catalog[key]["label"]),
+                "stage": "restored",
+                "ok": bool(check["ok"]),
+                "detail": str(check["detail"]),
+            }
+            meta["checks"].append(chk)
+            if not chk["ok"]:
+                raise RuntimeError(f"{chk['label']} 복구 후 점검 실패: {chk['detail']}")
+
+        live_checks = run_live_db_checks()
+        meta["post_restore_live_checks"] = live_checks
+
+        if with_maintenance:
+            if bool(live_checks.get("ok")):
+                clear_maintenance_mode(updated_by=meta["actor"])
+                maintenance_released = True
+            else:
+                set_maintenance_mode(
+                    active=True,
+                    message="복구 후 DB 점검 실패로 점검모드를 유지합니다. 관리자 확인이 필요합니다.",
+                    reason="post_restore_check_failed",
+                    updated_by=meta["actor"],
+                )
+
+        meta["maintenance_released"] = maintenance_released
+        meta["completed_at"] = _now_iso()
+        return meta
+    except Exception:
+        meta["ok"] = False
+        meta["notes"].append("DB 복구 실패")
+        if with_maintenance:
+            set_maintenance_mode(
+                active=True,
+                message="DB 복구 실패로 점검모드를 유지합니다. 관리자 확인이 필요합니다.",
+                reason="restore_failed",
+                updated_by=meta["actor"],
+            )
+        raise
+    finally:
+        try:
+            for p in tmp_dir.glob("*"):
+                p.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        except Exception:
+            logger.exception("Failed to cleanup restore temp dir: %s", tmp_dir)
+        _RUN_LOCK.release()
+
+
 def _history_items_all() -> List[Dict[str, Any]]:
     _ensure_dirs()
     items: List[Dict[str, Any]] = []
@@ -802,7 +1017,10 @@ def cleanup_old_backups() -> Dict[str, Any]:
         threshold = now - timedelta(days=keep_days)
         for zip_path in dir_path.rglob("*.zip"):
             try:
-                mtime = datetime.fromtimestamp(zip_path.stat().st_mtime)
+                if _BACKUP_TZ is None:
+                    mtime = datetime.fromtimestamp(zip_path.stat().st_mtime)
+                else:
+                    mtime = datetime.fromtimestamp(zip_path.stat().st_mtime, tz=_BACKUP_TZ)
                 if mtime >= threshold:
                     continue
                 sidecar = _sidecar_path(zip_path)

@@ -16,12 +16,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 from itsdangerous import URLSafeTimedSerializer
 
 from ..backup_manager import (
+    backup_timezone_name,
     clear_maintenance_mode,
     get_backup_item,
     get_maintenance_status,
     list_backup_history,
     list_backup_targets,
     resolve_backup_file,
+    restore_backup_zip,
     run_manual_backup,
 )
 from ..db import (
@@ -909,12 +911,13 @@ def api_backup_status(request: Request):
     user, _token = _require_auth(request)
     return {
         "ok": True,
+        "timezone": backup_timezone_name(),
         "maintenance": get_maintenance_status(),
         "can_manage_backup": _can_manage_backup(user),
         "permission_level": _permission_level_from_user(user),
         "schedules": [
-            {"key": "daily_full", "label": "전체 시스템 DB 자동백업", "when": "매일 00:00"},
-            {"key": "weekly_site", "label": "단지관리자 단지코드 자동백업", "when": "매주 금요일 00:20"},
+            {"key": "daily_full", "label": "전체 시스템 DB 자동백업", "when": f"매일 00:00 ({backup_timezone_name()})"},
+            {"key": "weekly_site", "label": "단지관리자 단지코드 자동백업", "when": f"매주 금요일 00:20 ({backup_timezone_name()})"},
         ],
     }
 
@@ -1077,6 +1080,42 @@ def api_backup_download(request: Request, path: str = Query(...)):
         media_type="application/zip",
         filename=filename,
     )
+
+
+@router.post("/backup/restore")
+def api_backup_restore(request: Request, payload: Dict[str, Any] = Body(default={})):
+    user, _token = _require_admin(request)
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="path is required")
+
+    target_payload = payload.get("target_keys", payload.get("targets", []))
+    if isinstance(target_payload, str):
+        target_keys = [target_payload]
+    elif isinstance(target_payload, list):
+        target_keys = [str(x or "").strip().lower() for x in target_payload if str(x or "").strip()]
+    else:
+        raise HTTPException(status_code=400, detail="target_keys must be list")
+
+    with_maintenance = _clean_bool(payload.get("with_maintenance"), default=True)
+    actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
+    try:
+        result = restore_backup_zip(
+            actor=actor_login,
+            relative_path=path,
+            target_keys=target_keys,
+            with_maintenance=with_maintenance,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"restore failed: {e}") from e
+
+    return {"ok": True, "result": result, "maintenance": get_maintenance_status()}
 
 
 @router.post("/backup/maintenance/clear")
