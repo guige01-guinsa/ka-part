@@ -4,6 +4,7 @@
   const $ = (sel) => document.querySelector(sel);
   const PREFERRED_TAB_ORDER = [
     "home",
+    "todo",
     "tr1",
     "tr2",
     "tr3",

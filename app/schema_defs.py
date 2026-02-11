@@ -10,9 +10,12 @@ WORK_TYPES = ["일일", "주간", "월간", "정기", "기타일상"]
 TASK_STATUS = ["완료", "진행중"]
 SUBTASK_STATUS = ["정상", "점검필요", "장애", "조치중"]
 SUBTASK_CRITICALITY = ["낮음", "중간", "높음", "긴급"]
+TODO_STATUS = ["예정", "진행중", "완료", "보류"]
+TODO_PRIORITY = ["보통", "높음", "긴급"]
 
 SCHEMA_TAB_ORDER = [
     "home",
+    "todo",
     "tr1",
     "tr2",
     "tr3",
@@ -84,6 +87,24 @@ SCHEMA_DEFS = {
             {"k": "work_type", "label": "업무구분", "type": "select", "options": WORK_TYPES},
             {"k": "important_work", "label": "중요작업(요약)", "type": "textarea", "placeholder": "핵심 작업 요약"},
             {"k": "note", "label": "비고", "type": "textarea", "placeholder": "특이사항"},
+        ],
+    },
+    "todo": {
+        "title": "Todo 일정관리",
+        "fields": [
+            {"k": "todo_title", "label": "일정 제목", "type": "text", "placeholder": "예: 월간 수전설비 점검"},
+            {"k": "todo_due", "label": "예정일", "type": "date"},
+            {"k": "todo_owner", "label": "담당자", "type": "text", "placeholder": "예: 전기주임"},
+            {"k": "todo_priority", "label": "우선순위", "type": "select", "options": TODO_PRIORITY},
+            {"k": "todo_status", "label": "진행상태", "type": "select", "options": TODO_STATUS},
+            {"k": "todo_detail", "label": "상세내용", "type": "textarea", "placeholder": "작업 지시/진행/완료 메모"},
+            {"k": "todo_note", "label": "비고", "type": "textarea", "placeholder": "특이사항"},
+        ],
+        "rows": [
+            ["todo_title", "todo_due"],
+            ["todo_owner", "todo_priority", "todo_status"],
+            ["todo_detail"],
+            ["todo_note"],
         ],
     },
     "tr1": {
