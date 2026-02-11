@@ -5,6 +5,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("PARKING_DB_PATH", str(BASE_DIR / "data" / "parking.db")))
 DEFAULT_SITE_CODE = (os.getenv("PARKING_DEFAULT_SITE_CODE", "COMMON").strip().upper() or "COMMON")
+_DB_TIMEOUT_SEC = max(1.0, float((os.getenv("PARKING_DB_TIMEOUT_SEC") or "15").strip() or "15"))
+_DB_BUSY_TIMEOUT_MS = max(1000, int((os.getenv("PARKING_DB_BUSY_TIMEOUT_MS") or "15000").strip() or "15000"))
 
 
 def normalize_site_code(value: str | None) -> str:
@@ -14,8 +16,12 @@ def normalize_site_code(value: str | None) -> str:
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(DB_PATH, timeout=_DB_TIMEOUT_SEC)
     con.row_factory = sqlite3.Row
+    con.execute("PRAGMA foreign_keys=ON;")
+    con.execute(f"PRAGMA busy_timeout={int(_DB_BUSY_TIMEOUT_MS)};")
+    # Keep WAL for better concurrent read/write reliability.
+    con.execute("PRAGMA journal_mode=WAL;")
     return con
 
 

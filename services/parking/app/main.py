@@ -19,7 +19,7 @@ from typing import Optional, Literal, Any
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from openpyxl import load_workbook
 
-from .db import init_db, seed_demo, seed_users, connect, normalize_site_code
+from .db import DB_PATH, init_db, seed_demo, seed_users, connect, normalize_site_code
 from .auth import make_session, pbkdf2_verify, read_session
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -499,6 +499,25 @@ def _validate_violation_photo_upload(photo: UploadFile) -> tuple[str, bytes]:
     return ext, raw
 
 
+def _raise_db_error(exc: sqlite3.Error, *, action: str) -> None:
+    msg = str(exc or "").strip()
+    lowered = msg.lower()
+    if "database is locked" in lowered or "database is busy" in lowered:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{action} 중 DB가 사용 중입니다. 잠시 후 다시 시도하세요.",
+        ) from exc
+    if isinstance(exc, sqlite3.IntegrityError):
+        raise HTTPException(
+            status_code=409,
+            detail=f"{action} 중 중복 또는 무결성 오류가 발생했습니다. ({msg})",
+        ) from exc
+    raise HTTPException(
+        status_code=500,
+        detail=f"{action} 중 DB 오류가 발생했습니다. ({msg})",
+    ) from exc
+
+
 def check_plate_record(site_code: str, plate: str) -> "CheckResponse":
     p = normalize_plate(plate)
     if len(p) < 4:
@@ -762,13 +781,20 @@ def create_violation_with_photo(
     with open(fpath, "wb") as f:
         f.write(raw)
     rel = app_url(f"/uploads/{fname}")
-    with connect() as con:
-        cur = con.execute(
-            "INSERT INTO violations (site_code, plate, verdict, rule_code, location, memo, inspector, photo_path, lat, lng) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (site_code, p, verdict_value, rule_code, location, memo, inspector, rel, lat, lng),
-        )
-        vid = cur.lastrowid
-        row = con.execute("SELECT * FROM violations WHERE id = ?", (vid,)).fetchone()
+    try:
+        with connect() as con:
+            cur = con.execute(
+                "INSERT INTO violations (site_code, plate, verdict, rule_code, location, memo, inspector, photo_path, lat, lng) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (site_code, p, verdict_value, rule_code, location, memo, inspector, rel, lat, lng),
+            )
+            vid = cur.lastrowid
+            row = con.execute("SELECT * FROM violations WHERE id = ?", (vid,)).fetchone()
+    except sqlite3.Error as exc:
+        try:
+            fpath.unlink(missing_ok=True)
+        except Exception:
+            pass
+        _raise_db_error(exc, action="위반기록 저장")
     return ViolationOut(**dict(row))
 
 
@@ -788,13 +814,16 @@ def create_violation_session(request: Request, payload: SessionViolationIn):
         raise HTTPException(status_code=400, detail="invalid verdict")
 
     inspector = str(sess.get("display_name") or sess.get("u") or "ka-part-user").strip() or "ka-part-user"
-    with connect() as con:
-        cur = con.execute(
-            "INSERT INTO violations (site_code, plate, verdict, location, memo, inspector) VALUES (?,?,?,?,?,?)",
-            (site_code, plate, verdict, payload.location, payload.memo, inspector),
-        )
-        vid = cur.lastrowid
-        row = con.execute("SELECT * FROM violations WHERE id = ?", (vid,)).fetchone()
+    try:
+        with connect() as con:
+            cur = con.execute(
+                "INSERT INTO violations (site_code, plate, verdict, location, memo, inspector) VALUES (?,?,?,?,?,?)",
+                (site_code, plate, verdict, payload.location, payload.memo, inspector),
+            )
+            vid = cur.lastrowid
+            row = con.execute("SELECT * FROM violations WHERE id = ?", (vid,)).fetchone()
+    except sqlite3.Error as exc:
+        _raise_db_error(exc, action="위반기록 저장")
     return ViolationOut(**dict(row))
 
 
@@ -872,44 +901,110 @@ def list_vehicles_session(request: Request, q: str = "", limit: int = 200):
     return {"ok": True, "items": [_vehicle_row_to_dict(r) for r in rows], "count": len(rows)}
 
 
+@app.get("/api/session/system_check")
+def system_check_session(request: Request):
+    sess = _require_manager_session(request)
+    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    role = str(sess.get("r") or "").strip().lower() or "unknown"
+
+    try:
+        with connect() as con:
+            jm_row = con.execute("PRAGMA journal_mode").fetchone()
+            bt_row = con.execute("PRAGMA busy_timeout").fetchone()
+            cols = con.execute("PRAGMA table_info(vehicles)").fetchall()
+            pk_cols = sorted(
+                [
+                    (int(c["pk"] or 0), str(c["name"]))
+                    for c in cols
+                    if int(c["pk"] or 0) > 0
+                ],
+                key=lambda x: x[0],
+            )
+            cnt_row = con.execute(
+                "SELECT COUNT(*) AS n FROM vehicles WHERE site_code=?",
+                (site_code,),
+            ).fetchone()
+
+            # write test without persistence
+            probe_plate = f"CHECK{uuid.uuid4().hex[:8].upper()}"
+            con.execute("SAVEPOINT sp_system_check")
+            con.execute(
+                """
+                INSERT INTO vehicles(site_code, plate, status, updated_at)
+                VALUES(?,?,?, datetime('now'))
+                """,
+                (site_code, probe_plate, "temp"),
+            )
+            con.execute(
+                "DELETE FROM vehicles WHERE site_code=? AND plate=?",
+                (site_code, probe_plate),
+            )
+            con.execute("RELEASE sp_system_check")
+
+        return {
+            "ok": True,
+            "role": role,
+            "site_code": site_code,
+            "db_path": str(DB_PATH),
+            "journal_mode": (jm_row[0] if jm_row else None),
+            "busy_timeout_ms": int(bt_row[0]) if bt_row and bt_row[0] is not None else None,
+            "vehicles_count_for_site": int(cnt_row["n"]) if cnt_row else 0,
+            "vehicles_pk": [name for _pk, name in pk_cols],
+            "can_write": True,
+        }
+    except sqlite3.Error as exc:
+        msg = str(exc or "").strip()
+        return {
+            "ok": False,
+            "role": role,
+            "site_code": site_code,
+            "db_path": str(DB_PATH),
+            "can_write": False,
+            "detail": msg or "sqlite error",
+        }
+
+
 @app.post("/api/session/vehicles")
 def create_vehicle_session(request: Request, payload: VehicleUpsertIn):
     sess = _require_manager_session(request)
     site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
     data = _normalize_vehicle_payload(payload)
 
-    with connect() as con:
-        exists = con.execute(
-            "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
-            (site_code, data["plate"]),
-        ).fetchone()
-        if exists:
-            raise HTTPException(status_code=409, detail="이미 등록된 차량번호입니다. 수정 기능을 사용하세요.")
+    try:
+        with connect() as con:
+            exists = con.execute(
+                "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
+                (site_code, data["plate"]),
+            ).fetchone()
+            if exists:
+                raise HTTPException(status_code=409, detail="이미 등록된 차량번호입니다. 수정 기능을 사용하세요.")
 
-        con.execute(
-            """
-            INSERT INTO vehicles(site_code, plate, unit, owner_name, status, valid_from, valid_to, note, updated_at)
-            VALUES(?,?,?,?,?,?,?, ?, datetime('now'))
-            """,
-            (
-                site_code,
-                data["plate"],
-                data["unit"],
-                data["owner_name"],
-                data["status"],
-                data["valid_from"],
-                data["valid_to"],
-                data["note"],
-            ),
-        )
-        row = con.execute(
-            """
-            SELECT site_code, plate, status, unit, owner_name, valid_from, valid_to, note, updated_at
-            FROM vehicles
-            WHERE site_code=? AND plate=?
-            """,
-            (site_code, data["plate"]),
-        ).fetchone()
+            con.execute(
+                """
+                INSERT INTO vehicles(site_code, plate, unit, owner_name, status, valid_from, valid_to, note, updated_at)
+                VALUES(?,?,?,?,?,?,?, ?, datetime('now'))
+                """,
+                (
+                    site_code,
+                    data["plate"],
+                    data["unit"],
+                    data["owner_name"],
+                    data["status"],
+                    data["valid_from"],
+                    data["valid_to"],
+                    data["note"],
+                ),
+            )
+            row = con.execute(
+                """
+                SELECT site_code, plate, status, unit, owner_name, valid_from, valid_to, note, updated_at
+                FROM vehicles
+                WHERE site_code=? AND plate=?
+                """,
+                (site_code, data["plate"]),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        _raise_db_error(exc, action="신규등록")
     return {"ok": True, "item": _vehicle_row_to_dict(row)}
 
 
@@ -925,39 +1020,42 @@ def update_vehicle_session(plate: str, request: Request, payload: VehicleUpsertI
     if data["plate"] != target_plate:
         raise HTTPException(status_code=400, detail="수정 시 차량번호는 기존 차량번호와 같아야 합니다.")
 
-    with connect() as con:
-        exists = con.execute(
-            "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
-            (site_code, target_plate),
-        ).fetchone()
-        if not exists:
-            raise HTTPException(status_code=404, detail="수정할 차량을 찾지 못했습니다.")
+    try:
+        with connect() as con:
+            exists = con.execute(
+                "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
+                (site_code, target_plate),
+            ).fetchone()
+            if not exists:
+                raise HTTPException(status_code=404, detail="수정할 차량을 찾지 못했습니다.")
 
-        con.execute(
-            """
-            UPDATE vehicles
-            SET unit=?, owner_name=?, status=?, valid_from=?, valid_to=?, note=?, updated_at=datetime('now')
-            WHERE site_code=? AND plate=?
-            """,
-            (
-                data["unit"],
-                data["owner_name"],
-                data["status"],
-                data["valid_from"],
-                data["valid_to"],
-                data["note"],
-                site_code,
-                target_plate,
-            ),
-        )
-        row = con.execute(
-            """
-            SELECT site_code, plate, status, unit, owner_name, valid_from, valid_to, note, updated_at
-            FROM vehicles
-            WHERE site_code=? AND plate=?
-            """,
-            (site_code, target_plate),
-        ).fetchone()
+            con.execute(
+                """
+                UPDATE vehicles
+                SET unit=?, owner_name=?, status=?, valid_from=?, valid_to=?, note=?, updated_at=datetime('now')
+                WHERE site_code=? AND plate=?
+                """,
+                (
+                    data["unit"],
+                    data["owner_name"],
+                    data["status"],
+                    data["valid_from"],
+                    data["valid_to"],
+                    data["note"],
+                    site_code,
+                    target_plate,
+                ),
+            )
+            row = con.execute(
+                """
+                SELECT site_code, plate, status, unit, owner_name, valid_from, valid_to, note, updated_at
+                FROM vehicles
+                WHERE site_code=? AND plate=?
+                """,
+                (site_code, target_plate),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        _raise_db_error(exc, action="차량정보 수정")
     return {"ok": True, "item": _vehicle_row_to_dict(row)}
 
 
@@ -969,18 +1067,21 @@ def delete_vehicle_session(plate: str, request: Request):
     if len(target_plate) < 4:
         raise HTTPException(status_code=400, detail="차량번호 형식이 올바르지 않습니다.")
 
-    with connect() as con:
-        exists = con.execute(
-            "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
-            (site_code, target_plate),
-        ).fetchone()
-        if not exists:
-            raise HTTPException(status_code=404, detail="삭제할 차량을 찾지 못했습니다.")
+    try:
+        with connect() as con:
+            exists = con.execute(
+                "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
+                (site_code, target_plate),
+            ).fetchone()
+            if not exists:
+                raise HTTPException(status_code=404, detail="삭제할 차량을 찾지 못했습니다.")
 
-        con.execute(
-            "DELETE FROM vehicles WHERE site_code=? AND plate=?",
-            (site_code, target_plate),
-        )
+            con.execute(
+                "DELETE FROM vehicles WHERE site_code=? AND plate=?",
+                (site_code, target_plate),
+            )
+    except sqlite3.Error as exc:
+        _raise_db_error(exc, action="차량정보 삭제")
     return {"ok": True, "plate": target_plate}
 
 
@@ -1090,40 +1191,43 @@ async def import_vehicles_excel_session(request: Request, file: UploadFile = Fil
 
     inserted = 0
     updated = 0
-    with connect() as con:
-        for item in parsed:
-            exists = con.execute(
-                "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
-                (site_code, item["plate"]),
-            ).fetchone()
-            con.execute(
-                """
-                INSERT INTO vehicles(site_code, plate, unit, owner_name, status, valid_from, valid_to, note, updated_at)
-                VALUES(?,?,?,?,?,?,?, ?, datetime('now'))
-                ON CONFLICT(site_code, plate) DO UPDATE SET
-                  unit=excluded.unit,
-                  owner_name=excluded.owner_name,
-                  status=excluded.status,
-                  valid_from=excluded.valid_from,
-                  valid_to=excluded.valid_to,
-                  note=excluded.note,
-                  updated_at=datetime('now')
-                """,
-                (
-                    site_code,
-                    item["plate"],
-                    item["unit"],
-                    item["owner_name"],
-                    item["status"],
-                    item["valid_from"],
-                    item["valid_to"],
-                    item["note"],
-                ),
-            )
-            if exists:
-                updated += 1
-            else:
-                inserted += 1
+    try:
+        with connect() as con:
+            for item in parsed:
+                exists = con.execute(
+                    "SELECT 1 FROM vehicles WHERE site_code=? AND plate=?",
+                    (site_code, item["plate"]),
+                ).fetchone()
+                con.execute(
+                    """
+                    INSERT INTO vehicles(site_code, plate, unit, owner_name, status, valid_from, valid_to, note, updated_at)
+                    VALUES(?,?,?,?,?,?,?, ?, datetime('now'))
+                    ON CONFLICT(site_code, plate) DO UPDATE SET
+                      unit=excluded.unit,
+                      owner_name=excluded.owner_name,
+                      status=excluded.status,
+                      valid_from=excluded.valid_from,
+                      valid_to=excluded.valid_to,
+                      note=excluded.note,
+                      updated_at=datetime('now')
+                    """,
+                    (
+                        site_code,
+                        item["plate"],
+                        item["unit"],
+                        item["owner_name"],
+                        item["status"],
+                        item["valid_from"],
+                        item["valid_to"],
+                        item["note"],
+                    ),
+                )
+                if exists:
+                    updated += 1
+                else:
+                    inserted += 1
+    except sqlite3.Error as exc:
+        _raise_db_error(exc, action="엑셀 가져오기")
 
     return {
         "ok": len(errors) == 0,
@@ -1203,6 +1307,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         </div>
       </div>
       <div class="perm" id="permLine"></div>
+      <div class="sub" id="sysLine"></div>
     </section>
 
     <section class="card">
@@ -1327,6 +1432,18 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       el.className = "msg" + (text ? (ok ? " ok" : " err") : "");
     }
 
+    function friendlyErrMsg(error){
+      const msg = String((error && error.message) || error || "").trim();
+      if (!msg) return "알 수 없는 오류";
+      if (msg.includes("이미 등록된 차량번호")) {
+        return "이미 등록된 차량번호입니다. 기존 행을 선택해 '선택수정'을 사용하세요.";
+      }
+      if (msg.includes("DB가 사용 중")) {
+        return "DB 사용 중으로 처리 지연이 발생했습니다. 3~5초 후 다시 시도하세요.";
+      }
+      return msg;
+    }
+
     function esc(v){
       return String(v ?? "")
         .replaceAll("&", "&amp;")
@@ -1341,6 +1458,14 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       const txt = await res.text();
       let data = {};
       try { data = JSON.parse(txt); } catch (_) {}
+      if (res.status === 401) {
+        alert("주차관리 세션이 만료되었습니다. 다시 로그인해 주세요.");
+        location.href = boot.back_url || "/pwa/";
+        throw new Error("세션 만료");
+      }
+      if (res.status === 403) {
+        throw new Error((data && data.detail) || "권한이 없습니다.");
+      }
       if (!res.ok) throw new Error((data && data.detail) || txt || `HTTP ${res.status}`);
       return data;
     }
@@ -1355,6 +1480,14 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         : "현재 권한은 차량 DB CRUD/엑셀가져오기를 사용할 수 없습니다.";
       $("btnBack").setAttribute("href", boot.back_url || "/pwa/");
       $("btnScanner").setAttribute("href", boot.scanner_url || "./scanner");
+    }
+
+    function setSystemLine(text, ok){
+      const el = $("sysLine");
+      if (!el) return;
+      const msg = String(text || "").trim();
+      el.textContent = msg;
+      el.style.color = msg ? (ok ? "#8ee6a6" : "#ffb4b4") : "";
     }
 
     function fillForm(item){
@@ -1459,6 +1592,24 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       renderViolations(items);
     }
 
+    async function loadSystemCheck(){
+      if (!isManager) {
+        setSystemLine("시스템 점검: 조회권한(일반사용자)", true);
+        return;
+      }
+      try {
+        const r = await api("./api/session/system_check");
+        if (r && r.ok) {
+          const pk = Array.isArray(r.vehicles_pk) ? r.vehicles_pk.join(", ") : "-";
+          setSystemLine(`시스템 점검 정상 · DB쓰기:${r.can_write ? "OK" : "FAIL"} · PK:${pk} · site:${r.site_code}`, true);
+        } else {
+          setSystemLine(`시스템 점검 실패: ${(r && r.detail) || "unknown"}`, false);
+        }
+      } catch (e) {
+        setSystemLine(`시스템 점검 실패: ${e.message || e}`, false);
+      }
+    }
+
     async function createVehicle(){
       const payload = payloadFromForm();
       const data = await api("./api/session/vehicles", {
@@ -1547,21 +1698,28 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       if (!isManager) return;
 
       $("btnCreate").addEventListener("click", async () => {
-        try { await createVehicle(); } catch (e) { setMsg("msgVehicle", `신규등록 실패: ${e.message || e}`, false); }
+        try {
+          await createVehicle();
+        } catch (e) {
+          setMsg("msgVehicle", `신규등록 실패: ${friendlyErrMsg(e)}`, false);
+          if (String((e && e.message) || "").includes("이미 등록된 차량번호")) {
+            try { await loadVehicles(); } catch (_) {}
+          }
+        }
       });
       $("btnUpdate").addEventListener("click", async () => {
-        try { await updateVehicle(); } catch (e) { setMsg("msgVehicle", `수정 실패: ${e.message || e}`, false); }
+        try { await updateVehicle(); } catch (e) { setMsg("msgVehicle", `수정 실패: ${friendlyErrMsg(e)}`, false); }
       });
       $("btnDelete").addEventListener("click", async () => {
-        try { await deleteVehicle(); } catch (e) { setMsg("msgVehicle", `삭제 실패: ${e.message || e}`, false); }
+        try { await deleteVehicle(); } catch (e) { setMsg("msgVehicle", `삭제 실패: ${friendlyErrMsg(e)}`, false); }
       });
       $("btnClear").addEventListener("click", () => clearForm());
       $("btnImportExcel").addEventListener("click", async () => {
-        try { await importExcel(); } catch (e) { setMsg("msgImport", `엑셀 가져오기 실패: ${e.message || e}`, false); }
+        try { await importExcel(); } catch (e) { setMsg("msgImport", `엑셀 가져오기 실패: ${friendlyErrMsg(e)}`, false); }
       });
       $("qVehicle").addEventListener("keydown", async (e) => {
         if (e.key !== "Enter") return;
-        try { await loadVehicles(); } catch (err) { setMsg("msgVehicle", `검색 실패: ${err.message || err}`, false); }
+        try { await loadVehicles(); } catch (err) { setMsg("msgVehicle", `검색 실패: ${friendlyErrMsg(err)}`, false); }
       });
     }
 
@@ -1573,6 +1731,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         clearForm();
       }
       bindEvents();
+      await loadSystemCheck();
       if (isManager) {
         await loadVehicles();
       }
