@@ -90,6 +90,7 @@
   let rangeIndex = -1;
   let authUser = null;
   let maintenancePollTimer = null;
+  let reloginByConflictInProgress = false;
 
   function hasAdminPermission(user) {
     return !!(user && user.is_admin);
@@ -114,6 +115,35 @@
     el._t = setTimeout(() => el.classList.remove("show"), 2200);
   }
 
+  function isSiteIdentityConflictMessage(message) {
+    const msg = String(message || "").trim();
+    if (!msg) return false;
+    return (
+      msg.includes("site_code already mapped to another site_name") ||
+      msg.includes("입력한 site_code가 다른 site_name에 연결되어 있습니다.") ||
+      msg.includes("입력한 site_name이 다른 site_code에 연결되어 있습니다.") ||
+      msg.includes("입력한 site_code에 매핑된 site_name이 없습니다.")
+    );
+  }
+
+  async function reloginBySiteIdentityConflict(message) {
+    if (reloginByConflictInProgress) return;
+    reloginByConflictInProgress = true;
+    const detail = String(message || "단지코드/단지명 매핑 충돌").trim();
+    alert(`단지코드/단지명 충돌이 발생했습니다.\n${detail}\n보안을 위해 다시 로그인합니다.`);
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+    } catch (_e) {
+      // ignore
+    }
+    try {
+      window.KAAuth.clearSession();
+    } catch (_e) {
+      // ignore
+    }
+    window.KAAuth.redirectLogin("/pwa/");
+  }
+
   function setTabRunStatus(tabTitle = "", isRunning = false) {
     const el = $("#tabRunStatus");
     if (!el) return;
@@ -136,7 +166,16 @@
 
   async function jfetch(url, opts = {}) {
     if (!window.KAAuth) throw new Error("auth.js가 로드되지 않았습니다.");
-    return window.KAAuth.requestJson(url, opts);
+    try {
+      return await window.KAAuth.requestJson(url, opts);
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err || "");
+      if (isSiteIdentityConflictMessage(msg)) {
+        await reloginBySiteIdentityConflict(msg);
+        throw new Error("단지코드/단지명 충돌로 로그아웃되었습니다.");
+      }
+      throw err;
+    }
   }
 
   function setCurrentUserChip(user) {
@@ -1061,7 +1100,7 @@
 
   init().catch((err) => {
     const msg = err && err.message ? err.message : String(err);
-    if (msg.includes("로그인이 필요")) return;
+    if (msg.includes("로그인이 필요") || msg.includes("단지코드/단지명 충돌로 로그아웃되었습니다.")) return;
     alert("앱 초기화 오류: " + msg);
   });
 })();
