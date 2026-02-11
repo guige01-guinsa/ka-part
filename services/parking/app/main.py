@@ -1757,6 +1757,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         clearForm();
       }
       bindEvents();
+      window.__parkingAdminMainReady = true;
       await loadSystemCheck();
       if (isManager) {
         await loadVehicles();
@@ -1767,6 +1768,119 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     init().catch((e) => {
       setMsg("msgVehicle", `초기화 실패: ${e.message || e}`, false);
     });
+  })();
+  </script>
+  <script>
+  (function(){
+    function fallbackBind(){
+      if (window.__parkingAdminMainReady) return;
+      const boot = window.__ADMIN_BOOT__ || {};
+      const $ = (id) => document.getElementById(id);
+      const msg = (text, ok) => {
+        const el = $("msgVehicle");
+        if (!el) return;
+        el.textContent = text || "";
+        el.className = "msg" + (text ? (ok ? " ok" : " err") : "");
+      };
+      const bind = (id, fn) => {
+        const el = $(id);
+        if (!el || el.dataset.fallbackBound === "1") return;
+        el.dataset.fallbackBound = "1";
+        el.addEventListener("click", fn);
+      };
+      const apiBase = String(boot.api_base || "/parking/api/session").replace(/\/+$/, "");
+      const api = async (path, opts) => {
+        const p = String(path || "").replace(/^\/+/, "");
+        const res = await fetch(`${apiBase}/${p}`, Object.assign({ credentials: "include" }, opts || {}));
+        const txt = await res.text();
+        let data = {};
+        try { data = JSON.parse(txt); } catch (_) {}
+        if (!res.ok) throw new Error((data && data.detail) || txt || `HTTP ${res.status}`);
+        return data;
+      };
+      const formPayload = () => ({
+        plate: ($("fPlate")?.value || "").trim(),
+        status: ($("fStatus")?.value || "active").trim(),
+        unit: ($("fUnit")?.value || "").trim() || null,
+        owner_name: ($("fOwner")?.value || "").trim() || null,
+        valid_from: ($("fFrom")?.value || "").trim() || null,
+        valid_to: ($("fTo")?.value || "").trim() || null,
+        note: ($("fNote")?.value || "").trim() || null,
+      });
+      const clear = () => {
+        if ($("fPlate")) $("fPlate").value = "";
+        if ($("fStatus")) $("fStatus").value = "active";
+        if ($("fUnit")) $("fUnit").value = "";
+        if ($("fOwner")) $("fOwner").value = "";
+        if ($("fFrom")) $("fFrom").value = "";
+        if ($("fTo")) $("fTo").value = "";
+        if ($("fNote")) $("fNote").value = "";
+      };
+
+      bind("btnCreate", async () => {
+        try {
+          const payload = formPayload();
+          const out = await api("vehicles", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          msg(`신규 등록 완료: ${(out && out.item && out.item.plate) || payload.plate}`, true);
+        } catch (e) {
+          msg(`신규등록 실패: ${e.message || e}`, false);
+        }
+      });
+
+      bind("btnUpdate", async () => {
+        try {
+          const payload = formPayload();
+          const plate = payload.plate;
+          if (!plate) throw new Error("수정할 차량번호를 입력하세요.");
+          const out = await api(`vehicles/${encodeURIComponent(plate)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          msg(`수정 완료: ${(out && out.item && out.item.plate) || plate}`, true);
+        } catch (e) {
+          msg(`수정 실패: ${e.message || e}`, false);
+        }
+      });
+
+      bind("btnDelete", async () => {
+        try {
+          const plate = ($("fPlate")?.value || "").trim();
+          if (!plate) throw new Error("삭제할 차량번호를 입력하세요.");
+          if (!confirm(`차량 ${plate} 를 삭제하시겠습니까?`)) return;
+          await api(`vehicles/${encodeURIComponent(plate)}`, { method: "DELETE" });
+          msg(`삭제 완료: ${plate}`, true);
+          clear();
+        } catch (e) {
+          msg(`삭제 실패: ${e.message || e}`, false);
+        }
+      });
+
+      bind("btnClear", () => {
+        clear();
+        msg("입력값을 초기화했습니다.", true);
+      });
+
+      bind("btnImportExcel", async () => {
+        try {
+          const fileInput = $("excelFile");
+          const file = fileInput && fileInput.files && fileInput.files[0];
+          if (!file) throw new Error("엑셀(.xlsx) 파일을 선택하세요.");
+          const fd = new FormData();
+          fd.append("file", file);
+          const out = await api("vehicles/import_excel", { method: "POST", body: fd });
+          msg(`엑셀 처리 완료: 신규 ${out.inserted || 0}건, 수정 ${out.updated || 0}건`, true);
+        } catch (e) {
+          msg(`엑셀 불러오기 실패: ${e.message || e}`, false);
+        }
+      });
+    }
+
+    setTimeout(fallbackBind, 700);
   })();
   </script>
 </body>
