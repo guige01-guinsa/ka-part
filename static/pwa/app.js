@@ -96,12 +96,17 @@
     return !!(user && user.is_admin);
   }
 
+  function isSuperAdmin(user) {
+    if (!user || !user.is_admin) return false;
+    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
+  }
+
   function hasSiteAdminPermission(user) {
     return !!(user && (user.is_admin || user.is_site_admin));
   }
 
   function permissionLabel(user) {
-    if (hasAdminPermission(user)) return "관리자";
+    if (hasAdminPermission(user)) return isSuperAdmin(user) ? "최고관리자" : "운영관리자";
     if (hasSiteAdminPermission(user)) return "단지관리자";
     return "사용자";
   }
@@ -210,9 +215,15 @@
         nameEl.title = "";
       }
       if (codeEl) {
-        codeEl.readOnly = false;
-        codeEl.removeAttribute("aria-readonly");
-        codeEl.title = "";
+        if (isSuperAdmin(authUser)) {
+          codeEl.readOnly = false;
+          codeEl.removeAttribute("aria-readonly");
+          codeEl.title = "";
+        } else {
+          codeEl.readOnly = true;
+          codeEl.setAttribute("aria-readonly", "true");
+          codeEl.title = "단지코드 생성/변경은 최고관리자만 가능합니다.";
+        }
       }
       return;
     }

@@ -9,11 +9,16 @@
     { key: "site_admin", label: "단지관리자" },
     { key: "user", label: "사용자" },
   ];
+  let adminScopes = [
+    { key: "super_admin", label: "최고관리자" },
+    { key: "ops_admin", label: "운영관리자" },
+  ];
   let editingId = null;
   let recommendedCount = 9;
   let me = null;
   let selfProfile = null;
   let isAdminView = false;
+  let isSuperAdminView = false;
   let availableSites = [];
   let availableRegions = [];
 
@@ -47,15 +52,26 @@
 
   function permissionLabel(user) {
     const key = String(user.permission_level || (user.is_admin ? "admin" : user.is_site_admin ? "site_admin" : "user"));
+    if (key === "admin") {
+      const scopeLabel = String(user.admin_scope_label || "").trim();
+      if (scopeLabel) return scopeLabel;
+    }
     const found = permissionLevels.find((x) => x.key === key);
     return found ? found.label : key;
   }
 
+  function isSuperAdmin(user) {
+    if (!user || !user.is_admin) return false;
+    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
+  }
+
   function applyMode() {
     isAdminView = !!(me && me.is_admin);
+    isSuperAdminView = isSuperAdmin(me);
     $("#userListCard").hidden = !isAdminView;
     $("#selfHint").hidden = isAdminView;
     $("#permissionWrap").hidden = !isAdminView;
+    $("#adminScopeWrap").hidden = !(isAdminView && isSuperAdminView);
     $("#activeWrap").hidden = !isAdminView;
 
     $("#userPermission").disabled = !isAdminView;
@@ -70,6 +86,15 @@
     if (!isAdminView) {
       $("#formTitle").textContent = "내 정보";
     }
+    syncAdminScopeVisibility();
+  }
+
+  function syncAdminScopeVisibility() {
+    const wrap = $("#adminScopeWrap");
+    if (!wrap) return;
+    const perm = String($("#userPermission")?.value || "user").trim();
+    const visible = !!(isAdminView && isSuperAdminView && perm === "admin");
+    wrap.hidden = !visible;
   }
 
   function clearForm() {
@@ -86,8 +111,10 @@
     $("#userNote").value = "";
     $("#userPassword").value = "";
     $("#userPermission").value = "user";
+    $("#adminScope").value = "ops_admin";
     $("#isActive").checked = true;
     if (roles.length) $("#userRole").value = roles[0];
+    syncAdminScopeVisibility();
     setMsg("");
   }
 
@@ -105,8 +132,10 @@
     $("#userNote").value = user.note || "";
     $("#userPassword").value = "";
     $("#userPermission").value = String(user.permission_level || (user.is_admin ? "admin" : user.is_site_admin ? "site_admin" : "user"));
+    $("#adminScope").value = String(user.admin_scope || "ops_admin");
     $("#isActive").checked = !!user.is_active;
     $("#userRole").value = user.role || roles[0] || "";
+    syncAdminScopeVisibility();
     setMsg("");
   }
 
@@ -126,6 +155,9 @@
       permission_level: ($("#userPermission").value || "user").trim(),
       is_active: !!$("#isActive").checked,
     };
+    if (payload.permission_level === "admin" && isSuperAdminView) {
+      payload.admin_scope = ($("#adminScope").value || "ops_admin").trim();
+    }
     if (pw) payload.password = pw;
     return payload;
   }
@@ -169,6 +201,7 @@
   function rowHtml(u, idx) {
     const activeText = u.is_active ? "활성" : "비활성";
     const region = String(u.region || "").trim() || "-";
+    const canEditRow = isSuperAdminView || !u.is_admin;
     return `
       <tr class="${u.is_active ? "" : "inactive"}" data-id="${u.id}">
         <td class="cell-center">${idx + 1}</td>
@@ -186,8 +219,8 @@
         <td>${activeText}</td>
         <td>
           <div class="cell-actions">
-            <button class="btn" data-action="edit" data-id="${u.id}" type="button">수정</button>
-            <button class="btn danger" data-action="delete" data-id="${u.id}" type="button">삭제</button>
+            <button class="btn" data-action="edit" data-id="${u.id}" type="button" ${canEditRow ? "" : "disabled"}>수정</button>
+            <button class="btn danger" data-action="delete" data-id="${u.id}" type="button" ${canEditRow ? "" : "disabled"}>삭제</button>
           </div>
         </td>
       </tr>
@@ -300,6 +333,7 @@
     const data = await jfetch("/api/user_roles");
     roles = Array.isArray(data.roles) ? data.roles : [];
     permissionLevels = Array.isArray(data.permission_levels) && data.permission_levels.length ? data.permission_levels : permissionLevels;
+    adminScopes = Array.isArray(data.admin_scopes) && data.admin_scopes.length ? data.admin_scopes : adminScopes;
     recommendedCount = Number(data.recommended_staff_count || 9);
 
     const roleSel = $("#userRole");
@@ -313,12 +347,30 @@
 
     const permSel = $("#userPermission");
     permSel.innerHTML = "";
-    for (const p of permissionLevels) {
+    const allowAdminPermission = isSuperAdmin(me);
+    const levelItems = allowAdminPermission ? permissionLevels : permissionLevels.filter((p) => String(p.key || "") !== "admin");
+    for (const p of levelItems) {
       const o = document.createElement("option");
       o.value = String(p.key || "");
       o.textContent = String(p.label || p.key || "");
       permSel.appendChild(o);
     }
+    if (!allowAdminPermission && permSel.value === "admin") {
+      permSel.value = "site_admin";
+    }
+
+    const scopeSel = $("#adminScope");
+    if (scopeSel) {
+      scopeSel.innerHTML = "";
+      for (const s of adminScopes) {
+        const o = document.createElement("option");
+        o.value = String(s.key || "");
+        o.textContent = String(s.label || s.key || "");
+        scopeSel.appendChild(o);
+      }
+      if (!scopeSel.value) scopeSel.value = "ops_admin";
+    }
+    syncAdminScopeVisibility();
   }
 
   async function loadUsers() {
@@ -367,6 +419,10 @@
 
   async function saveAdminUser() {
     const body = payloadFromForm();
+    if (!isSuperAdminView && String(body.permission_level || "") === "admin") {
+      setMsg("운영관리자는 관리자 권한을 부여할 수 없습니다.", true);
+      return;
+    }
     if (editingId == null && !body.password) {
       setMsg("신규 사용자는 비밀번호를 입력해야 합니다.", true);
       return;
@@ -441,6 +497,9 @@
     $("#btnSaveUser").addEventListener("click", () => {
       const run = isAdminView ? saveAdminUser() : saveSelfUser();
       run.catch((e) => setMsg(e.message, true));
+    });
+    $("#userPermission")?.addEventListener("change", () => {
+      syncAdminScopeVisibility();
     });
 
     if (isAdminView) {

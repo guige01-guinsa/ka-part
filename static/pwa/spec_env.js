@@ -769,7 +769,13 @@
     }
     const data = await jfetch("/api/site_env", {
       method: "PUT",
-      body: JSON.stringify({ site_name: site, site_code: siteCode || "", config: cfg }),
+      body: JSON.stringify({
+        site_name: site,
+        site_code: siteCode || "",
+        config: cfg,
+        mfa_confirmed: true,
+        reason: "spec_env_save",
+      }),
     });
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
@@ -798,7 +804,7 @@
     const ok = confirm(`${site}${siteCode ? ` [${siteCode}]` : ""} 단지의 제원설정을 삭제할까요?`);
     if (!ok) return;
     const qs = buildSiteQuery(site, siteCode);
-    await jfetch(`/api/site_env?${qs}`, { method: "DELETE" });
+    await jfetch(`/api/site_env?${qs}`, { method: "DELETE", headers: { "X-KA-MFA-VERIFIED": "1" } });
     const data = await jfetch(`/api/schema?${qs}`);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");

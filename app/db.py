@@ -29,6 +29,7 @@ DB_PATH = DATA_DIR / "ka.db"
 SCHEMA_PATH = BASE_DIR / "sql" / "schema.sql"
 
 _TABLE_COL_CACHE: Dict[str, List[str]] = {}
+VALID_ADMIN_SCOPES = {"super_admin", "ops_admin"}
 
 
 def _connect() -> sqlite3.Connection:
@@ -117,6 +118,15 @@ def _normalize_staff_permission_flags(is_admin: Any, is_site_admin: Any) -> tupl
     if admin:
         site_admin = 0
     return admin, site_admin
+
+
+def _normalize_admin_scope_value(value: Any, *, is_admin: bool) -> str:
+    if not is_admin:
+        return ""
+    raw = str(value or "").strip().lower()
+    if raw in VALID_ADMIN_SCOPES:
+        return raw
+    return "ops_admin"
 
 
 def dynamic_upsert(
@@ -390,6 +400,28 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "staff_users", "address TEXT")
     _ensure_column(con, "staff_users", "office_phone TEXT")
     _ensure_column(con, "staff_users", "office_fax TEXT")
+    _ensure_column(con, "staff_users", "admin_scope TEXT NOT NULL DEFAULT ''")
+    con.execute(
+        """
+        UPDATE staff_users
+        SET admin_scope='ops_admin'
+        WHERE is_admin=1 AND (admin_scope IS NULL OR TRIM(admin_scope)='');
+        """
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET admin_scope=''
+        WHERE is_admin=0 AND admin_scope IS NOT NULL AND TRIM(admin_scope)<>'';
+        """
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET admin_scope='super_admin'
+        WHERE is_admin=1 AND lower(login_id)='admin';
+        """
+    )
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_staff_users_active
@@ -493,6 +525,94 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_site_env_configs_code
         ON site_env_configs(site_code);
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS site_env_config_versions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT,
+          site_name TEXT NOT NULL,
+          version_no INTEGER NOT NULL,
+          action TEXT NOT NULL,
+          reason TEXT,
+          actor_login TEXT,
+          config_json TEXT NOT NULL,
+          before_json TEXT,
+          config_hash TEXT,
+          created_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_site_env_versions_scope_version
+        ON site_env_config_versions(site_name, version_no);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_site_env_versions_scope_updated
+        ON site_env_config_versions(site_code, site_name, created_at DESC);
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS security_audit_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_type TEXT NOT NULL,
+          severity TEXT NOT NULL DEFAULT 'INFO',
+          outcome TEXT NOT NULL DEFAULT 'ok',
+          actor_user_id INTEGER,
+          actor_login TEXT,
+          target_site_code TEXT,
+          target_site_name TEXT,
+          request_id INTEGER,
+          detail_json TEXT,
+          created_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_security_audit_logs_created
+        ON security_audit_logs(created_at DESC);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_security_audit_logs_event
+        ON security_audit_logs(event_type, outcome, created_at DESC);
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS privileged_change_requests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          change_type TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          target_site_name TEXT,
+          target_site_code TEXT,
+          reason TEXT,
+          payload_json TEXT NOT NULL,
+          result_json TEXT,
+          requested_by_user_id INTEGER NOT NULL,
+          requested_by_login TEXT NOT NULL,
+          approved_by_user_id INTEGER,
+          approved_by_login TEXT,
+          executed_by_user_id INTEGER,
+          executed_by_login TEXT,
+          created_at TEXT NOT NULL,
+          approved_at TEXT,
+          executed_at TEXT,
+          expires_at TEXT
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_priv_change_status
+        ON privileged_change_requests(status, change_type, created_at DESC);
         """
     )
 
@@ -618,7 +738,13 @@ def _next_site_code(con: sqlite3.Connection) -> str:
         seq += 1
 
 
-def resolve_or_create_site_code(site_name: str, *, preferred_code: str | None = None) -> str:
+def resolve_or_create_site_code(
+    site_name: str,
+    *,
+    preferred_code: str | None = None,
+    allow_create: bool = True,
+    allow_remap: bool = False,
+) -> str:
     clean_site_name = _require_site_name_value(site_name)
     clean_preferred = _clean_site_code_value(preferred_code)
 
@@ -651,6 +777,8 @@ def resolve_or_create_site_code(site_name: str, *, preferred_code: str | None = 
         if by_name:
             resolved_code = str(by_name["site_code"] or "").strip().upper()
             if clean_preferred and clean_preferred != resolved_code:
+                if not allow_remap:
+                    raise ValueError("site_code is immutable for existing site_name; use approved migration")
                 if by_code and int(by_code["id"]) != int(by_name["id"]):
                     raise ValueError("site_code already mapped to another site_name")
                 con.execute(
@@ -677,6 +805,8 @@ def resolve_or_create_site_code(site_name: str, *, preferred_code: str | None = 
                 )
             resolved_code = str(by_code["site_code"] or "").strip().upper()
         else:
+            if not allow_create:
+                raise ValueError("site_code mapping not found")
             legacy = None
             if clean_preferred:
                 legacy = clean_preferred
@@ -1000,7 +1130,16 @@ def get_site_env_config(site_name: str, site_code: str | None = None) -> Dict[st
     return cfg if isinstance(cfg, dict) else {}
 
 
-def upsert_site_env_config(site_name: str, config: Dict[str, Any], *, site_code: str | None = None) -> Dict[str, Any]:
+def upsert_site_env_config(
+    site_name: str,
+    config: Dict[str, Any],
+    *,
+    site_code: str | None = None,
+    action: str = "update",
+    actor_login: str = "",
+    reason: str = "",
+    record_version: bool = False,
+) -> Dict[str, Any]:
     con = _connect()
     try:
         ts = now_iso()
@@ -1009,10 +1148,12 @@ def upsert_site_env_config(site_name: str, config: Dict[str, Any], *, site_code:
         env_json = json.dumps(config if isinstance(config, dict) else {}, ensure_ascii=False, separators=(",", ":"))
 
         target = None
+        before_cfg: Dict[str, Any] = {}
         if clean_site_code:
             target = con.execute(
                 """
-                SELECT id FROM site_env_configs
+                SELECT id, site_code, site_name, env_json
+                FROM site_env_configs
                 WHERE site_code=?
                 LIMIT 1
                 """,
@@ -1021,12 +1162,19 @@ def upsert_site_env_config(site_name: str, config: Dict[str, Any], *, site_code:
         if target is None:
             target = con.execute(
                 """
-                SELECT id FROM site_env_configs
+                SELECT id, site_code, site_name, env_json
+                FROM site_env_configs
                 WHERE site_name=?
                 LIMIT 1
                 """,
                 (clean_site_name,),
             ).fetchone()
+
+        if target is not None:
+            before_cfg = _parse_json_object(target["env_json"])
+            existing_code = _clean_site_code_value(target["site_code"])
+            if existing_code and clean_site_code and existing_code != clean_site_code:
+                raise ValueError("site_code is immutable for existing site_env")
 
         if target is None:
             con.execute(
@@ -1046,14 +1194,15 @@ def upsert_site_env_config(site_name: str, config: Dict[str, Any], *, site_code:
                 (clean_site_code, clean_site_name, env_json, ts, int(target["id"])),
             )
 
-        con.commit()
         row = con.execute(
             """
             SELECT site_code, site_name, env_json, created_at, updated_at
             FROM site_env_configs
-            WHERE site_name=?
+            WHERE site_name=? OR (site_code=? AND site_code IS NOT NULL AND TRIM(site_code)<>'')
+            ORDER BY updated_at DESC
+            LIMIT 1
             """,
-            (clean_site_name,),
+            (clean_site_name, clean_site_code or ""),
         ).fetchone()
         out = (
             dict(row)
@@ -1070,20 +1219,69 @@ def upsert_site_env_config(site_name: str, config: Dict[str, Any], *, site_code:
             out["config"] = json.loads(str(out.get("env_json") or "{}"))
         except Exception:
             out["config"] = {}
+        if record_version:
+            _insert_site_env_version(
+                con,
+                site_name=str(out.get("site_name") or clean_site_name),
+                site_code=_clean_site_code_value(out.get("site_code") or clean_site_code),
+                config=out.get("config") if isinstance(out.get("config"), dict) else {},
+                action=action,
+                actor_login=actor_login,
+                reason=reason,
+                before_config=before_cfg,
+                ts=ts,
+            )
+        con.commit()
         return out
     finally:
         con.close()
 
 
-def delete_site_env_config(site_name: str = "", *, site_code: str | None = None) -> bool:
+def delete_site_env_config(
+    site_name: str = "",
+    *,
+    site_code: str | None = None,
+    actor_login: str = "",
+    reason: str = "",
+    record_version: bool = False,
+) -> bool:
     con = _connect()
     try:
         clean_site_code = _clean_site_code_value(site_code)
         clean_site_name = str(site_name or "").strip()
+        target = None
+        if clean_site_code:
+            target = con.execute(
+                "SELECT site_code, site_name, env_json FROM site_env_configs WHERE site_code=? LIMIT 1",
+                (clean_site_code,),
+            ).fetchone()
+        if target is None and clean_site_name:
+            target = con.execute(
+                "SELECT site_code, site_name, env_json FROM site_env_configs WHERE site_name=? LIMIT 1",
+                (clean_site_name,),
+            ).fetchone()
+        if target is None:
+            return False
+        before_cfg = _parse_json_object(target["env_json"])
+        target_site_name = str(target["site_name"] or "").strip()
+        target_site_code = _clean_site_code_value(target["site_code"])
+
         if clean_site_code:
             cur = con.execute("DELETE FROM site_env_configs WHERE site_code=?", (clean_site_code,))
         else:
             cur = con.execute("DELETE FROM site_env_configs WHERE site_name=?", (clean_site_name,))
+        if record_version and int(cur.rowcount or 0) > 0:
+            _insert_site_env_version(
+                con,
+                site_name=target_site_name,
+                site_code=target_site_code,
+                config={},
+                action="delete",
+                actor_login=actor_login,
+                reason=reason,
+                before_config=before_cfg,
+                ts=now_iso(),
+            )
         con.commit()
         return cur.rowcount > 0
     finally:
@@ -1109,6 +1307,607 @@ def list_site_env_configs() -> List[Dict[str, Any]]:
                 item["config"] = {}
             out.append(item)
         return out
+    finally:
+        con.close()
+
+
+def _stable_json_text(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _parse_json_object(raw: Any) -> Dict[str, Any]:
+    txt = str(raw or "").strip()
+    if not txt:
+        return {}
+    try:
+        obj = json.loads(txt)
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _next_site_env_version_no(con: sqlite3.Connection, site_name: str) -> int:
+    row = con.execute(
+        """
+        SELECT COALESCE(MAX(version_no), 0) AS max_no
+        FROM site_env_config_versions
+        WHERE site_name=?
+        """,
+        (site_name,),
+    ).fetchone()
+    return int(row["max_no"] if row else 0) + 1
+
+
+def _insert_site_env_version(
+    con: sqlite3.Connection,
+    *,
+    site_name: str,
+    site_code: str | None,
+    config: Dict[str, Any],
+    action: str,
+    actor_login: str,
+    reason: str,
+    before_config: Dict[str, Any] | None = None,
+    ts: str,
+) -> Dict[str, Any]:
+    clean_name = _require_site_name_value(site_name)
+    clean_code = _clean_site_code_value(site_code)
+    version_no = _next_site_env_version_no(con, clean_name)
+    cfg = config if isinstance(config, dict) else {}
+    before = before_config if isinstance(before_config, dict) else {}
+    config_json = _stable_json_text(cfg)
+    before_json = _stable_json_text(before)
+    config_hash = hashlib.sha256(config_json.encode("utf-8")).hexdigest()
+    con.execute(
+        """
+        INSERT INTO site_env_config_versions(
+          site_code, site_name, version_no, action, reason, actor_login,
+          config_json, before_json, config_hash, created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            clean_code,
+            clean_name,
+            version_no,
+            str(action or "update").strip() or "update",
+            str(reason or "").strip() or None,
+            str(actor_login or "").strip() or None,
+            config_json,
+            before_json if before else None,
+            config_hash,
+            ts,
+        ),
+    )
+    row = con.execute(
+        """
+        SELECT id, site_code, site_name, version_no, action, reason, actor_login,
+               config_json, before_json, config_hash, created_at
+        FROM site_env_config_versions
+        WHERE site_name=? AND version_no=?
+        LIMIT 1
+        """,
+        (clean_name, version_no),
+    ).fetchone()
+    out = dict(row) if row else {}
+    out["config"] = _parse_json_object(out.get("config_json"))
+    out["before_config"] = _parse_json_object(out.get("before_json"))
+    return out
+
+
+def record_site_env_config_version(
+    *,
+    site_name: str,
+    site_code: str | None,
+    config: Dict[str, Any],
+    action: str = "update",
+    actor_login: str = "",
+    reason: str = "",
+    before_config: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        ts = now_iso()
+        item = _insert_site_env_version(
+            con,
+            site_name=site_name,
+            site_code=site_code,
+            config=config,
+            action=action,
+            actor_login=actor_login,
+            reason=reason,
+            before_config=before_config,
+            ts=ts,
+        )
+        con.commit()
+        return item
+    finally:
+        con.close()
+
+
+def list_site_env_config_versions(
+    *,
+    site_name: str = "",
+    site_code: str | None = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    con = _connect()
+    try:
+        clean_name = str(site_name or "").strip()
+        clean_code = _clean_site_code_value(site_code)
+        sql = """
+            SELECT id, site_code, site_name, version_no, action, reason, actor_login,
+                   config_json, before_json, config_hash, created_at
+            FROM site_env_config_versions
+        """
+        params: List[Any] = []
+        clauses: List[str] = []
+        if clean_code:
+            clauses.append("site_code=?")
+            params.append(clean_code)
+        elif clean_name:
+            clauses.append("site_name=?")
+            params.append(clean_name)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 300)))
+        rows = con.execute(sql, tuple(params)).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["config"] = _parse_json_object(item.get("config_json"))
+            item["before_config"] = _parse_json_object(item.get("before_json"))
+            out.append(item)
+        return out
+    finally:
+        con.close()
+
+
+def get_site_env_config_version(version_id: int) -> Dict[str, Any] | None:
+    con = _connect()
+    try:
+        row = con.execute(
+            """
+            SELECT id, site_code, site_name, version_no, action, reason, actor_login,
+                   config_json, before_json, config_hash, created_at
+            FROM site_env_config_versions
+            WHERE id=?
+            LIMIT 1
+            """,
+            (int(version_id),),
+        ).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        out["config"] = _parse_json_object(out.get("config_json"))
+        out["before_config"] = _parse_json_object(out.get("before_json"))
+        return out
+    finally:
+        con.close()
+
+
+def rollback_site_env_config_version(
+    *,
+    version_id: int,
+    actor_login: str = "",
+    reason: str = "",
+) -> Dict[str, Any]:
+    item = get_site_env_config_version(int(version_id))
+    if not item:
+        raise ValueError("site_env version not found")
+    site_name = _require_site_name_value(item.get("site_name"))
+    site_code = _clean_site_code_value(item.get("site_code"))
+    config = item.get("config") if isinstance(item.get("config"), dict) else {}
+    row = upsert_site_env_config(
+        site_name,
+        config,
+        site_code=site_code,
+        action="rollback",
+        actor_login=actor_login,
+        reason=reason or f"rollback version #{int(version_id)}",
+        record_version=True,
+    )
+    return {"target_version": item, "site_env": row}
+
+
+def write_security_audit_log(
+    *,
+    event_type: str,
+    severity: str = "INFO",
+    outcome: str = "ok",
+    actor_user_id: int | None = None,
+    actor_login: str = "",
+    target_site_code: str = "",
+    target_site_name: str = "",
+    request_id: int | None = None,
+    detail: Dict[str, Any] | List[Any] | str | None = None,
+) -> int:
+    clean_event = str(event_type or "").strip() or "unknown"
+    clean_sev = str(severity or "INFO").strip().upper() or "INFO"
+    clean_outcome = str(outcome or "ok").strip().lower() or "ok"
+    payload: Any
+    if isinstance(detail, (dict, list)):
+        payload = detail
+    elif detail is None:
+        payload = {}
+    else:
+        payload = {"message": str(detail)}
+    detail_json = _stable_json_text(payload)
+    con = _connect()
+    try:
+        ts = now_iso()
+        cur = con.execute(
+            """
+            INSERT INTO security_audit_logs(
+              event_type, severity, outcome, actor_user_id, actor_login,
+              target_site_code, target_site_name, request_id, detail_json, created_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                clean_event,
+                clean_sev,
+                clean_outcome,
+                int(actor_user_id) if actor_user_id else None,
+                str(actor_login or "").strip() or None,
+                _clean_site_code_value(target_site_code),
+                str(target_site_name or "").strip() or None,
+                int(request_id) if request_id else None,
+                detail_json,
+                ts,
+            ),
+        )
+        con.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        con.close()
+
+
+def list_security_audit_logs(*, limit: int = 200, event_type: str = "", outcome: str = "") -> List[Dict[str, Any]]:
+    con = _connect()
+    try:
+        sql = """
+            SELECT id, event_type, severity, outcome, actor_user_id, actor_login,
+                   target_site_code, target_site_name, request_id, detail_json, created_at
+            FROM security_audit_logs
+        """
+        params: List[Any] = []
+        clauses: List[str] = []
+        clean_event = str(event_type or "").strip()
+        clean_outcome = str(outcome or "").strip().lower()
+        if clean_event:
+            clauses.append("event_type=?")
+            params.append(clean_event)
+        if clean_outcome:
+            clauses.append("outcome=?")
+            params.append(clean_outcome)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 500)))
+        rows = con.execute(sql, tuple(params)).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["detail"] = _parse_json_object(item.get("detail_json"))
+            out.append(item)
+        return out
+    finally:
+        con.close()
+
+
+def create_privileged_change_request(
+    *,
+    change_type: str,
+    payload: Dict[str, Any],
+    requested_by_user_id: int,
+    requested_by_login: str,
+    target_site_name: str = "",
+    target_site_code: str = "",
+    reason: str = "",
+    expires_hours: int = 24,
+) -> Dict[str, Any]:
+    clean_change_type = str(change_type or "").strip().lower()
+    if not clean_change_type:
+        raise ValueError("change_type is required")
+    clean_payload = payload if isinstance(payload, dict) else {}
+    clean_reason = str(reason or "").strip()
+    clean_login = str(requested_by_login or "").strip().lower()
+    if not clean_login:
+        raise ValueError("requested_by_login is required")
+    con = _connect()
+    try:
+        ts = now_iso()
+        expires_at = (datetime.now() + timedelta(hours=max(1, int(expires_hours)))).replace(microsecond=0).isoformat(sep=" ")
+        cur = con.execute(
+            """
+            INSERT INTO privileged_change_requests(
+              change_type, status, target_site_name, target_site_code, reason,
+              payload_json, requested_by_user_id, requested_by_login,
+              created_at, expires_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                clean_change_type,
+                "pending",
+                str(target_site_name or "").strip() or None,
+                _clean_site_code_value(target_site_code),
+                clean_reason or None,
+                _stable_json_text(clean_payload),
+                int(requested_by_user_id),
+                clean_login,
+                ts,
+                expires_at,
+            ),
+        )
+        req_id = int(cur.lastrowid or 0)
+        con.commit()
+        row = con.execute(
+            """
+            SELECT *
+            FROM privileged_change_requests
+            WHERE id=?
+            LIMIT 1
+            """,
+            (req_id,),
+        ).fetchone()
+        out = dict(row) if row else {}
+        out["payload"] = _parse_json_object(out.get("payload_json"))
+        out["result"] = _parse_json_object(out.get("result_json"))
+        return out
+    finally:
+        con.close()
+
+
+def get_privileged_change_request(request_id: int) -> Dict[str, Any] | None:
+    con = _connect()
+    try:
+        row = con.execute(
+            """
+            SELECT *
+            FROM privileged_change_requests
+            WHERE id=?
+            LIMIT 1
+            """,
+            (int(request_id),),
+        ).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        out["payload"] = _parse_json_object(out.get("payload_json"))
+        out["result"] = _parse_json_object(out.get("result_json"))
+        return out
+    finally:
+        con.close()
+
+
+def list_privileged_change_requests(
+    *,
+    change_type: str = "",
+    status: str = "",
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    con = _connect()
+    try:
+        sql = "SELECT * FROM privileged_change_requests"
+        params: List[Any] = []
+        clauses: List[str] = []
+        clean_change_type = str(change_type or "").strip().lower()
+        clean_status = str(status or "").strip().lower()
+        if clean_change_type:
+            clauses.append("change_type=?")
+            params.append(clean_change_type)
+        if clean_status:
+            clauses.append("status=?")
+            params.append(clean_status)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 500)))
+        rows = con.execute(sql, tuple(params)).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = _parse_json_object(item.get("payload_json"))
+            item["result"] = _parse_json_object(item.get("result_json"))
+            out.append(item)
+        return out
+    finally:
+        con.close()
+
+
+def approve_privileged_change_request(
+    *,
+    request_id: int,
+    approver_user_id: int,
+    approver_login: str,
+) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        row = con.execute(
+            "SELECT * FROM privileged_change_requests WHERE id=? LIMIT 1",
+            (int(request_id),),
+        ).fetchone()
+        if not row:
+            raise ValueError("request not found")
+        item = dict(row)
+        if str(item.get("status") or "").strip().lower() != "pending":
+            raise ValueError("request is not pending")
+        if int(item.get("requested_by_user_id") or 0) == int(approver_user_id):
+            raise ValueError("requester cannot approve own request")
+        expires_at = str(item.get("expires_at") or "").strip()
+        if expires_at and expires_at <= now_iso():
+            raise ValueError("request is expired")
+        ts = now_iso()
+        con.execute(
+            """
+            UPDATE privileged_change_requests
+            SET status='approved', approved_by_user_id=?, approved_by_login=?, approved_at=?
+            WHERE id=?
+            """,
+            (int(approver_user_id), str(approver_login or "").strip().lower(), ts, int(request_id)),
+        )
+        con.commit()
+        refreshed = con.execute(
+            "SELECT * FROM privileged_change_requests WHERE id=? LIMIT 1",
+            (int(request_id),),
+        ).fetchone()
+        out = dict(refreshed) if refreshed else {}
+        out["payload"] = _parse_json_object(out.get("payload_json"))
+        out["result"] = _parse_json_object(out.get("result_json"))
+        return out
+    finally:
+        con.close()
+
+
+def mark_privileged_change_request_executed(
+    *,
+    request_id: int,
+    executed_by_user_id: int,
+    executed_by_login: str,
+    result: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        row = con.execute(
+            "SELECT * FROM privileged_change_requests WHERE id=? LIMIT 1",
+            (int(request_id),),
+        ).fetchone()
+        if not row:
+            raise ValueError("request not found")
+        item = dict(row)
+        if str(item.get("status") or "").strip().lower() != "approved":
+            raise ValueError("request is not approved")
+        ts = now_iso()
+        con.execute(
+            """
+            UPDATE privileged_change_requests
+            SET status='executed',
+                executed_by_user_id=?,
+                executed_by_login=?,
+                executed_at=?,
+                result_json=?
+            WHERE id=?
+            """,
+            (
+                int(executed_by_user_id),
+                str(executed_by_login or "").strip().lower(),
+                ts,
+                _stable_json_text(result if isinstance(result, dict) else {}),
+                int(request_id),
+            ),
+        )
+        con.commit()
+        refreshed = con.execute(
+            "SELECT * FROM privileged_change_requests WHERE id=? LIMIT 1",
+            (int(request_id),),
+        ).fetchone()
+        out = dict(refreshed) if refreshed else {}
+        out["payload"] = _parse_json_object(out.get("payload_json"))
+        out["result"] = _parse_json_object(out.get("result_json"))
+        return out
+    finally:
+        con.close()
+
+
+def migrate_site_code(
+    *,
+    site_name: str,
+    old_site_code: str,
+    new_site_code: str,
+) -> Dict[str, Any]:
+    clean_site_name = _require_site_name_value(site_name)
+    old_code = _clean_site_code_value(old_site_code)
+    new_code = _clean_site_code_value(new_site_code)
+    if not old_code:
+        raise ValueError("old_site_code is required")
+    if not new_code:
+        raise ValueError("new_site_code is required")
+    if old_code == new_code:
+        raise ValueError("new_site_code must differ from old_site_code")
+
+    con = _connect()
+    try:
+        ts = now_iso()
+        row_by_name = con.execute(
+            "SELECT id, site_name, site_code FROM site_registry WHERE site_name=? LIMIT 1",
+            (clean_site_name,),
+        ).fetchone()
+        if row_by_name:
+            current = _clean_site_code_value(row_by_name["site_code"])
+            if current and current != old_code:
+                raise ValueError("site_name currently mapped to another site_code")
+
+        row_by_old = con.execute(
+            "SELECT id, site_name FROM site_registry WHERE site_code=? LIMIT 1",
+            (old_code,),
+        ).fetchone()
+        if row_by_old:
+            old_name = str(row_by_old["site_name"] or "").strip()
+            if old_name and old_name != clean_site_name:
+                raise ValueError("old_site_code is mapped to another site_name")
+
+        row_by_new = con.execute(
+            "SELECT id, site_name FROM site_registry WHERE site_code=? LIMIT 1",
+            (new_code,),
+        ).fetchone()
+        if row_by_new:
+            new_name = str(row_by_new["site_name"] or "").strip()
+            if new_name and new_name != clean_site_name:
+                raise ValueError("new_site_code is already mapped to another site_name")
+
+        tables = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        skip_tables = {
+            "security_audit_logs",
+            "privileged_change_requests",
+            "site_env_config_versions",
+        }
+        touched_tables: Dict[str, int] = {}
+        for t in tables:
+            table_name = str(t["name"] or "").strip()
+            if not table_name:
+                continue
+            if table_name in skip_tables:
+                continue
+            cols = set(table_columns(con, table_name))
+            if "site_code" not in cols:
+                continue
+            quoted = '"' + table_name.replace('"', '""') + '"'
+            try:
+                cur = con.execute(f"UPDATE {quoted} SET site_code=? WHERE site_code=?", (new_code, old_code))
+            except sqlite3.IntegrityError as e:
+                raise ValueError(f"site_code migration conflict at table '{table_name}'") from e
+            if int(cur.rowcount or 0) > 0:
+                touched_tables[table_name] = int(cur.rowcount)
+
+        if row_by_name:
+            con.execute(
+                "UPDATE site_registry SET site_code=?, updated_at=? WHERE id=?",
+                (new_code, ts, int(row_by_name["id"])),
+            )
+        elif row_by_old:
+            con.execute(
+                "UPDATE site_registry SET site_name=?, site_code=?, updated_at=? WHERE id=?",
+                (clean_site_name, new_code, ts, int(row_by_old["id"])),
+            )
+        else:
+            con.execute(
+                "INSERT INTO site_registry(site_name, site_code, created_at, updated_at) VALUES(?,?,?,?)",
+                (clean_site_name, new_code, ts, ts),
+            )
+
+        con.commit()
+        return {
+            "site_name": clean_site_name,
+            "old_site_code": old_code,
+            "new_site_code": new_code,
+            "updated_tables": touched_tables,
+            "updated_table_count": len(touched_tables),
+        }
     finally:
         con.close()
 
@@ -1403,7 +2202,7 @@ def list_staff_users(*, active_only: bool = False) -> List[Dict[str, Any]]:
     con = _connect()
     try:
         sql = """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
         """
         params: List[Any] = []
@@ -1421,7 +2220,7 @@ def get_staff_user(user_id: int) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -1447,6 +2246,7 @@ def create_staff_user(
     password_hash: Optional[str] = None,
     is_admin: int = 0,
     is_site_admin: int = 0,
+    admin_scope: Optional[str] = None,
     is_active: int = 1,
 ) -> Dict[str, Any]:
     con = _connect()
@@ -1454,12 +2254,13 @@ def create_staff_user(
         ts = now_iso()
         clean_site_code = _clean_site_code_value(site_code)
         clean_is_admin, clean_is_site_admin = _normalize_staff_permission_flags(is_admin, is_site_admin)
+        clean_admin_scope = _normalize_admin_scope_value(admin_scope, is_admin=bool(clean_is_admin))
         con.execute(
             """
             INSERT INTO staff_users(
-              login_id, name, role, phone, site_code, site_name, address, office_phone, office_fax, note, password_hash, is_admin, is_site_admin, is_active, created_at, updated_at
+              login_id, name, role, phone, site_code, site_name, address, office_phone, office_fax, note, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 login_id,
@@ -1475,6 +2276,7 @@ def create_staff_user(
                 password_hash,
                 clean_is_admin,
                 clean_is_site_admin,
+                clean_admin_scope,
                 int(1 if is_active else 0),
                 ts,
                 ts,
@@ -1483,7 +2285,7 @@ def create_staff_user(
         con.commit()
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -1509,6 +2311,7 @@ def update_staff_user(
     note: Optional[str] = None,
     is_admin: int = 0,
     is_site_admin: int = 0,
+    admin_scope: Optional[str] = None,
     is_active: int = 1,
 ) -> Optional[Dict[str, Any]]:
     con = _connect()
@@ -1516,10 +2319,11 @@ def update_staff_user(
         ts = now_iso()
         clean_site_code = _clean_site_code_value(site_code)
         clean_is_admin, clean_is_site_admin = _normalize_staff_permission_flags(is_admin, is_site_admin)
+        clean_admin_scope = _normalize_admin_scope_value(admin_scope, is_admin=bool(clean_is_admin))
         cur = con.execute(
             """
             UPDATE staff_users
-            SET login_id=?, name=?, role=?, phone=?, site_code=?, site_name=?, address=?, office_phone=?, office_fax=?, note=?, is_admin=?, is_site_admin=?, is_active=?, updated_at=?
+            SET login_id=?, name=?, role=?, phone=?, site_code=?, site_name=?, address=?, office_phone=?, office_fax=?, note=?, is_admin=?, is_site_admin=?, admin_scope=?, is_active=?, updated_at=?
             WHERE id=?
             """,
             (
@@ -1535,6 +2339,7 @@ def update_staff_user(
                 note,
                 clean_is_admin,
                 clean_is_site_admin,
+                clean_admin_scope,
                 int(1 if is_active else 0),
                 ts,
                 int(user_id),
@@ -1545,7 +2350,7 @@ def update_staff_user(
             return None
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -1614,7 +2419,7 @@ def get_staff_user_by_login(login_id: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -1629,6 +2434,18 @@ def count_staff_admins(*, active_only: bool = True) -> int:
     con = _connect()
     try:
         sql = "SELECT COUNT(*) AS c FROM staff_users WHERE is_admin=1"
+        if active_only:
+            sql += " AND is_active=1"
+        row = con.execute(sql).fetchone()
+        return int(row["c"] if row else 0)
+    finally:
+        con.close()
+
+
+def count_super_admins(*, active_only: bool = True) -> int:
+    con = _connect()
+    try:
+        sql = "SELECT COUNT(*) AS c FROM staff_users WHERE is_admin=1 AND lower(COALESCE(admin_scope,''))='super_admin'"
         if active_only:
             sql += " AND is_active=1"
         row = con.execute(sql).fetchone()
@@ -1732,6 +2549,7 @@ def get_auth_user_by_token(token: str) -> Optional[Dict[str, Any]]:
               u.office_fax,
               u.is_admin,
               u.is_site_admin,
+              u.admin_scope,
               u.is_active,
               u.created_at,
               u.updated_at,
@@ -1774,7 +2592,7 @@ def get_staff_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_site_admin, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE phone=?
             ORDER BY is_active DESC, id ASC

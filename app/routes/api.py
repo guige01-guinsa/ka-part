@@ -29,44 +29,56 @@ from ..backup_manager import (
 from ..db import (
     cleanup_expired_sessions,
     count_staff_admins,
+    count_super_admins,
     count_staff_users_for_site,
     create_signup_phone_verification,
     create_auth_session,
+    create_privileged_change_request,
     create_staff_user,
     delete_entry,
+    delete_site_env_config,
     delete_staff_user,
     ensure_site,
     get_auth_user_by_token,
+    get_privileged_change_request,
     get_latest_signup_phone_verification,
     find_site_code_by_name,
     find_site_name_by_code,
     get_site_env_config,
     get_site_env_record,
+    get_site_env_config_version,
     get_first_staff_user_for_site,
     get_staff_user_by_phone,
     get_staff_user,
     get_staff_user_by_login,
     hash_password,
     list_entries,
+    list_privileged_change_requests,
+    list_security_audit_logs,
+    list_site_env_config_versions,
     list_site_env_configs,
     list_staff_users,
     load_entry,
     load_entry_by_id,
     mark_staff_user_login,
+    mark_privileged_change_request_executed,
+    migrate_site_code,
+    approve_privileged_change_request,
     revoke_all_user_sessions,
     revoke_auth_session,
     resolve_or_create_site_code,
+    rollback_site_env_config_version,
     save_tab_values,
     schema_alignment_report,
     set_staff_user_site_code,
     set_staff_user_password,
     touch_signup_phone_verification_attempt,
     upsert_site_env_config,
-    delete_site_env_config,
     update_staff_user,
     upsert_entry,
     upsert_tab_domain_data,
     verify_password,
+    write_security_audit_log,
 )
 from ..schema_defs import (
     DEFAULT_INITIAL_VISIBLE_TAB_KEYS,
@@ -87,6 +99,11 @@ router = APIRouter()
 
 VALID_USER_ROLES = ["관리소장", "과장", "주임", "기사", "행정", "경비", "미화", "기타"]
 VALID_PERMISSION_LEVELS = ["admin", "site_admin", "user"]
+VALID_ADMIN_SCOPES = ["super_admin", "ops_admin"]
+ADMIN_SCOPE_LABELS = {
+    "super_admin": "최고관리자",
+    "ops_admin": "운영관리자",
+}
 DEFAULT_SITE_NAME = "미지정단지"
 PHONE_VERIFY_TTL_MINUTES = 5
 PHONE_VERIFY_MAX_ATTEMPTS = 5
@@ -404,6 +421,37 @@ def _permission_level_from_user(user: Dict[str, Any]) -> str:
     return "user"
 
 
+def _clean_admin_scope(value: Any, *, required: bool = False) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        if required:
+            raise HTTPException(status_code=400, detail="admin_scope is required for admin permission")
+        return ""
+    if raw not in VALID_ADMIN_SCOPES:
+        raise HTTPException(status_code=400, detail=f"admin_scope must be one of: {', '.join(VALID_ADMIN_SCOPES)}")
+    return raw
+
+
+def _admin_scope_from_user(user: Dict[str, Any]) -> str:
+    if int(user.get("is_admin") or 0) != 1:
+        return ""
+    raw = str(user.get("admin_scope") or "").strip().lower()
+    if raw in VALID_ADMIN_SCOPES:
+        return raw
+    login_id = str(user.get("login_id") or "").strip().lower()
+    if login_id == "admin":
+        return "super_admin"
+    return "ops_admin"
+
+
+def _admin_scope_label(scope: str) -> str:
+    return ADMIN_SCOPE_LABELS.get(str(scope or "").strip().lower(), "")
+
+
+def _is_super_admin(user: Dict[str, Any]) -> bool:
+    return _admin_scope_from_user(user) == "super_admin"
+
+
 def _clean_permission_level(value: Any, *, required: bool = False) -> str:
     raw = str(value or "").strip().lower()
     if not raw:
@@ -415,28 +463,61 @@ def _clean_permission_level(value: Any, *, required: bool = False) -> str:
     return raw
 
 
-def _resolve_permission_flags(payload: Dict[str, Any], *, default_admin: bool = False, default_site_admin: bool = False) -> Tuple[int, int, str]:
+def _resolve_permission_flags(
+    payload: Dict[str, Any],
+    *,
+    default_admin: bool = False,
+    default_site_admin: bool = False,
+    default_admin_scope: str = "",
+) -> Tuple[int, int, str, str]:
     if "permission_level" in payload:
         level = _clean_permission_level(payload.get("permission_level"), required=True)
         if level == "admin":
-            return 1, 0, level
+            scope = _clean_admin_scope(payload.get("admin_scope"), required=False) or _clean_admin_scope(
+                default_admin_scope, required=False
+            )
+            if not scope:
+                scope = "ops_admin"
+            return 1, 0, level, scope
         if level == "site_admin":
-            return 0, 1, level
-        return 0, 0, level
+            return 0, 1, level, ""
+        return 0, 0, level, ""
 
     is_admin = _clean_bool(payload.get("is_admin"), default=default_admin)
     is_site_admin = _clean_bool(payload.get("is_site_admin"), default=default_site_admin)
     if is_admin:
         is_site_admin = False
     level = "admin" if is_admin else ("site_admin" if is_site_admin else "user")
-    return (1 if is_admin else 0), (1 if is_site_admin else 0), level
+    scope = ""
+    if is_admin:
+        scope = _clean_admin_scope(payload.get("admin_scope"), required=False) or _clean_admin_scope(
+            default_admin_scope, required=False
+        )
+        if not scope:
+            scope = "ops_admin"
+    return (1 if is_admin else 0), (1 if is_site_admin else 0), level, scope
 
 
-def _resolve_site_code_for_site(site_name: str, site_code: str = "") -> str:
+def _resolve_site_code_for_site(
+    site_name: str,
+    site_code: str = "",
+    *,
+    allow_create: bool = True,
+    allow_remap: bool = False,
+) -> str:
     try:
-        return resolve_or_create_site_code(site_name, preferred_code=(site_code or None))
+        return resolve_or_create_site_code(
+            site_name,
+            preferred_code=(site_code or None),
+            allow_create=allow_create,
+            allow_remap=allow_remap,
+        )
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        detail = str(e)
+        status_code = 409
+        if "mapping not found" in detail:
+            status_code = 404
+        raise HTTPException(status_code=status_code, detail=detail) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"site_code resolve failed: {e}") from e
 
@@ -453,7 +534,10 @@ def _bind_user_site_code_if_missing(user: Dict[str, Any]) -> Dict[str, Any]:
     if not site_name:
         return user
 
-    resolved = _resolve_site_code_for_site(site_name, "")
+    try:
+        resolved = _resolve_site_code_for_site(site_name, "", allow_create=False, allow_remap=False)
+    except HTTPException:
+        return user
     if not resolved:
         return user
     uid = int(user.get("id") or 0)
@@ -469,6 +553,7 @@ def _bind_user_site_code_if_missing(user: Dict[str, Any]) -> Dict[str, Any]:
 
 def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     permission_level = _permission_level_from_user(user)
+    admin_scope = _admin_scope_from_user(user)
     return {
         "id": int(user.get("id")),
         "login_id": user.get("login_id"),
@@ -483,6 +568,8 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "note": user.get("note"),
         "is_admin": bool(user.get("is_admin")),
         "is_site_admin": bool(user.get("is_site_admin")),
+        "admin_scope": admin_scope,
+        "admin_scope_label": _admin_scope_label(admin_scope),
         "permission_level": permission_level,
         "is_active": bool(user.get("is_active")),
         "created_at": user.get("created_at"),
@@ -529,6 +616,7 @@ def _resolve_spec_env_site_target(
     raw_site_code = str(requested_site_code or "").strip().upper()
 
     if int(user.get("is_admin") or 0) == 1:
+        is_super = _is_super_admin(user)
         clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
         clean_site_code = _clean_site_code(raw_site_code, required=False)
 
@@ -537,31 +625,47 @@ def _resolve_spec_env_site_target(
                 raise HTTPException(status_code=400, detail="site_name 또는 site_code 중 하나를 입력하세요.")
             return "", ""
 
-        if clean_site_name and not clean_site_code:
-            # 관리자 입력 편의: site_name 단독 입력 시 site_code를 자동 매핑/생성
-            clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
-        elif clean_site_code and not clean_site_name:
+        if clean_site_code and not clean_site_name:
             resolved_name = find_site_name_by_code(clean_site_code)
             if not resolved_name:
                 raise HTTPException(status_code=404, detail="입력한 site_code에 해당하는 site_name을 찾을 수 없습니다.")
             clean_site_name = _clean_site_name(resolved_name, required=True)
-
-        mapped_name = find_site_name_by_code(clean_site_code) if clean_site_code else None
-        if mapped_name and _clean_site_name(mapped_name, required=True) != clean_site_name:
-            raise HTTPException(status_code=409, detail="입력한 site_code가 다른 site_name에 연결되어 있습니다.")
-        mapped_code = find_site_code_by_name(clean_site_name) if clean_site_name else None
-        if mapped_code and _clean_site_code(mapped_code, required=False) != clean_site_code:
-            raise HTTPException(status_code=409, detail="입력한 site_name이 다른 site_code에 연결되어 있습니다.")
-
-        if for_write and clean_site_name:
-            clean_site_code = _resolve_site_code_for_site(clean_site_name, clean_site_code)
+        if clean_site_name:
+            allow_create = bool(for_write and is_super)
+            try:
+                clean_site_code = _resolve_site_code_for_site(
+                    clean_site_name,
+                    clean_site_code,
+                    allow_create=allow_create,
+                    allow_remap=False,
+                )
+            except HTTPException as e:
+                if e.status_code == 404 and not is_super:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="운영관리자는 기존 단지코드만 사용할 수 있습니다. 최고관리자에게 등록 요청하세요.",
+                    ) from e
+                raise
 
         return clean_site_name, clean_site_code
 
     clean_site_name = _resolve_allowed_site_name(user, raw_site_name, required=False)
     clean_site_code = _resolve_allowed_site_code(user, raw_site_code)
     if not clean_site_code:
-        clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
+        try:
+            clean_site_code = _resolve_site_code_for_site(
+                clean_site_name,
+                "",
+                allow_create=False,
+                allow_remap=False,
+            )
+        except HTTPException as e:
+            if e.status_code == 404:
+                raise HTTPException(
+                    status_code=403,
+                    detail="소속 단지코드가 등록되어 있지 않습니다. 최고관리자에게 등록 요청하세요.",
+                ) from e
+            raise
         uid = int(user.get("id") or 0)
         if uid > 0 and clean_site_code:
             set_staff_user_site_code(uid, clean_site_code)
@@ -574,22 +678,31 @@ def _resolve_site_identity_for_main(user: Dict[str, Any], requested_site_name: A
     is_admin = int(user.get("is_admin") or 0) == 1
 
     if is_admin:
+        is_super = _is_super_admin(user)
         clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
         clean_site_code = _clean_site_code(raw_site_code, required=False)
-
-        if clean_site_name and not clean_site_code:
-            clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
-            return clean_site_name, clean_site_code
 
         if clean_site_code and not clean_site_name:
             resolved_name = find_site_name_by_code(clean_site_code)
             if not resolved_name:
                 raise HTTPException(status_code=404, detail="입력한 site_code에 매핑된 site_name이 없습니다.")
             clean_site_name = _clean_site_name(resolved_name, required=True)
-            return clean_site_name, clean_site_code
 
-        if clean_site_name and clean_site_code:
-            clean_site_code = _resolve_site_code_for_site(clean_site_name, clean_site_code)
+        if clean_site_name:
+            try:
+                clean_site_code = _resolve_site_code_for_site(
+                    clean_site_name,
+                    clean_site_code,
+                    allow_create=is_super,
+                    allow_remap=False,
+                )
+            except HTTPException as e:
+                if e.status_code == 404 and not is_super:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="운영관리자는 기존 단지코드만 선택할 수 있습니다. 최고관리자에게 등록 요청하세요.",
+                    ) from e
+                raise
             return clean_site_name, clean_site_code
 
         fallback_name = str(user.get("site_name") or "").strip()
@@ -672,6 +785,111 @@ def _require_admin(request: Request) -> Tuple[Dict[str, Any], str]:
     if int(user.get("is_admin") or 0) != 1:
         raise HTTPException(status_code=403, detail="admin only")
     return user, token
+
+
+def _require_super_admin(request: Request) -> Tuple[Dict[str, Any], str]:
+    user, token = _require_admin(request)
+    if not _is_super_admin(user):
+        raise HTTPException(status_code=403, detail="최고관리자 권한이 필요합니다.")
+    return user, token
+
+
+def _critical_change_window() -> Tuple[int, int]:
+    start = max(0, min(23, _safe_int_env("KA_CRITICAL_CHANGE_WINDOW_START_HOUR", 6, 0)))
+    end = max(1, min(24, _safe_int_env("KA_CRITICAL_CHANGE_WINDOW_END_HOUR", 23, 1)))
+    return start, end
+
+
+def _is_within_change_window(now: datetime | None = None) -> bool:
+    start, end = _critical_change_window()
+    if start == end:
+        return True
+    current = now or datetime.now()
+    hour = int(current.hour)
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+def _assert_change_window(operation_label: str = "중요 변경") -> None:
+    if not _env_enabled("KA_CRITICAL_CHANGE_WINDOW_ENABLED", True):
+        return
+    if _is_within_change_window():
+        return
+    start, end = _critical_change_window()
+    raise HTTPException(
+        status_code=403,
+        detail=f"{operation_label}은(는) 허용 시간({start:02d}:00~{end:02d}:00) 내에서만 실행할 수 있습니다.",
+    )
+
+
+def _assert_mfa_confirmed(request: Request, payload: Dict[str, Any] | None = None, *, operation_label: str = "중요 변경") -> None:
+    if not _env_enabled("KA_CRITICAL_REQUIRE_MFA", True):
+        return
+    body = payload if isinstance(payload, dict) else {}
+    header_ok = str(request.headers.get("X-KA-MFA-VERIFIED") or "").strip().lower() in {"1", "true", "yes", "on"}
+    body_ok = _clean_bool(body.get("mfa_confirmed"), default=False)
+    if header_ok or body_ok:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=f"{operation_label}에는 MFA 확인이 필요합니다. 요청값 mfa_confirmed=true 또는 X-KA-MFA-VERIFIED 헤더를 전달하세요.",
+    )
+
+
+def _run_prechange_site_backup(user: Dict[str, Any], *, site_code: str, site_name: str, reason: str) -> Dict[str, Any]:
+    if not _env_enabled("KA_PRECHANGE_BACKUP_ENABLED", True):
+        return {}
+    clean_site_code = _clean_site_code(site_code, required=False)
+    if not clean_site_code:
+        return {}
+    actor_login = _clean_login_id(user.get("login_id") or "policy-backup")
+    target_keys = [
+        str(x.get("key") or "").strip().lower()
+        for x in list_backup_targets()
+        if bool(x.get("exists")) and bool(x.get("site_scoped"))
+    ]
+    target_keys = [x for x in target_keys if x]
+    if not target_keys:
+        return {}
+    try:
+        return run_manual_backup(
+            actor=actor_login,
+            trigger=f"prechange:{str(reason or 'policy').strip().lower()}",
+            target_keys=target_keys,
+            scope="site",
+            site_code=clean_site_code,
+            site_name=_clean_site_name(site_name, required=False),
+            with_maintenance=False,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=409, detail=f"변경 전 자동백업 실패: {e}") from e
+
+
+def _audit_security(
+    *,
+    user: Dict[str, Any] | None,
+    event_type: str,
+    severity: str = "INFO",
+    outcome: str = "ok",
+    target_site_code: str = "",
+    target_site_name: str = "",
+    request_id: int | None = None,
+    detail: Dict[str, Any] | List[Any] | str | None = None,
+) -> int:
+    actor_id = int(user.get("id") or 0) if isinstance(user, dict) else 0
+    actor_login = str(user.get("login_id") or "").strip().lower() if isinstance(user, dict) else ""
+    return write_security_audit_log(
+        event_type=event_type,
+        severity=severity,
+        outcome=outcome,
+        actor_user_id=(actor_id if actor_id > 0 else None),
+        actor_login=actor_login,
+        target_site_code=_clean_site_code(target_site_code, required=False),
+        target_site_name=str(target_site_name or "").strip(),
+        request_id=request_id,
+        detail=detail,
+    )
 
 
 def _can_manage_site_env(user: Dict[str, Any]) -> bool:
@@ -791,7 +1009,21 @@ def _resolve_main_site_target(
             clean_site_name = _clean_site_name(mapped_name, required=True)
 
     if clean_site_name and not clean_site_code:
-        clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
+        allow_create = _is_super_admin(user)
+        try:
+            clean_site_code = _resolve_site_code_for_site(
+                clean_site_name,
+                "",
+                allow_create=allow_create,
+                allow_remap=False,
+            )
+        except HTTPException as e:
+            if e.status_code == 404 and int(user.get("is_admin") or 0) == 1 and not _is_super_admin(user):
+                raise HTTPException(
+                    status_code=403,
+                    detail="운영관리자는 기존 단지코드만 선택할 수 있습니다. 최고관리자에게 등록 요청하세요.",
+                ) from e
+            raise
 
     if required and not clean_site_name:
         raise HTTPException(status_code=400, detail="site_name 또는 site_code를 확인하세요.")
@@ -829,7 +1061,20 @@ def parking_context(
             clean_site_name = _clean_site_name(mapped, required=True)
 
     if clean_site_name and not clean_site_code:
-        clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
+        try:
+            clean_site_code = _resolve_site_code_for_site(
+                clean_site_name,
+                "",
+                allow_create=_is_super_admin(user),
+                allow_remap=False,
+            )
+        except HTTPException as e:
+            if e.status_code == 404:
+                raise HTTPException(
+                    status_code=403,
+                    detail="단지코드가 등록되지 않았습니다. 최고관리자에게 등록을 요청하세요.",
+                ) from e
+            raise
 
     # Fallback: legacy sessions may still miss site_code.
     if not clean_site_code:
@@ -965,26 +1210,73 @@ def api_site_env(request: Request, site_name: str = Query(default=""), site_code
 def api_site_identity(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
     user, _token = _require_auth(request)
     clean_site_name, clean_site_code = _resolve_site_identity_for_main(user, site_name, site_code)
+    admin_scope = _admin_scope_from_user(user)
     return {
         "ok": True,
         "site_name": clean_site_name,
         "site_code": clean_site_code,
         "editable": int(user.get("is_admin") or 0) == 1,
+        "site_code_editable": admin_scope == "super_admin",
+        "admin_scope": admin_scope,
     }
 
 
 @router.put("/site_env")
 def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     user, _token = _require_site_env_manager(request)
+    _assert_change_window("제원설정 변경")
+    _assert_mfa_confirmed(request, payload, operation_label="제원설정 변경")
     clean_site_name, clean_site_code = _resolve_spec_env_site_target(
         user, payload.get("site_name"), payload.get("site_code"), require_any=True, for_write=True
     )
     verify = _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
     raw_cfg = payload.get("config", payload.get("env", payload if isinstance(payload, dict) else {}))
     cfg = normalize_site_env_config(raw_cfg if isinstance(raw_cfg, dict) else {})
-    row = upsert_site_env_config(clean_site_name, cfg, site_code=clean_site_code or None)
+    reason = str(payload.get("reason") or "").strip()
+    actor_login = _clean_login_id(user.get("login_id") or "site-env")
+    prechange_backup = _run_prechange_site_backup(
+        user,
+        site_code=clean_site_code,
+        site_name=clean_site_name,
+        reason="site_env_update",
+    )
+    try:
+        row = upsert_site_env_config(
+            clean_site_name,
+            cfg,
+            site_code=clean_site_code or None,
+            action="update",
+            actor_login=actor_login,
+            reason=reason,
+            record_version=True,
+        )
+    except ValueError as e:
+        _audit_security(
+            user=user,
+            event_type="site_env_update",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=clean_site_code,
+            target_site_name=clean_site_name,
+            detail={"reason": reason, "error": str(e)},
+        )
+        raise HTTPException(status_code=409, detail=str(e)) from e
     resolved_site_code = _clean_site_code(row.get("site_code"), required=False)
     schema, _env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
+    _audit_security(
+        user=user,
+        event_type="site_env_update",
+        severity="INFO",
+        outcome="ok",
+        target_site_code=resolved_site_code,
+        target_site_name=clean_site_name,
+        detail={
+            "reason": reason,
+            "admin_scope": _admin_scope_from_user(user),
+            "prechange_backup_scope": str((prechange_backup or {}).get("scope") or ""),
+            "prechange_backup_path": str((prechange_backup or {}).get("relative_path") or ""),
+        },
+    )
     return {
         "ok": True,
         "site_name": clean_site_name,
@@ -993,18 +1285,51 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
         "schema": schema,
         "updated_at": row.get("updated_at"),
         "spec_access": verify,
+        "prechange_backup": prechange_backup,
     }
 
 
 @router.delete("/site_env")
 def api_site_env_delete(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
     user, _token = _require_site_env_manager(request)
+    _assert_change_window("제원설정 삭제")
+    _assert_mfa_confirmed(request, operation_label="제원설정 삭제")
     clean_site_name, clean_site_code = _resolve_spec_env_site_target(
         user, site_name, site_code, require_any=True, for_write=False
     )
     _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
-    ok = delete_site_env_config(clean_site_name, site_code=clean_site_code or None)
-    return {"ok": ok, "site_name": clean_site_name, "site_code": clean_site_code}
+    prechange_backup = _run_prechange_site_backup(
+        user,
+        site_code=clean_site_code,
+        site_name=clean_site_name,
+        reason="site_env_delete",
+    )
+    actor_login = _clean_login_id(user.get("login_id") or "site-env")
+    ok = delete_site_env_config(
+        clean_site_name,
+        site_code=clean_site_code or None,
+        actor_login=actor_login,
+        reason="delete site_env",
+        record_version=True,
+    )
+    _audit_security(
+        user=user,
+        event_type="site_env_delete",
+        severity="WARN",
+        outcome=("ok" if ok else "noop"),
+        target_site_code=clean_site_code,
+        target_site_name=clean_site_name,
+        detail={
+            "prechange_backup_scope": str((prechange_backup or {}).get("scope") or ""),
+            "prechange_backup_path": str((prechange_backup or {}).get("relative_path") or ""),
+        },
+    )
+    return {
+        "ok": ok,
+        "site_name": clean_site_name,
+        "site_code": clean_site_code,
+        "prechange_backup": prechange_backup,
+    }
 
 
 @router.get("/site_env_list")
@@ -1035,6 +1360,301 @@ def api_site_env_list(request: Request):
             }
             for r in rows
         ],
+    }
+
+
+@router.get("/site_env/history")
+def api_site_env_history(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    limit: int = Query(default=30),
+):
+    user, _token = _require_site_env_manager(request)
+    clean_site_name, clean_site_code = _resolve_spec_env_site_target(
+        user, site_name, site_code, require_any=True, for_write=False
+    )
+    _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
+    items = list_site_env_config_versions(
+        site_name=clean_site_name,
+        site_code=clean_site_code or None,
+        limit=max(1, min(int(limit), 200)),
+    )
+    return {
+        "ok": True,
+        "site_name": clean_site_name,
+        "site_code": clean_site_code,
+        "count": len(items),
+        "items": items,
+    }
+
+
+@router.post("/site_env/rollback")
+def api_site_env_rollback(request: Request, payload: Dict[str, Any] = Body(...)):
+    user, _token = _require_site_env_manager(request)
+    _assert_change_window("제원설정 롤백")
+    _assert_mfa_confirmed(request, payload, operation_label="제원설정 롤백")
+    version_id = int(payload.get("version_id") or 0)
+    if version_id <= 0:
+        raise HTTPException(status_code=400, detail="version_id is required")
+    version = get_site_env_config_version(version_id)
+    if not version:
+        raise HTTPException(status_code=404, detail="site_env version not found")
+
+    req_site_name = payload.get("site_name") or version.get("site_name")
+    req_site_code = payload.get("site_code") or version.get("site_code")
+    clean_site_name, clean_site_code = _resolve_spec_env_site_target(
+        user, req_site_name, req_site_code, require_any=True, for_write=True
+    )
+    _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
+
+    version_site_name = _clean_site_name(version.get("site_name"), required=True)
+    version_site_code = _clean_site_code(version.get("site_code"), required=False)
+    if clean_site_name != version_site_name:
+        raise HTTPException(status_code=409, detail="version_id가 지정한 단지와 일치하지 않습니다.")
+    if clean_site_code and version_site_code and clean_site_code != version_site_code:
+        raise HTTPException(status_code=409, detail="version_id가 지정한 단지코드와 일치하지 않습니다.")
+
+    prechange_backup = _run_prechange_site_backup(
+        user,
+        site_code=clean_site_code or version_site_code,
+        site_name=clean_site_name,
+        reason="site_env_rollback",
+    )
+    actor_login = _clean_login_id(user.get("login_id") or "site-env")
+    reason = str(payload.get("reason") or "").strip()
+    try:
+        result = rollback_site_env_config_version(
+            version_id=version_id,
+            actor_login=actor_login,
+            reason=(reason or f"rollback by version_id={version_id}"),
+        )
+    except ValueError as e:
+        _audit_security(
+            user=user,
+            event_type="site_env_rollback",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=clean_site_code or version_site_code,
+            target_site_name=clean_site_name,
+            detail={"version_id": version_id, "error": str(e)},
+        )
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    row = result.get("site_env") if isinstance(result, dict) else {}
+    resolved_site_code = _clean_site_code((row or {}).get("site_code"), required=False) or clean_site_code
+    schema, _env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
+    _audit_security(
+        user=user,
+        event_type="site_env_rollback",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=resolved_site_code,
+        target_site_name=clean_site_name,
+        detail={
+            "version_id": version_id,
+            "reason": reason,
+            "prechange_backup_path": str((prechange_backup or {}).get("relative_path") or ""),
+        },
+    )
+    return {
+        "ok": True,
+        "site_name": clean_site_name,
+        "site_code": resolved_site_code,
+        "config": (row or {}).get("config") or {},
+        "schema": schema,
+        "rollback_from_version": version_id,
+        "prechange_backup": prechange_backup,
+    }
+
+
+@router.get("/security/audit_logs")
+def api_security_audit_logs(
+    request: Request,
+    limit: int = Query(default=120),
+    event_type: str = Query(default=""),
+    outcome: str = Query(default=""),
+):
+    _user, _token = _require_admin(request)
+    items = list_security_audit_logs(
+        limit=max(1, min(int(limit), 500)),
+        event_type=str(event_type or "").strip(),
+        outcome=str(outcome or "").strip().lower(),
+    )
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@router.get("/site_code/migration/requests")
+def api_site_code_migration_requests(
+    request: Request,
+    status: str = Query(default=""),
+    limit: int = Query(default=100),
+):
+    _user, _token = _require_super_admin(request)
+    items = list_privileged_change_requests(
+        change_type="site_code_migration",
+        status=str(status or "").strip().lower(),
+        limit=max(1, min(int(limit), 300)),
+    )
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@router.post("/site_code/migration/request")
+def api_site_code_migration_request(request: Request, payload: Dict[str, Any] = Body(...)):
+    user, _token = _require_super_admin(request)
+    _assert_change_window("단지코드 마이그레이션 요청")
+    _assert_mfa_confirmed(request, payload, operation_label="단지코드 마이그레이션 요청")
+
+    if count_super_admins(active_only=True) < 2:
+        raise HTTPException(status_code=409, detail="2인 승인 정책을 위해 활성 최고관리자 계정이 2명 이상 필요합니다.")
+
+    site_name = _clean_site_name(payload.get("site_name"), required=True)
+    old_site_code = _clean_site_code(payload.get("old_site_code"), required=True)
+    new_site_code = _clean_site_code(payload.get("new_site_code"), required=True)
+    if old_site_code == new_site_code:
+        raise HTTPException(status_code=400, detail="new_site_code는 old_site_code와 달라야 합니다.")
+    reason = str(payload.get("reason") or "").strip()
+    if len(reason) < 4:
+        raise HTTPException(status_code=400, detail="reason(변경사유)을 4자 이상 입력하세요.")
+
+    actor_login = _clean_login_id(user.get("login_id") or "admin")
+    req = create_privileged_change_request(
+        change_type="site_code_migration",
+        payload={
+            "site_name": site_name,
+            "old_site_code": old_site_code,
+            "new_site_code": new_site_code,
+            "reason": reason,
+        },
+        requested_by_user_id=int(user.get("id") or 0),
+        requested_by_login=actor_login,
+        target_site_name=site_name,
+        target_site_code=old_site_code,
+        reason=reason,
+        expires_hours=max(1, min(int(payload.get("expires_hours") or 24), 72)),
+    )
+    _audit_security(
+        user=user,
+        event_type="site_code_migration_request",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=old_site_code,
+        target_site_name=site_name,
+        request_id=int(req.get("id") or 0),
+        detail={"new_site_code": new_site_code, "reason": reason},
+    )
+    return {"ok": True, "request": req}
+
+
+@router.post("/site_code/migration/approve")
+def api_site_code_migration_approve(request: Request, payload: Dict[str, Any] = Body(...)):
+    user, _token = _require_super_admin(request)
+    _assert_mfa_confirmed(request, payload, operation_label="단지코드 마이그레이션 승인")
+    request_id = int(payload.get("request_id") or 0)
+    if request_id <= 0:
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    actor_login = _clean_login_id(user.get("login_id") or "admin")
+    try:
+        item = approve_privileged_change_request(
+            request_id=request_id,
+            approver_user_id=int(user.get("id") or 0),
+            approver_login=actor_login,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    _audit_security(
+        user=user,
+        event_type="site_code_migration_approve",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=str(item.get("target_site_code") or ""),
+        target_site_name=str(item.get("target_site_name") or ""),
+        request_id=request_id,
+        detail={"status": item.get("status")},
+    )
+    return {"ok": True, "request": item}
+
+
+@router.post("/site_code/migration/execute")
+def api_site_code_migration_execute(request: Request, payload: Dict[str, Any] = Body(...)):
+    user, _token = _require_super_admin(request)
+    _assert_change_window("단지코드 마이그레이션 실행")
+    _assert_mfa_confirmed(request, payload, operation_label="단지코드 마이그레이션 실행")
+    request_id = int(payload.get("request_id") or 0)
+    if request_id <= 0:
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    req = get_privileged_change_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="request not found")
+    if str(req.get("change_type") or "").strip().lower() != "site_code_migration":
+        raise HTTPException(status_code=400, detail="invalid request type")
+    if str(req.get("status") or "").strip().lower() != "approved":
+        raise HTTPException(status_code=409, detail="request is not approved")
+
+    payload_data = req.get("payload") if isinstance(req.get("payload"), dict) else {}
+    site_name = _clean_site_name(payload_data.get("site_name"), required=True)
+    old_site_code = _clean_site_code(payload_data.get("old_site_code"), required=True)
+    new_site_code = _clean_site_code(payload_data.get("new_site_code"), required=True)
+    reason = str(payload_data.get("reason") or req.get("reason") or "").strip()
+
+    prechange_backup = _run_prechange_site_backup(
+        user,
+        site_code=old_site_code,
+        site_name=site_name,
+        reason="site_code_migration_execute",
+    )
+    try:
+        migration_result = migrate_site_code(
+            site_name=site_name,
+            old_site_code=old_site_code,
+            new_site_code=new_site_code,
+        )
+    except ValueError as e:
+        _audit_security(
+            user=user,
+            event_type="site_code_migration_execute",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=old_site_code,
+            target_site_name=site_name,
+            request_id=request_id,
+            detail={"reason": reason, "error": str(e)},
+        )
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    actor_login = _clean_login_id(user.get("login_id") or "admin")
+    executed = mark_privileged_change_request_executed(
+        request_id=request_id,
+        executed_by_user_id=int(user.get("id") or 0),
+        executed_by_login=actor_login,
+        result={
+            "reason": reason,
+            "migration": migration_result,
+            "prechange_backup": prechange_backup,
+        },
+    )
+    _audit_security(
+        user=user,
+        event_type="site_code_migration_execute",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=new_site_code,
+        target_site_name=site_name,
+        request_id=request_id,
+        detail={
+            "old_site_code": old_site_code,
+            "new_site_code": new_site_code,
+            "updated_table_count": int((migration_result or {}).get("updated_table_count") or 0),
+            "prechange_backup_path": str((prechange_backup or {}).get("relative_path") or ""),
+        },
+    )
+    return {
+        "ok": True,
+        "request": executed,
+        "migration": migration_result,
+        "prechange_backup": prechange_backup,
     }
 
 
@@ -1289,6 +1909,7 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
             note=existing.get("note"),
             is_admin=1,
             is_site_admin=0,
+            admin_scope="super_admin",
             is_active=1,
         )
         set_staff_user_password(int(existing["id"]), password)
@@ -1301,6 +1922,7 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
             password_hash=hash_password(password),
             is_admin=1,
             is_site_admin=0,
+            admin_scope="super_admin",
             is_active=1,
         )
     if not user:
@@ -1403,7 +2025,20 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         existing_site_name = _clean_required_text(existing.get("site_name"), 80, "site_name")
         existing_site_code = _clean_site_code(existing.get("site_code"), required=False)
         if not existing_site_code:
-            resolved_code = _resolve_site_code_for_site(existing_site_name, "")
+            try:
+                resolved_code = _resolve_site_code_for_site(
+                    existing_site_name,
+                    "",
+                    allow_create=False,
+                    allow_remap=False,
+                )
+            except HTTPException as e:
+                if e.status_code == 404:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="해당 단지의 site_code가 아직 등록되지 않았습니다. 최고관리자에게 등록을 요청하세요.",
+                    ) from e
+                raise
             set_staff_user_site_code(int(existing["id"]), resolved_code)
             existing = get_staff_user(int(existing["id"])) or existing
         touch_signup_phone_verification_attempt(int(row["id"]), success=True, issued_login_id=str(existing.get("login_id") or ""))
@@ -1430,7 +2065,20 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
     office_phone = _normalize_phone(profile.get("office_phone"), required=True, field_name="office_phone")
     office_fax = _normalize_phone(profile.get("office_fax"), required=True, field_name="office_fax")
 
-    resolved_site_code = _resolve_site_code_for_site(site_name, site_code)
+    try:
+        resolved_site_code = _resolve_site_code_for_site(
+            site_name,
+            site_code,
+            allow_create=False,
+            allow_remap=False,
+        )
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise HTTPException(
+                status_code=403,
+                detail="가입 대상 단지의 site_code가 등록되지 않았습니다. 최고관리자에게 등록을 요청하세요.",
+            ) from e
+        raise
     existing_site_user_count = count_staff_users_for_site(site_name, site_code=resolved_site_code)
     login_id = _generate_login_id_from_phone(phone)
     temp_password = _generate_temp_password(10)
@@ -1548,14 +2196,26 @@ def auth_change_password(request: Request, payload: Dict[str, Any] = Body(...)):
 @router.get("/user_roles")
 def api_user_roles(request: Request):
     _require_auth(request)
+    start_h, end_h = _critical_change_window()
     return {
         "ok": True,
         "roles": VALID_USER_ROLES,
         "permission_levels": [
-            {"key": "admin", "label": "관리자"},
+            {"key": "admin", "label": "관리자(최고/운영)"},
             {"key": "site_admin", "label": "단지관리자"},
             {"key": "user", "label": "사용자"},
         ],
+        "admin_scopes": [
+            {"key": "super_admin", "label": ADMIN_SCOPE_LABELS["super_admin"]},
+            {"key": "ops_admin", "label": ADMIN_SCOPE_LABELS["ops_admin"]},
+        ],
+        "security_policy": {
+            "site_code_mutation": "super_admin_only_with_two_person_approval",
+            "critical_mfa_required": _env_enabled("KA_CRITICAL_REQUIRE_MFA", True),
+            "critical_change_window_enabled": _env_enabled("KA_CRITICAL_CHANGE_WINDOW_ENABLED", True),
+            "critical_change_window": {"start_hour": start_h, "end_hour": end_h},
+            "prechange_backup_enabled": _env_enabled("KA_PRECHANGE_BACKUP_ENABLED", True),
+        },
         "recommended_staff_count": 9,
     }
 
@@ -1581,6 +2241,7 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
         "site_name",
         "is_admin",
         "is_site_admin",
+        "admin_scope",
         "permission_level",
         "is_active",
     }
@@ -1615,6 +2276,7 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
     note = _clean_optional_text(payload["note"] if "note" in payload else current.get("note"), 200)
     is_admin = 1 if bool(current.get("is_admin")) else 0
     is_site_admin = 1 if bool(current.get("is_site_admin")) else 0
+    admin_scope = _admin_scope_from_user(current)
     is_active = 1 if bool(current.get("is_active")) else 0
 
     try:
@@ -1632,6 +2294,7 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
             note=note,
             is_admin=is_admin,
             is_site_admin=is_site_admin,
+            admin_scope=admin_scope,
             is_active=is_active,
         )
     except Exception as e:
@@ -1747,7 +2410,8 @@ def api_users(
 
 @router.post("/users")
 def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
-    _actor, _token = _require_admin(request)
+    actor, _token = _require_admin(request)
+    actor_super = _is_super_admin(actor)
     login_id = _clean_login_id(payload.get("login_id"))
     name = _clean_name(payload.get("name"))
     role = _clean_role(payload.get("role"))
@@ -1755,13 +2419,35 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     site_code = _clean_site_code(payload.get("site_code"), required=False)
     site_name = _clean_optional_text(payload.get("site_name"), 80)
     if site_name:
-        site_code = _resolve_site_code_for_site(site_name, site_code)
+        try:
+            site_code = _resolve_site_code_for_site(
+                site_name,
+                site_code,
+                allow_create=actor_super,
+                allow_remap=False,
+            )
+        except HTTPException as e:
+            if e.status_code == 404 and not actor_super:
+                raise HTTPException(
+                    status_code=403,
+                    detail="운영관리자는 기존 단지코드만 사용할 수 있습니다. 최고관리자에게 등록 요청하세요.",
+                ) from e
+            raise
     address = _clean_optional_text(payload.get("address"), 200)
     office_phone = _normalize_phone(payload.get("office_phone"), required=False, field_name="office_phone")
     office_fax = _normalize_phone(payload.get("office_fax"), required=False, field_name="office_fax")
     note = _clean_optional_text(payload.get("note"), 200)
     password = _clean_password(payload.get("password"), required=True)
-    is_admin, is_site_admin, _permission_level = _resolve_permission_flags(payload, default_admin=False, default_site_admin=False)
+    is_admin, is_site_admin, _permission_level, admin_scope = _resolve_permission_flags(
+        payload,
+        default_admin=False,
+        default_site_admin=False,
+        default_admin_scope="ops_admin",
+    )
+    if is_admin and not actor_super:
+        raise HTTPException(status_code=403, detail="운영관리자는 관리자 계정을 생성할 수 없습니다.")
+    if not is_admin:
+        admin_scope = ""
     is_active = 1 if _clean_bool(payload.get("is_active"), default=True) else 0
     try:
         user = create_staff_user(
@@ -1778,6 +2464,7 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
             password_hash=hash_password(password),
             is_admin=is_admin,
             is_site_admin=is_site_admin,
+            admin_scope=admin_scope,
             is_active=is_active,
         )
     except Exception as e:
@@ -1790,9 +2477,11 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
 @router.patch("/users/{user_id}")
 def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Body(...)):
     actor, _token = _require_admin(request)
+    actor_super = _is_super_admin(actor)
     current = get_staff_user(user_id)
     if not current:
         raise HTTPException(status_code=404, detail="user not found")
+    current_admin_scope = _admin_scope_from_user(current)
 
     login_id = _clean_login_id(payload.get("login_id", current.get("login_id")))
     name = _clean_name(payload.get("name", current.get("name")))
@@ -1801,7 +2490,20 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
     site_code = _clean_site_code(payload["site_code"] if "site_code" in payload else current.get("site_code"), required=False)
     site_name = _clean_optional_text(payload["site_name"] if "site_name" in payload else current.get("site_name"), 80)
     if site_name:
-        site_code = _resolve_site_code_for_site(site_name, site_code)
+        try:
+            site_code = _resolve_site_code_for_site(
+                site_name,
+                site_code,
+                allow_create=actor_super,
+                allow_remap=False,
+            )
+        except HTTPException as e:
+            if e.status_code == 404 and not actor_super:
+                raise HTTPException(
+                    status_code=403,
+                    detail="운영관리자는 기존 단지코드만 사용할 수 있습니다. 최고관리자에게 등록 요청하세요.",
+                ) from e
+            raise
     address = _clean_optional_text(payload["address"] if "address" in payload else current.get("address"), 200)
     office_phone = _normalize_phone(
         payload["office_phone"] if "office_phone" in payload else current.get("office_phone"),
@@ -1815,24 +2517,43 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
     )
     note = _clean_optional_text(payload["note"] if "note" in payload else current.get("note"), 200)
 
-    is_admin, is_site_admin, _permission_level = _resolve_permission_flags(
+    is_admin, is_site_admin, _permission_level, admin_scope = _resolve_permission_flags(
         payload,
         default_admin=bool(current.get("is_admin")),
         default_site_admin=bool(current.get("is_site_admin")),
+        default_admin_scope=current_admin_scope,
     )
+    if not is_admin:
+        admin_scope = ""
     is_active = (
         _clean_bool(payload["is_active"], default=bool(current.get("is_active")))
         if "is_active" in payload
         else bool(current.get("is_active"))
     )
 
+    if not actor_super:
+        if bool(current.get("is_admin")):
+            raise HTTPException(status_code=403, detail="운영관리자는 관리자 계정을 수정할 수 없습니다.")
+        if is_admin:
+            raise HTTPException(status_code=403, detail="운영관리자는 관리자 권한을 부여할 수 없습니다.")
+
     if int(actor["id"]) == int(user_id) and not is_admin:
         raise HTTPException(status_code=400, detail="cannot remove your own admin permission")
     if int(actor["id"]) == int(user_id) and not is_active:
         raise HTTPException(status_code=400, detail="cannot deactivate your own account")
+    if int(actor["id"]) == int(user_id) and _is_super_admin(actor) and (not is_admin or admin_scope != "super_admin"):
+        raise HTTPException(status_code=400, detail="cannot remove your own super admin scope")
 
     if bool(current.get("is_admin")) and not is_admin and bool(current.get("is_active")) and count_staff_admins(active_only=True) <= 1:
         raise HTTPException(status_code=400, detail="at least one active admin is required")
+    if (
+        bool(current.get("is_admin"))
+        and current_admin_scope == "super_admin"
+        and bool(current.get("is_active"))
+        and (not is_admin or admin_scope != "super_admin")
+        and count_super_admins(active_only=True) <= 1
+    ):
+        raise HTTPException(status_code=400, detail="at least one active super admin is required")
 
     try:
         user = update_staff_user(
@@ -1849,6 +2570,7 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
             note=note,
             is_admin=1 if is_admin else 0,
             is_site_admin=1 if is_site_admin else 0,
+            admin_scope=admin_scope,
             is_active=1 if is_active else 0,
         )
     except Exception as e:
@@ -1874,14 +2596,20 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
 @router.delete("/users/{user_id}")
 def api_users_delete(request: Request, user_id: int):
     actor, _token = _require_admin(request)
+    actor_super = _is_super_admin(actor)
     if int(actor["id"]) == int(user_id):
         raise HTTPException(status_code=400, detail="cannot delete your own account")
 
     target = get_staff_user(user_id)
     if not target:
         return {"ok": False}
+    target_scope = _admin_scope_from_user(target)
+    if bool(target.get("is_admin")) and not actor_super:
+        raise HTTPException(status_code=403, detail="운영관리자는 관리자 계정을 삭제할 수 없습니다.")
     if bool(target.get("is_admin")) and bool(target.get("is_active")) and count_staff_admins(active_only=True) <= 1:
         raise HTTPException(status_code=400, detail="at least one active admin is required")
+    if target_scope == "super_admin" and bool(target.get("is_active")) and count_super_admins(active_only=True) <= 1:
+        raise HTTPException(status_code=400, detail="at least one active super admin is required")
 
     revoke_all_user_sessions(int(user_id))
     ok = delete_staff_user(user_id)
