@@ -1292,7 +1292,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
   </style>
 </head>
 <body>
-  <main class="wrap" data-build="admin2-20260212-bootfix">
+  <main class="wrap">
     <section class="card">
       <div class="head">
         <div>
