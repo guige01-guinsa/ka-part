@@ -1062,8 +1062,9 @@
     });
     $("#btnParking")?.addEventListener("click", () => {
       const run = async () => {
-        const siteName = getSiteNameRaw() || getSiteName();
-        const siteCode = getSiteCodeRaw() || getSiteCode();
+        const identity = await syncSiteIdentity({ requireInput: false });
+        const siteName = String(identity.site_name || getSiteNameRaw() || getSiteName()).trim();
+        const siteCode = String(identity.site_code || getSiteCodeRaw() || getSiteCode()).trim().toUpperCase();
         const qs = buildSiteQuery(siteName, siteCode);
         const endpoint = qs ? `/api/parking/context?${qs}` : "/api/parking/context";
         const data = await jfetch(endpoint);
@@ -1072,7 +1073,6 @@
       };
       run().catch((err) => {
         alert("주차관리 접속 오류: " + err.message);
-        window.location.href = "/parking/admin2";
       });
     });
     $("#btnLogout")?.addEventListener("click", () => {

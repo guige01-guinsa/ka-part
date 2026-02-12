@@ -146,6 +146,8 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
       }};
       const TOKEN_KEY = "ka_part_auth_token_v1";
       const USER_KEY = "ka_part_auth_user_v1";
+      const SITE_NAME_KEY = "ka_current_site_name_v1";
+      const SITE_CODE_KEY = "ka_current_site_code_v1";
       const readStore = (store, key) => {{
         try {{
           return (store.getItem(key) || "").trim();
@@ -158,6 +160,21 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
         try {{ sessionStorage.removeItem(USER_KEY); }} catch (_e) {{}}
         try {{ localStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
         try {{ localStorage.removeItem(USER_KEY); }} catch (_e) {{}}
+      }};
+      const readSiteValue = (storageKey, queryKey) => {{
+        const fromSession = readStore(sessionStorage, storageKey);
+        if (fromSession) return fromSession;
+        const fromLocal = readStore(localStorage, storageKey);
+        if (fromLocal) {{
+          try {{ sessionStorage.setItem(storageKey, fromLocal); }} catch (_e) {{}}
+          return fromLocal;
+        }}
+        try {{
+          const u = new URL(window.location.href);
+          return (u.searchParams.get(queryKey) || "").trim();
+        }} catch (_e) {{
+          return "";
+        }}
       }};
       let token = readStore(sessionStorage, TOKEN_KEY);
       if (!token) {{
@@ -176,7 +193,13 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
       try {{
         const headers = {{}};
         if (token) headers.Authorization = "Bearer " + token;
-        const res = await fetch("/api/parking/context", {{
+        const siteName = readSiteValue(SITE_NAME_KEY, "site_name");
+        const siteCode = readSiteValue(SITE_CODE_KEY, "site_code").toUpperCase();
+        const siteQs = new URLSearchParams();
+        if (siteName) siteQs.set("site_name", siteName);
+        if (siteCode) siteQs.set("site_code", siteCode);
+        const endpoint = siteQs.toString() ? "/api/parking/context?" + siteQs.toString() : "/api/parking/context";
+        const res = await fetch(endpoint, {{
           method: "GET",
           headers
         }});
