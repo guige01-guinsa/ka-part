@@ -1051,7 +1051,11 @@
     });
     $("#btnParking")?.addEventListener("click", () => {
       const run = async () => {
-        const data = await jfetch("/api/parking/context");
+        const siteName = getSiteNameRaw() || getSiteName();
+        const siteCode = getSiteCodeRaw() || getSiteCode();
+        const qs = buildSiteQuery(siteName, siteCode);
+        const endpoint = qs ? `/api/parking/context?${qs}` : "/api/parking/context";
+        const data = await jfetch(endpoint);
         const url = data && data.url ? String(data.url) : "/parking/admin2";
         window.location.href = url;
       };

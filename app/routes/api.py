@@ -806,22 +806,55 @@ def health():
 
 
 @router.get("/parking/context")
-def parking_context(request: Request):
+def parking_context(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+):
     user, _token = _require_auth(request)
     permission_level = _permission_level_from_user(user)
-    site_code = _clean_site_code(user.get("site_code"), required=False)
-    if not site_code:
-        site_name = _resolve_allowed_site_name(user, "", required=False)
-        site_code = _resolve_site_code_for_site(site_name, "")
-        if int(user.get("id") or 0) > 0 and site_code:
-            set_staff_user_site_code(int(user["id"]), site_code)
-    if not site_code:
+
+    clean_site_name, clean_site_code = _resolve_main_site_target(
+        user,
+        site_name,
+        site_code,
+        required=False,
+    )
+    clean_site_name = _clean_site_name(clean_site_name, required=False)
+    clean_site_code = _clean_site_code(clean_site_code, required=False)
+
+    if clean_site_code and not clean_site_name:
+        mapped = find_site_name_by_code(clean_site_code)
+        if mapped:
+            clean_site_name = _clean_site_name(mapped, required=True)
+
+    if clean_site_name and not clean_site_code:
+        clean_site_code = _resolve_site_code_for_site(clean_site_name, "")
+
+    # Fallback: legacy sessions may still miss site_code.
+    if not clean_site_code:
+        clean_site_code = _clean_site_code(user.get("site_code"), required=False)
+        if clean_site_code and not clean_site_name:
+            mapped = find_site_name_by_code(clean_site_code)
+            if mapped:
+                clean_site_name = _clean_site_name(mapped, required=True)
+
+    if not clean_site_code:
         raise HTTPException(status_code=403, detail="site_code is required for parking access")
+
+    if not clean_site_name:
+        clean_site_name = _clean_site_name(user.get("site_name"), required=False)
+
+    uid = int(user.get("id") or 0)
+    user_site_code = _clean_site_code(user.get("site_code"), required=False)
+    if uid > 0 and int(user.get("is_admin") or 0) != 1 and not user_site_code:
+        set_staff_user_site_code(uid, clean_site_code)
+
     serializer = URLSafeTimedSerializer(_parking_context_secret(), salt="parking-context")
     ctx = serializer.dumps(
         {
-            "site_code": site_code,
-            "site_name": _clean_site_name(user.get("site_name"), required=False),
+            "site_code": clean_site_code,
+            "site_name": clean_site_name,
             "permission_level": permission_level,
             "login_id": _clean_login_id(user.get("login_id") or "ka-part-user"),
             "user_name": _clean_name(user.get("name") or user.get("login_id") or "사용자"),
@@ -837,7 +870,8 @@ def parking_context(request: Request):
     return {
         "ok": True,
         "url": parking_url,
-        "site_code": site_code,
+        "site_code": clean_site_code,
+        "site_name": clean_site_name,
         "permission_level": permission_level,
         "expires_in": PARKING_CONTEXT_MAX_AGE,
     }
