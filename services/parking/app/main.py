@@ -1309,6 +1309,12 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
     th, td { border:1px solid var(--line); padding:7px 8px; text-align:left; vertical-align:top; }
     th { background:#0f2431; color:#cae2ef; }
+    .table-scroll { border:1px solid var(--line); border-radius:10px; overflow-x:auto; overflow-y:visible; margin-top:8px; }
+    .table-scroll table { margin-top:0; border-collapse:separate; border-spacing:0; min-width:920px; }
+    .table-scroll th, .table-scroll td { border-right:0; border-bottom:0; }
+    .table-scroll tr > *:last-child { border-right:1px solid var(--line); }
+    .table-scroll tbody tr:last-child > * { border-bottom:1px solid var(--line); }
+    #tbVehicles thead th { position: sticky; top: 0; z-index: 2; }
     tr.sel { background:rgba(29,78,216,.25); }
     .msg { min-height:22px; margin-top:8px; color:#b8d7e8; white-space:pre-wrap; }
     .msg.ok { color:#8ee6a6; }
@@ -1408,21 +1414,23 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         </div>
       </div>
       <div class="msg" id="msgImport"></div>
-      <table id="tbVehicles">
-        <thead>
-          <tr>
-            <th>차량번호</th>
-            <th>등록상태</th>
-            <th>동호수</th>
-            <th>소유자</th>
-            <th>적용시작일</th>
-            <th>적용종료일</th>
-            <th>비고</th>
-            <th>갱신시각</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div id="vehicleTableWrap" class="table-scroll">
+        <table id="tbVehicles">
+          <thead>
+            <tr>
+              <th>차량번호</th>
+              <th>등록상태</th>
+              <th>동호수</th>
+              <th>소유자</th>
+              <th>적용시작일</th>
+              <th>적용종료일</th>
+              <th>비고</th>
+              <th>갱신시각</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="card">
@@ -1575,9 +1583,14 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     function renderVehicles(items){
       state.vehicles = items || [];
       const tbody = qs("#tbVehicles tbody");
+      const wrap = $("vehicleTableWrap");
       if (!tbody) return;
       if (!items || !items.length){
         tbody.innerHTML = `<tr><td colspan="8">차량 데이터가 없습니다.</td></tr>`;
+        if (wrap) {
+          wrap.style.maxHeight = "none";
+          wrap.style.overflowY = "visible";
+        }
         return;
       }
       tbody.innerHTML = items.map((it) => `
@@ -1592,6 +1605,21 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
           <td>${esc(it.updated_at || "-")}</td>
         </tr>
       `).join("");
+
+      if (wrap) {
+        if (items.length > 15) {
+          const headerRow = qs("#tbVehicles thead tr");
+          const sampleRow = tbody.querySelector("tr[data-plate]");
+          const headerHeight = headerRow ? Math.ceil(headerRow.getBoundingClientRect().height || 38) : 38;
+          const rowHeight = sampleRow ? Math.ceil(sampleRow.getBoundingClientRect().height || 36) : 36;
+          const maxHeight = headerHeight + (rowHeight * 15) + 2;
+          wrap.style.maxHeight = `${maxHeight}px`;
+          wrap.style.overflowY = "auto";
+        } else {
+          wrap.style.maxHeight = "none";
+          wrap.style.overflowY = "visible";
+        }
+      }
 
       tbody.querySelectorAll("tr[data-plate]").forEach((tr) => {
         tr.addEventListener("click", () => {
