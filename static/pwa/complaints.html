@@ -4,7 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>민원 처리</title>
-  <link rel="stylesheet" href="/pwa/complaints.css?v=20260212a" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
+  />
+  <link rel="stylesheet" href="/pwa/complaints.css?v=20260213a" />
 </head>
 <body>
   <header class="top">
@@ -95,7 +99,23 @@
 
     <section class="card">
       <h2>민원 상세</h2>
-      <div id="detailBox" class="detail">목록에서 민원을 선택하세요.</div>
+      <div id="detailSummary" class="detail">목록에서 민원을 선택하세요.</div>
+
+      <h3>상태 타임라인</h3>
+      <div id="timelineList" class="timeline-list">
+        <div class="detail muted">타임라인이 없습니다.</div>
+      </div>
+
+      <h3>댓글/답변</h3>
+      <div id="commentList" class="timeline-list">
+        <div class="detail muted">댓글이 없습니다.</div>
+      </div>
+
+      <h3>첨부/작업/방문</h3>
+      <div id="metaList" class="timeline-list">
+        <div class="detail muted">상세 데이터가 없습니다.</div>
+      </div>
+
       <div class="grid">
         <label class="field">
           <span>추가 문의/답변</span>
@@ -216,6 +236,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/complaints.js?v=20260212a"></script>
+  <script src="/pwa/complaints.js?v=20260213a"></script>
 </body>
 </html>

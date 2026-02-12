@@ -37,3 +37,21 @@ Use existing session token:
 
 - SQLite tables are auto-created in `data/ka.db` by `app/complaints_db.py`.
 - PostgreSQL DDL reference: `sql/postgres/20260212_complaints_v1.sql`.
+
+## Resident PWA
+
+- URL: `/pwa/complaints.html`
+- Features:
+  - complaint submit (common/private/emergency)
+  - my complaint list + status filter
+  - complaint detail timeline (status history)
+  - comment thread
+  - admin processing panel (visible to admin/site_admin only)
+
+## Security notes
+
+- Client-side CSP is applied in `complaints.html`.
+- Attachment URLs are validated on both client and server:
+  - only `http/https`
+  - max 10 URLs
+  - max 500 chars per URL

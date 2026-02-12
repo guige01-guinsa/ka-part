@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+import urllib.parse
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -21,6 +22,8 @@ PRIORITY_VALUES = {"LOW", "NORMAL", "HIGH", "URGENT"}
 RESOLUTION_VALUES = {"REPAIR", "GUIDANCE_ONLY", "EXTERNAL_VENDOR"}
 VISIT_REASON_VALUES = {"FIRE_INSPECTION", "NEIGHBOR_DAMAGE", "EMERGENCY_INFRA"}
 WORK_ORDER_STATUS_VALUES = {"OPEN", "DISPATCHED", "DONE", "CANCELED"}
+MAX_ATTACHMENT_URLS = 10
+MAX_ATTACHMENT_URL_LENGTH = 500
 
 
 def _connect() -> sqlite3.Connection:
@@ -48,6 +51,24 @@ def _clean_enum(value: Any, allowed: set[str], field: str, *, required: bool = T
     if txt not in allowed:
         raise ValueError(f"{field} must be one of: {', '.join(sorted(allowed))}")
     return txt
+
+
+def _clean_attachment_urls(values: Optional[List[str]]) -> List[str]:
+    rows = [str(x or "").strip() for x in list(values or []) if str(x or "").strip()]
+    if len(rows) > MAX_ATTACHMENT_URLS:
+        raise ValueError(f"attachments length must be <= {MAX_ATTACHMENT_URLS}")
+    out: List[str] = []
+    for raw in rows:
+        if len(raw) > MAX_ATTACHMENT_URL_LENGTH:
+            raise ValueError(f"attachment url length must be <= {MAX_ATTACHMENT_URL_LENGTH}")
+        parsed = urllib.parse.urlparse(raw)
+        scheme = str(parsed.scheme or "").strip().lower()
+        if scheme not in {"http", "https"}:
+            raise ValueError("attachment url scheme must be http or https")
+        if not str(parsed.netloc or "").strip():
+            raise ValueError("attachment url host is required")
+        out.append(raw)
+    return out
 
 
 def _ensure_schema(con: sqlite3.Connection) -> None:
@@ -508,6 +529,7 @@ def create_complaint(
     clean_site_code = _clean_text(site_code, required=False, max_len=32, field="site_code").upper()
     clean_site_name = _clean_text(site_name, required=False, max_len=80, field="site_name")
     clean_unit = _clean_text(unit_label, required=False, max_len=80, field="unit_label")
+    clean_attachments = _clean_attachment_urls(attachment_urls)
 
     if force_emergency:
         clean_scope = "EMERGENCY"
@@ -576,10 +598,7 @@ def create_complaint(
         ticket_no = _ticket_no(complaint_id)
         con.execute("UPDATE complaints SET ticket_no=? WHERE id=?", (ticket_no, complaint_id))
 
-        for raw_url in list(attachment_urls or []):
-            clean_url = str(raw_url or "").strip()
-            if not clean_url:
-                continue
+        for clean_url in clean_attachments:
             con.execute(
                 """
                 INSERT INTO complaint_attachments(complaint_id, file_url, mime_type, size_bytes, created_at)

@@ -205,6 +205,48 @@ body {
   color: var(--muted);
 }
 
+.timeline-list {
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--bg-soft) 80%, black 20%);
+}
+
+.timeline-item .line1 {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.timeline-item .line1 .status {
+  font-size: 12px;
+  font-weight: 800;
+  color: #d8e7ff;
+}
+
+.timeline-item .line1 .time {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.timeline-item .line2 {
+  font-size: 12px;
+  color: #d9e8fb;
+}
+
+.timeline-item .line3 {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
 .hidden {
   display: none;
 }
