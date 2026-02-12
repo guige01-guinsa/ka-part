@@ -41,6 +41,16 @@ body {
 .userbar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.btn-actions-toggle {
+  display: none;
+}
+
+.actions-wrap {
   margin-bottom: 8px;
 }
 
@@ -324,6 +334,24 @@ body {
 }
 
 @media (max-width: 760px) {
+  .btn-actions-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .actions-wrap {
+    max-height: min(30vh, 260px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    padding-right: 2px;
+  }
+
+  .top.mobile-actions-collapsed .actions-wrap {
+    display: none;
+  }
+
   .filters {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

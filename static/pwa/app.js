@@ -83,6 +83,7 @@
   const HOME_DRAFT_KEY = "ka_home_draft_v2";
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
+  const MOBILE_ACTIONS_COLLAPSED_KEY = "ka_mobile_actions_collapsed_v1";
   const DEFAULT_SITE_NAME = "미지정단지";
 
   let TABS = [];
@@ -91,6 +92,7 @@
   let authUser = null;
   let maintenancePollTimer = null;
   let reloginByConflictInProgress = false;
+  let mobileActionsCollapsed = true;
 
   function hasAdminPermission(user) {
     return !!(user && user.is_admin);
@@ -161,6 +163,73 @@
     el.textContent = "실행여부: 대기";
     el.classList.remove("running");
     el.classList.add("idle");
+  }
+
+  function isMobileActionViewport() {
+    return window.matchMedia("(max-width: 760px)").matches;
+  }
+
+  function readMobileActionsPreference() {
+    try {
+      const raw = String(localStorage.getItem(MOBILE_ACTIONS_COLLAPSED_KEY) || "").trim().toLowerCase();
+      if (raw === "false" || raw === "0" || raw === "off" || raw === "no") return false;
+      if (raw === "true" || raw === "1" || raw === "on" || raw === "yes") return true;
+    } catch (_e) {}
+    return true;
+  }
+
+  function writeMobileActionsPreference(collapsed) {
+    try {
+      localStorage.setItem(MOBILE_ACTIONS_COLLAPSED_KEY, collapsed ? "true" : "false");
+    } catch (_e) {}
+  }
+
+  function applyMobileActionsState({ persist = false } = {}) {
+    const topEl = document.querySelector(".top");
+    const wrapEl = $("#actionsWrap");
+    const toggleEl = $("#btnToggleActions");
+    if (!topEl || !wrapEl || !toggleEl) return;
+
+    if (!isMobileActionViewport()) {
+      topEl.classList.remove("mobile-actions-collapsed");
+      wrapEl.hidden = false;
+      toggleEl.setAttribute("aria-expanded", "true");
+      toggleEl.textContent = "버튼숨기기";
+      syncStickyOffset();
+      return;
+    }
+
+    const collapsed = !!mobileActionsCollapsed;
+    topEl.classList.toggle("mobile-actions-collapsed", collapsed);
+    wrapEl.hidden = collapsed;
+    toggleEl.setAttribute("aria-expanded", String(!collapsed));
+    toggleEl.textContent = collapsed ? "버튼열기" : "버튼숨기기";
+    if (persist) writeMobileActionsPreference(collapsed);
+    syncStickyOffset();
+  }
+
+  function wireMobileActionsToggle() {
+    const toggleEl = $("#btnToggleActions");
+    const wrapEl = $("#actionsWrap");
+    if (!toggleEl || !wrapEl) return;
+
+    mobileActionsCollapsed = readMobileActionsPreference();
+    applyMobileActionsState();
+
+    toggleEl.addEventListener("click", () => {
+      mobileActionsCollapsed = !mobileActionsCollapsed;
+      applyMobileActionsState({ persist: true });
+    });
+
+    wrapEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button.btn");
+      if (!btn) return;
+      if (!isMobileActionViewport()) return;
+      requestAnimationFrame(() => {
+        mobileActionsCollapsed = true;
+        applyMobileActionsState({ persist: true });
+      });
+    });
   }
 
   function ymdToday() {
@@ -979,8 +1048,9 @@
     if (de && !de.value) de.value = today;
 
     initAutoAdvance();
+    wireMobileActionsToggle();
     syncStickyOffset();
-    window.addEventListener("resize", syncStickyOffset);
+    window.addEventListener("resize", () => applyMobileActionsState());
 
     $("#tabs")?.addEventListener("click", (e) => {
       const btn = e.target.closest(".tabbtn");

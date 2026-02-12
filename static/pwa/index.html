@@ -5,29 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <title>아파트 시설관리</title>
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=2">
-  <link rel="stylesheet" href="/pwa/styles.css?v=20260211b">
+  <link rel="stylesheet" href="/pwa/styles.css?v=20260212c">
 </head>
 <body>
   <header class="top">
     <div class="title">아파트 시설관리</div>
     <div class="userbar">
       <span id="currentUser" class="userchip">미로그인</span>
+      <button id="btnToggleActions" class="btn ghost btn-actions-toggle" type="button" aria-controls="actionsWrap" aria-expanded="false">버튼열기</button>
     </div>
 
-    <div class="actions">
-      <button id="btnPrev" class="btn ghost" title="이전 날짜">◀</button>
-      <button id="btnLoad" class="btn">기간조회</button>
-      <button id="btnNext" class="btn ghost" title="다음 날짜">▶</button>
-      <button id="btnExport" class="btn">엑셀</button>
-      <button id="btnPdf" class="btn">PDF</button>
-      <button id="btnUsers" class="btn">사용자관리</button>
-      <button id="btnSpecEnv" class="btn">제원설정</button>
-      <button id="btnParking" class="btn">주차관리</button>
-      <button id="btnBackup" class="btn">DB백업</button>
-      <button id="btnNoticeQna" class="btn">공지/질문</button>
-      <button id="btnSave" class="btn primary">저장</button>
-      <button id="btnDelete" class="btn danger">삭제</button>
-      <button id="btnLogout" class="btn">로그아웃</button>
+    <div id="actionsWrap" class="actions-wrap">
+      <div class="actions">
+        <button id="btnPrev" class="btn ghost" title="이전 날짜">◀</button>
+        <button id="btnLoad" class="btn">기간조회</button>
+        <button id="btnNext" class="btn ghost" title="다음 날짜">▶</button>
+        <button id="btnExport" class="btn">엑셀</button>
+        <button id="btnPdf" class="btn">PDF</button>
+        <button id="btnUsers" class="btn">사용자관리</button>
+        <button id="btnSpecEnv" class="btn">제원설정</button>
+        <button id="btnParking" class="btn">주차관리</button>
+        <button id="btnBackup" class="btn">DB백업</button>
+        <button id="btnNoticeQna" class="btn">공지/질문</button>
+        <button id="btnSave" class="btn primary">저장</button>
+        <button id="btnDelete" class="btn danger">삭제</button>
+        <button id="btnLogout" class="btn">로그아웃</button>
+      </div>
     </div>
     <div id="maintenanceBanner" class="maintenance-banner" role="status" aria-live="polite"></div>
 
@@ -70,7 +73,7 @@
   <div class="toast" id="toast"></div>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/app.js?v=20260212b"></script>
+  <script src="/pwa/app.js?v=20260212c"></script>
 </body>
 </html>
 
