@@ -52,6 +52,7 @@ Use existing session token:
     - B: search + auto normalization (`101-1203`, `102동 904호`, `1203`)
     - C: floor x line touch grid
     - smart recommended mode auto-switch
+    - default range: `1~60층`, `01~06라인`
 
 ## Security notes
 

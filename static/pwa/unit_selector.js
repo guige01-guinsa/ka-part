@@ -10,8 +10,8 @@
   const MAX_RECENT = 8;
   const MAX_FAVORITES = 12;
   const DEFAULT_BUILDINGS = Array.from({ length: 20 }, (_x, i) => String(101 + i));
-  const DEFAULT_LINES = ["01", "02", "03", "04"];
-  const DEFAULT_FLOORS = Array.from({ length: 25 }, (_x, i) => i + 1);
+  const DEFAULT_LINES = ["01", "02", "03", "04", "05", "06"];
+  const DEFAULT_FLOORS = Array.from({ length: 60 }, (_x, i) => i + 1);
 
   const esc = (v) =>
     String(v || "")
@@ -436,7 +436,7 @@
               </label>
               <label>
                 <span>그리드 정보</span>
-                <input type="text" value="층(세로) x 라인(가로)" readonly />
+                <input type="text" value="1~60층(세로) x 01~06라인(가로)" readonly />
               </label>
             </div>
             <div class="grid-wrap">
