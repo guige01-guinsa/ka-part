@@ -100,3 +100,4 @@ pwsh -File ops\stop_stack.ps1
 - 시설관리 사용자 매뉴얼: `docs/USER_MANUAL_FACILITY_MANAGER_KO.md`
 - 주차 통합 운영: `docs/PARKING_INTEGRATION.md`
 - Render 배포/환경변수 체크리스트: `docs/DEPLOY_RENDER.md`
+- 민원 처리 API: `docs/COMPLAINTS_API.md`

@@ -12,12 +12,14 @@ from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .db import init_db
+from .complaints_db import init_complaints_db
 from .backup_manager import (
     get_maintenance_status,
     start_backup_scheduler,
     stop_backup_scheduler,
 )
 from .routes.api import router as api_router
+from .routes.complaints import router as complaints_router
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -29,6 +31,7 @@ logger = logging.getLogger("ka-part")
 @app.on_event("startup")
 def _startup():
     init_db()
+    init_complaints_db()
     start_backup_scheduler()
 
 
@@ -37,6 +40,7 @@ def _shutdown():
     stop_backup_scheduler()
 
 app.include_router(api_router, prefix="/api")
+app.include_router(complaints_router, prefix="/api/v1")
 
 
 @app.middleware("http")

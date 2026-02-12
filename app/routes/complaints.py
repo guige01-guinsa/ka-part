@@ -1,0 +1,431 @@
+from __future__ import annotations
+
+import os
+from typing import Any, Dict, List, Optional, Tuple
+
+from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel, Field
+
+from ..complaints_db import (
+    SCOPE_VALUES,
+    add_comment,
+    assign_complaint,
+    checkout_visit,
+    complaint_stats,
+    create_complaint,
+    create_notice,
+    create_visit,
+    get_complaint,
+    list_admin_complaints,
+    list_complaint_categories,
+    list_complaints_for_reporter,
+    list_public_faqs,
+    list_public_notices,
+    triage_complaint,
+    update_notice,
+    update_work_order,
+)
+from ..db import get_auth_user_by_token
+
+router = APIRouter()
+AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
+
+
+class ComplaintCreatePayload(BaseModel):
+    category_id: int = Field(..., ge=1)
+    scope: str
+    title: str
+    description: str
+    location_detail: str = ""
+    priority: str = "NORMAL"
+    site_code: str = ""
+    site_name: str = ""
+    unit_label: str = ""
+    attachments: List[str] = Field(default_factory=list)
+
+
+class CommentCreatePayload(BaseModel):
+    comment: str
+
+
+class AdminTriagePayload(BaseModel):
+    scope: str
+    priority: str = "NORMAL"
+    resolution_type: str = "REPAIR"
+    guidance_template_id: Optional[int] = None
+    note: str = ""
+
+
+class AdminAssignPayload(BaseModel):
+    assignee_user_id: int = Field(..., ge=1)
+    scheduled_at: str = ""
+    note: str = ""
+
+
+class WorkOrderPatchPayload(BaseModel):
+    status: str
+    result_note: str = ""
+
+
+class VisitCreatePayload(BaseModel):
+    complaint_id: int = Field(..., ge=1)
+    visit_reason: str
+    result_note: str = ""
+
+
+class VisitCheckoutPayload(BaseModel):
+    result_note: str = ""
+
+
+class NoticeCreatePayload(BaseModel):
+    title: str
+    content: str
+    is_pinned: bool = False
+    publish_now: bool = True
+
+
+class NoticePatchPayload(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    is_pinned: Optional[bool] = None
+    publish_now: bool = False
+
+
+def _extract_access_token(request: Request) -> str:
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+        if token:
+            return token
+    cookie_token = (request.cookies.get(AUTH_COOKIE_NAME) or "").strip()
+    if cookie_token:
+        return cookie_token
+    token = (request.query_params.get("access_token") or "").strip()
+    if token:
+        return token
+    raise HTTPException(status_code=401, detail="auth required")
+
+
+def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
+    token = _extract_access_token(request)
+    user = get_auth_user_by_token(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    return user, token
+
+
+def _require_admin(request: Request) -> Tuple[Dict[str, Any], str]:
+    user, token = _require_auth(request)
+    is_admin = int(user.get("is_admin") or 0) == 1
+    is_site_admin = int(user.get("is_site_admin") or 0) == 1
+    if not (is_admin or is_site_admin):
+        raise HTTPException(status_code=403, detail="admin only")
+    return user, token
+
+
+def _admin_site_scope(user: Dict[str, Any]) -> str:
+    if int(user.get("is_admin") or 0) == 1:
+        return ""
+    return str(user.get("site_code") or "").strip().upper()
+
+
+@router.get("/codes/complaint-categories")
+def get_complaint_categories():
+    return {"ok": True, "items": list_complaint_categories(active_only=True)}
+
+
+@router.get("/notices")
+def get_notices(limit: int = Query(50, ge=1, le=200)):
+    return {"ok": True, "items": list_public_notices(limit=limit)}
+
+
+@router.get("/faqs")
+def get_faqs(limit: int = Query(100, ge=1, le=300)):
+    return {"ok": True, "items": list_public_faqs(limit=limit)}
+
+
+@router.post("/complaints")
+def post_complaint(payload: ComplaintCreatePayload, request: Request):
+    user, _token = _require_auth(request)
+    try:
+        created = create_complaint(
+            reporter_user_id=int(user["id"]),
+            site_code=payload.site_code or str(user.get("site_code") or ""),
+            site_name=payload.site_name or str(user.get("site_name") or ""),
+            unit_label=payload.unit_label,
+            category_id=payload.category_id,
+            scope=payload.scope,
+            title=payload.title,
+            description=payload.description,
+            location_detail=payload.location_detail,
+            priority=payload.priority,
+            attachment_urls=payload.attachments,
+            force_emergency=False,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    message = "Complaint received."
+    if str(created.get("scope")) == "PRIVATE":
+        message = "Private-unit issue: guidance provided, repair not dispatched."
+    return {"ok": True, "message": message, "item": created}
+
+
+@router.post("/emergencies")
+def post_emergency(payload: ComplaintCreatePayload, request: Request):
+    user, _token = _require_auth(request)
+    try:
+        created = create_complaint(
+            reporter_user_id=int(user["id"]),
+            site_code=payload.site_code or str(user.get("site_code") or ""),
+            site_name=payload.site_name or str(user.get("site_name") or ""),
+            unit_label=payload.unit_label,
+            category_id=payload.category_id,
+            scope=payload.scope if payload.scope in SCOPE_VALUES else "EMERGENCY",
+            title=payload.title,
+            description=payload.description,
+            location_detail=payload.location_detail,
+            priority="URGENT",
+            attachment_urls=payload.attachments,
+            force_emergency=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "message": "Emergency complaint received with urgent priority.", "item": created}
+
+
+@router.get("/complaints")
+def get_my_complaints(
+    request: Request,
+    status: str = Query("", description="optional status filter"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    user, _token = _require_auth(request)
+    try:
+        rows = list_complaints_for_reporter(
+            int(user["id"]),
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "items": rows}
+
+
+@router.get("/complaints/{complaint_id}")
+def get_my_complaint(complaint_id: int, request: Request):
+    user, _token = _require_auth(request)
+    item = get_complaint(
+        int(complaint_id),
+        requester_user_id=int(user["id"]),
+        is_admin=(int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1),
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    # Site admins are constrained to their own site_code.
+    if int(user.get("is_admin") or 0) != 1 and int(user.get("is_site_admin") or 0) == 1:
+        site_scope = str(user.get("site_code") or "").strip().upper()
+        if site_scope and str(item.get("site_code") or "").strip().upper() != site_scope:
+            raise HTTPException(status_code=404, detail="complaint not found")
+    return {"ok": True, "item": item}
+
+
+@router.post("/complaints/{complaint_id}/comments")
+def post_comment(complaint_id: int, payload: CommentCreatePayload, request: Request):
+    user, _token = _require_auth(request)
+    item = get_complaint(
+        int(complaint_id),
+        requester_user_id=int(user["id"]),
+        is_admin=(int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1),
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    try:
+        out = add_comment(
+            complaint_id=int(complaint_id),
+            user_id=int(user["id"]),
+            comment=payload.comment,
+            is_internal=False,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "item": out}
+
+
+@router.get("/admin/complaints")
+def admin_get_complaints(
+    request: Request,
+    scope: str = Query(""),
+    status: str = Query(""),
+    site_code: str = Query(""),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    user, _token = _require_admin(request)
+    scoped_site = _admin_site_scope(user)
+    effective_site_code = scoped_site or site_code
+    try:
+        rows = list_admin_complaints(
+            scope=scope,
+            status=status,
+            site_code=effective_site_code,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "items": rows}
+
+
+@router.get("/admin/complaints/{complaint_id}")
+def admin_get_complaint(complaint_id: int, request: Request):
+    user, _token = _require_admin(request)
+    item = get_complaint(int(complaint_id), requester_user_id=int(user["id"]), is_admin=True)
+    if not item:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    scoped_site = _admin_site_scope(user)
+    if scoped_site and str(item.get("site_code") or "").strip().upper() != scoped_site:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    return {"ok": True, "item": item}
+
+
+@router.patch("/admin/complaints/{complaint_id}/triage")
+def admin_triage_complaint(complaint_id: int, payload: AdminTriagePayload, request: Request):
+    user, _token = _require_admin(request)
+    existing = get_complaint(int(complaint_id), requester_user_id=int(user["id"]), is_admin=True)
+    if not existing:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    scoped_site = _admin_site_scope(user)
+    if scoped_site and str(existing.get("site_code") or "").strip().upper() != scoped_site:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    try:
+        out = triage_complaint(
+            complaint_id=int(complaint_id),
+            actor_user_id=int(user["id"]),
+            scope=payload.scope,
+            priority=payload.priority,
+            resolution_type=payload.resolution_type,
+            guidance_template_id=payload.guidance_template_id,
+            note=payload.note,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "item": out}
+
+
+@router.post("/admin/complaints/{complaint_id}/assign")
+def admin_assign_complaint(complaint_id: int, payload: AdminAssignPayload, request: Request):
+    user, _token = _require_admin(request)
+    existing = get_complaint(int(complaint_id), requester_user_id=int(user["id"]), is_admin=True)
+    if not existing:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    scoped_site = _admin_site_scope(user)
+    if scoped_site and str(existing.get("site_code") or "").strip().upper() != scoped_site:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    try:
+        out = assign_complaint(
+            complaint_id=int(complaint_id),
+            actor_user_id=int(user["id"]),
+            assignee_user_id=payload.assignee_user_id,
+            scheduled_at=payload.scheduled_at,
+            note=payload.note,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "item": out}
+
+
+@router.patch("/admin/work-orders/{work_order_id}")
+def admin_patch_work_order(work_order_id: int, payload: WorkOrderPatchPayload, request: Request):
+    user, _token = _require_admin(request)
+    try:
+        out = update_work_order(
+            work_order_id=int(work_order_id),
+            actor_user_id=int(user["id"]),
+            status=payload.status,
+            result_note=payload.result_note,
+        )
+    except ValueError as e:
+        if "not found" in str(e):
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "item": out}
+
+
+@router.post("/admin/visits")
+def admin_create_visit(payload: VisitCreatePayload, request: Request):
+    user, _token = _require_admin(request)
+    existing = get_complaint(int(payload.complaint_id), requester_user_id=int(user["id"]), is_admin=True)
+    if not existing:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    scoped_site = _admin_site_scope(user)
+    if scoped_site and str(existing.get("site_code") or "").strip().upper() != scoped_site:
+        raise HTTPException(status_code=404, detail="complaint not found")
+    try:
+        out = create_visit(
+            complaint_id=int(payload.complaint_id),
+            visitor_user_id=int(user["id"]),
+            visit_reason=payload.visit_reason,
+            result_note=payload.result_note,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "item": out}
+
+
+@router.patch("/admin/visits/{visit_id}/checkout")
+def admin_checkout_visit(visit_id: int, payload: VisitCheckoutPayload, request: Request):
+    _user, _token = _require_admin(request)
+    try:
+        out = checkout_visit(visit_id=int(visit_id), result_note=payload.result_note)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"ok": True, "item": out}
+
+
+@router.post("/admin/notices")
+def admin_create_notice(payload: NoticeCreatePayload, request: Request):
+    user, _token = _require_admin(request)
+    if int(user.get("is_admin") or 0) != 1:
+        raise HTTPException(status_code=403, detail="supervisor admin only")
+    try:
+        out = create_notice(
+            author_user_id=int(user["id"]),
+            title=payload.title,
+            content=payload.content,
+            is_pinned=payload.is_pinned,
+            publish_now=payload.publish_now,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "item": out}
+
+
+@router.patch("/admin/notices/{notice_id}")
+def admin_patch_notice(notice_id: int, payload: NoticePatchPayload, request: Request):
+    user, _token = _require_admin(request)
+    if int(user.get("is_admin") or 0) != 1:
+        raise HTTPException(status_code=403, detail="supervisor admin only")
+    try:
+        out = update_notice(
+            notice_id=int(notice_id),
+            title=payload.title,
+            content=payload.content,
+            is_pinned=payload.is_pinned,
+            publish_now=payload.publish_now,
+        )
+    except ValueError as e:
+        if "not found" in str(e):
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "item": out}
+
+
+@router.get("/admin/stats/complaints")
+def admin_get_stats(request: Request, site_code: str = Query("")):
+    user, _token = _require_admin(request)
+    scoped_site = _admin_site_scope(user)
+    effective_site_code = scoped_site or site_code
+    return {"ok": True, "item": complaint_stats(site_code=effective_site_code)}
+
