@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>민원 처리</title>
+  <link rel="stylesheet" href="/pwa/complaints.css?v=20260212a" />
+</head>
+<body>
+  <header class="top">
+    <div class="title">민원 처리</div>
+    <div class="actions">
+      <a class="btn" href="/pwa/">메인으로</a>
+      <button id="btnReload" class="btn" type="button">새로고침</button>
+      <button id="btnLogout" class="btn" type="button">로그아웃</button>
+    </div>
+    <div id="metaLine" class="meta">로딩 중...</div>
+    <div id="msg" class="msg"></div>
+  </header>
+
+  <main class="main">
+    <section class="card">
+      <h2>민원 접수</h2>
+      <div class="grid two">
+        <label class="field">
+          <span>단지명</span>
+          <input id="siteName" type="text" placeholder="예: OO아파트" />
+        </label>
+        <label class="field">
+          <span>단지코드</span>
+          <input id="siteCode" type="text" maxlength="32" placeholder="예: APT00001" />
+        </label>
+        <label class="field">
+          <span>동/호(선택)</span>
+          <input id="unitLabel" type="text" maxlength="80" placeholder="예: 101-1201" />
+        </label>
+        <label class="field">
+          <span>민원 구분</span>
+          <select id="scopeSelect">
+            <option value="COMMON">공용시설</option>
+            <option value="PRIVATE">세대내부</option>
+            <option value="EMERGENCY">긴급</option>
+          </select>
+        </label>
+        <label class="field grow">
+          <span>카테고리</span>
+          <select id="categorySelect"></select>
+        </label>
+      </div>
+      <div class="grid">
+        <label class="field">
+          <span>제목</span>
+          <input id="titleInput" type="text" maxlength="140" placeholder="예: 지하주차장 조명 점멸" />
+        </label>
+        <label class="field">
+          <span>내용</span>
+          <textarea id="descInput" rows="4" placeholder="상세 내용을 입력하세요"></textarea>
+        </label>
+        <label class="field">
+          <span>위치(선택)</span>
+          <input id="locInput" type="text" maxlength="200" placeholder="예: 103동 지하 B2 3열" />
+        </label>
+        <label class="field">
+          <span>첨부 URL(줄바꿈으로 여러개)</span>
+          <textarea id="attachInput" rows="2" placeholder="https://..."></textarea>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnSubmitComplaint" class="btn primary" type="button">민원 접수</button>
+        <button id="btnSubmitEmergency" class="btn danger" type="button">긴급 접수</button>
+      </div>
+      <div class="hint">세대 내부 수리는 직접 제공하지 않으며 사용 안내 중심으로 처리됩니다.</div>
+    </section>
+
+    <section class="card">
+      <h2>내 민원</h2>
+      <div class="actions">
+        <label class="field inline">
+          <span>상태</span>
+          <select id="myStatusFilter">
+            <option value="">전체</option>
+            <option value="RECEIVED">접수</option>
+            <option value="TRIAGED">분류완료</option>
+            <option value="GUIDANCE_SENT">안내완료</option>
+            <option value="ASSIGNED">배정</option>
+            <option value="IN_PROGRESS">처리중</option>
+            <option value="COMPLETED">완료</option>
+            <option value="CLOSED">종결</option>
+          </select>
+        </label>
+        <button id="btnLoadMine" class="btn" type="button">내 민원 새로고침</button>
+      </div>
+      <div id="myList" class="list"></div>
+    </section>
+
+    <section class="card">
+      <h2>민원 상세</h2>
+      <div id="detailBox" class="detail">목록에서 민원을 선택하세요.</div>
+      <div class="grid">
+        <label class="field">
+          <span>추가 문의/답변</span>
+          <textarea id="commentInput" rows="2" placeholder="내용 입력"></textarea>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnAddComment" class="btn" type="button">댓글 등록</button>
+      </div>
+    </section>
+
+    <section id="adminSection" class="card hidden">
+      <h2>관리자 처리</h2>
+      <div class="actions">
+        <label class="field inline">
+          <span>구분</span>
+          <select id="adminScopeFilter">
+            <option value="">전체</option>
+            <option value="COMMON">공용</option>
+            <option value="PRIVATE">세대내부</option>
+            <option value="EMERGENCY">긴급</option>
+          </select>
+        </label>
+        <label class="field inline">
+          <span>상태</span>
+          <select id="adminStatusFilter">
+            <option value="">전체</option>
+            <option value="RECEIVED">접수</option>
+            <option value="TRIAGED">분류완료</option>
+            <option value="GUIDANCE_SENT">안내완료</option>
+            <option value="ASSIGNED">배정</option>
+            <option value="IN_PROGRESS">처리중</option>
+            <option value="COMPLETED">완료</option>
+            <option value="CLOSED">종결</option>
+          </select>
+        </label>
+        <button id="btnLoadAdmin" class="btn" type="button">관리자 목록 조회</button>
+        <button id="btnLoadStats" class="btn" type="button">통계 조회</button>
+      </div>
+      <div id="adminList" class="list"></div>
+      <div id="statsBox" class="detail muted">통계 미조회</div>
+
+      <h3>선택 민원 처리</h3>
+      <div class="grid two">
+        <label class="field">
+          <span>분류(scope)</span>
+          <select id="triageScope">
+            <option value="COMMON">COMMON</option>
+            <option value="PRIVATE">PRIVATE</option>
+            <option value="EMERGENCY">EMERGENCY</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>우선순위</span>
+          <select id="triagePriority">
+            <option value="LOW">LOW</option>
+            <option value="NORMAL" selected>NORMAL</option>
+            <option value="HIGH">HIGH</option>
+            <option value="URGENT">URGENT</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>처리방식</span>
+          <select id="triageResolution">
+            <option value="REPAIR">REPAIR</option>
+            <option value="GUIDANCE_ONLY">GUIDANCE_ONLY</option>
+            <option value="EXTERNAL_VENDOR">EXTERNAL_VENDOR</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>메모</span>
+          <input id="triageNote" type="text" maxlength="2000" placeholder="분류 메모" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnTriage" class="btn primary" type="button">분류 반영</button>
+      </div>
+
+      <div class="grid two">
+        <label class="field">
+          <span>배정할 사용자 ID</span>
+          <input id="assignUserId" type="number" min="1" placeholder="예: 1" />
+        </label>
+        <label class="field">
+          <span>배정 메모</span>
+          <input id="assignNote" type="text" maxlength="2000" placeholder="배정 메모" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnAssign" class="btn" type="button">담당자 배정</button>
+      </div>
+
+      <div class="grid two">
+        <label class="field">
+          <span>작업지시 ID</span>
+          <input id="workOrderId" type="number" min="1" placeholder="상세의 첫 작업지시 ID가 자동 기입됩니다" />
+        </label>
+        <label class="field">
+          <span>작업 상태</span>
+          <select id="workOrderStatus">
+            <option value="OPEN">OPEN</option>
+            <option value="DISPATCHED">DISPATCHED</option>
+            <option value="DONE">DONE</option>
+            <option value="CANCELED">CANCELED</option>
+          </select>
+        </label>
+      </div>
+      <div class="grid">
+        <label class="field">
+          <span>작업 결과 메모</span>
+          <input id="workOrderNote" type="text" maxlength="4000" placeholder="처리 결과" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnPatchWorkOrder" class="btn" type="button">작업 상태 반영</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/pwa/auth.js?v=20260207i"></script>
+  <script src="/pwa/complaints.js?v=20260212a"></script>
+</body>
+</html>

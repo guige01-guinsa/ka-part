@@ -1115,6 +1115,12 @@
       const qs = buildSiteQuery(site, siteCode);
       window.location.href = qs ? `/pwa/spec_env.html?${qs}` : "/pwa/spec_env.html";
     });
+    $("#btnComplaints")?.addEventListener("click", () => {
+      const site = getSiteName();
+      const siteCode = getSiteCode();
+      const qs = buildSiteQuery(site, siteCode);
+      window.location.href = qs ? `/pwa/complaints.html?${qs}` : "/pwa/complaints.html";
+    });
     $("#btnBackup")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
