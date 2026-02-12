@@ -330,11 +330,18 @@ def map_permission_to_role(permission_level: str) -> str:
 
 def resolve_site_scope(request: Request, x_site_code: str | None = None) -> str:
     sess = read_session(request)
-    if sess and sess.get("sc"):
-        return normalize_site_code(str(sess["sc"]))
+    if sess is not None:
+        return _session_site_code(sess)
     if x_site_code:
         return normalize_site_code(x_site_code)
-    return DEFAULT_SITE_CODE
+    raise HTTPException(status_code=400, detail="site_code is required")
+
+
+def _session_site_code(sess: dict[str, Any] | None) -> str:
+    raw = str((sess or {}).get("sc") or "").strip()
+    if raw:
+        return normalize_site_code(raw)
+    raise HTTPException(status_code=403, detail="세션 단지코드가 없습니다. 시설관리에서 다시 접속하세요.")
 
 
 def _is_manager_session(sess: dict[str, Any] | None) -> bool:
@@ -711,7 +718,7 @@ def check_plate_session(
     sess = read_session(request)
     if not sess:
         raise HTTPException(status_code=401, detail="Login required")
-    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    site_code = _session_site_code(sess)
     return check_plate_record(site_code, plate)
 
 class ViolationOut(BaseModel):
@@ -827,7 +834,7 @@ def create_violation_session(request: Request, payload: SessionViolationIn):
     if not sess:
         raise HTTPException(status_code=401, detail="Login required")
 
-    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    site_code = _session_site_code(sess)
     plate = normalize_plate(payload.plate)
     if len(plate) < 4:
         raise HTTPException(status_code=400, detail="plate is too short")
@@ -856,7 +863,7 @@ def list_violations_session(request: Request, limit: int = 20):
     if not sess:
         raise HTTPException(status_code=401, detail="Login required")
 
-    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    site_code = _session_site_code(sess)
     use_limit = max(1, min(int(limit), 100))
     with connect() as con:
         rows = con.execute(
@@ -881,7 +888,7 @@ def list_violations_session(request: Request, limit: int = 20):
 @app.get("/api/session/vehicles")
 def list_vehicles_session(request: Request, q: str = "", limit: int = 200):
     sess = _require_manager_session(request)
-    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    site_code = _session_site_code(sess)
     use_limit = max(1, min(int(limit), 1000))
     q_plate = normalize_plate(q)
     q_text = str(q or "").strip()
@@ -927,7 +934,7 @@ def list_vehicles_session(request: Request, q: str = "", limit: int = 200):
 @app.get("/api/session/system_check")
 def system_check_session(request: Request):
     sess = _require_manager_session(request)
-    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    site_code = _session_site_code(sess)
     role = str(sess.get("r") or "").strip().lower() or "unknown"
 
     try:
@@ -990,7 +997,7 @@ def system_check_session(request: Request):
 @app.post("/api/session/vehicles")
 def create_vehicle_session(request: Request, payload: VehicleUpsertIn):
     sess = _require_manager_session(request)
-    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    site_code = _session_site_code(sess)
     data = _normalize_vehicle_payload(payload)
 
     try:
@@ -1034,7 +1041,7 @@ def create_vehicle_session(request: Request, payload: VehicleUpsertIn):
 @app.put("/api/session/vehicles/{plate}")
 def update_vehicle_session(plate: str, request: Request, payload: VehicleUpsertIn):
     sess = _require_manager_session(request)
-    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    site_code = _session_site_code(sess)
     target_plate = normalize_plate(plate)
     if len(target_plate) < 4:
         raise HTTPException(status_code=400, detail="차량번호 형식이 올바르지 않습니다.")
@@ -1085,7 +1092,7 @@ def update_vehicle_session(plate: str, request: Request, payload: VehicleUpsertI
 @app.delete("/api/session/vehicles/{plate}")
 def delete_vehicle_session(plate: str, request: Request):
     sess = _require_manager_session(request)
-    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    site_code = _session_site_code(sess)
     target_plate = normalize_plate(plate)
     if len(target_plate) < 4:
         raise HTTPException(status_code=400, detail="차량번호 형식이 올바르지 않습니다.")
@@ -1111,7 +1118,7 @@ def delete_vehicle_session(plate: str, request: Request):
 @app.post("/api/session/vehicles/import_excel")
 async def import_vehicles_excel_session(request: Request, file: UploadFile = File(...)):
     sess = _require_manager_session(request)
-    site_code = normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE))
+    site_code = _session_site_code(sess)
     filename = str(file.filename or "").strip()
     if not filename.lower().endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx)만 업로드할 수 있습니다.")
@@ -1923,7 +1930,7 @@ def admin2(request: Request):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     role = str(s.get("r") or "").strip().lower()
-    site_code = normalize_site_code(s.get("sc") or DEFAULT_SITE_CODE)
+    site_code = _session_site_code(s)
     site_name = str(s.get("site_name") or "").strip()
     display_name = str(s.get("display_name") or s.get("u") or "").strip() or "사용자"
     context = {
@@ -1963,7 +1970,9 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     .btn.ghost { background: transparent; color: var(--text); }
     .btn.warn { background: var(--warn); border-color: #b45309; }
     input { width: 100%; background:#0b1f2b; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
-    video { width:100%; border-radius:12px; background:#031017; border:1px solid var(--line); }
+    .camera-wrap { position:relative; margin-top:8px; border-radius:12px; overflow:hidden; border:1px solid var(--line); background:#031017; }
+    video { width:100%; height:min(28vh, 190px); display:block; object-fit:cover; background:#031017; }
+    .plate-guide { position:absolute; left:16%; top:52%; width:68%; height:30%; border:2px dashed rgba(111,190,245,.95); border-radius:10px; box-shadow:0 0 0 9999px rgba(3,16,23,.26); pointer-events:none; }
     .result { border-radius:12px; padding: 10px 12px; border:1px solid var(--line); background:#0a1f2b; }
     .result.ok { border-color: #166534; background: #052112; }
     .result.bad { border-color: #7f1d1d; background: #2d0b0b; }
@@ -1982,12 +1991,16 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
         <a href="./admin2" class="btn ghost">관리화면</a>
       </div>
       <p class="ctx" id="ctxLine">로딩 중...</p>
-      <p class="hint">번호판을 카메라로 촬영하거나 수동 입력 후 조회하세요.</p>
-      <video id="video" playsinline autoplay muted></video>
+      <p class="hint">촬영 저장 없이 현재 카메라 프레임을 메모리에서만 읽어 즉시 분석합니다.</p>
+      <div class="camera-wrap">
+        <video id="video" playsinline autoplay muted></video>
+        <div class="plate-guide" aria-hidden="true"></div>
+      </div>
       <canvas id="canvas" hidden></canvas>
       <div class="row">
         <button id="btnCam" class="btn ghost">카메라 켜기</button>
-        <button id="btnShot" class="btn">캡처 + OCR</button>
+        <button id="btnShot" class="btn">캡처+OCR(번호판영역)</button>
+        <button id="btnAutoScan" class="btn ghost">즉시스캔 시작</button>
       </div>
       <div class="row">
         <input id="plateInput" placeholder="예: 123가4567" />
@@ -2022,9 +2035,21 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
   <script>
   (function(){
     const $ = (id) => document.getElementById(id);
-    const state = { stream: null, last: null };
+    const state = {
+      stream: null,
+      last: null,
+      autoScan: false,
+      autoScanTimer: null,
+      ocrBusy: false,
+      lastAutoPlate: "",
+      lastAutoAt: 0,
+    };
     const ILLEGAL = new Set(["UNREGISTERED", "BLOCKED", "EXPIRED"]);
     const VERDICT_KO = { OK:"정상등록", UNREGISTERED:"미등록", BLOCKED:"차단차량", EXPIRED:"기간만료", TEMP:"임시등록" };
+    const ROI_RECT = { x: 0.16, y: 0.52, w: 0.68, h: 0.30 };
+    const AUTO_SCAN_INTERVAL_MS = 1400;
+    const AUTO_SCAN_DEDUP_MS = 4500;
+    const OCR_PLATE_WHITELIST = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ가나다라마바사아자차카타파하거너더러머버서어저처커터퍼허고노도로모보소오조초코토포호";
     const boot = window.__BOOT__ || {};
 
     const video = $("video");
@@ -2049,9 +2074,12 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
 
     function findPlate(raw) {
       const txt = norm(raw);
-      const m = txt.match(/\d{2,3}[가-힣A-Z]\d{4}/g);
-      if (m && m.length) return m[0];
-      return txt;
+      if (!txt) return "";
+      const ko = txt.match(/\d{2,3}[가-힣]\d{4}/g);
+      if (ko && ko.length) return ko[0];
+      const latin = txt.match(/\d{2,3}[A-Z]\d{4}/g);
+      if (latin && latin.length) return latin[0];
+      return "";
     }
 
     function setResult(kind, text) {
@@ -2073,27 +2101,120 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       setHint("카메라 활성화");
     }
 
-    async function runOcr() {
-      if (!window.Tesseract || !window.Tesseract.recognize) {
-        throw new Error("OCR 엔진 로딩 중입니다.");
-      }
+    function _clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function capturePlateRoiCanvas() {
       const w = video.videoWidth || 1280;
       const h = video.videoHeight || 720;
+      if (!w || !h) throw new Error("카메라 프레임이 아직 준비되지 않았습니다.");
+
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext("2d");
       ctx.drawImage(video, 0, 0, w, h);
-      setHint("OCR 처리 중...");
-      const ocr = await window.Tesseract.recognize(canvas, "kor+eng");
-      const plate = findPlate((ocr && ocr.data && ocr.data.text) || "");
-      if (!plate) throw new Error("번호판 인식 실패");
-      setHint(`OCR 추출: ${plate}`);
-      return plate;
+
+      const rx = _clamp(Math.floor(w * ROI_RECT.x), 0, w - 2);
+      const ry = _clamp(Math.floor(h * ROI_RECT.y), 0, h - 2);
+      const rw = _clamp(Math.floor(w * ROI_RECT.w), 2, w - rx);
+      const rh = _clamp(Math.floor(h * ROI_RECT.h), 2, h - ry);
+
+      const roi = document.createElement("canvas");
+      roi.width = rw * 2;
+      roi.height = rh * 2;
+      const rctx = roi.getContext("2d");
+      rctx.imageSmoothingEnabled = false;
+      rctx.drawImage(canvas, rx, ry, rw, rh, 0, 0, roi.width, roi.height);
+      return roi;
+    }
+
+    function buildOcrVariant(srcCanvas, { invert = false } = {}) {
+      const out = document.createElement("canvas");
+      out.width = srcCanvas.width;
+      out.height = srcCanvas.height;
+      const ctx = out.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(srcCanvas, 0, 0);
+      const img = ctx.getImageData(0, 0, out.width, out.height);
+      const data = img.data;
+      const pxCount = data.length / 4;
+      let sumGray = 0;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+        sumGray += gray;
+      }
+
+      const avg = sumGray / Math.max(1, pxCount);
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+        const contrast = _clamp((gray - avg) * 1.85 + 128, 0, 255);
+        let bw = contrast > 132 ? 255 : 0;
+        if (invert) bw = 255 - bw;
+        data[i] = bw;
+        data[i + 1] = bw;
+        data[i + 2] = bw;
+      }
+      ctx.putImageData(img, 0, 0);
+      return out;
+    }
+
+    async function recognizePlateFromCanvas(targetCanvas, passName) {
+      const out = await window.Tesseract.recognize(targetCanvas, "kor+eng", {
+        tessedit_pageseg_mode: "7",
+        preserve_interword_spaces: "0",
+        tessedit_char_whitelist: OCR_PLATE_WHITELIST,
+        user_defined_dpi: "300",
+      });
+      const text = String((out && out.data && out.data.text) || "");
+      const plate = findPlate(text);
+      const confidence = Number((out && out.data && out.data.confidence) || 0);
+      return { plate, confidence, pass: passName };
+    }
+
+    async function runOcr() {
+      if (!window.Tesseract || !window.Tesseract.recognize) {
+        throw new Error("OCR 엔진 로딩 중입니다.");
+      }
+      if (state.ocrBusy) return "";
+      state.ocrBusy = true;
+      try {
+        setHint("번호판 영역을 즉시 분석 중...");
+        const roi = capturePlateRoiCanvas();
+        const variants = [
+          { pass: "raw", canvas: roi },
+          { pass: "bw", canvas: buildOcrVariant(roi, { invert: false }) },
+          { pass: "inv", canvas: buildOcrVariant(roi, { invert: true }) },
+        ];
+        let bestPlate = "";
+        let bestConfidence = -1;
+        let bestPass = "";
+
+        for (const variant of variants) {
+          const r = await recognizePlateFromCanvas(variant.canvas, variant.pass);
+          if (!r.plate) continue;
+          if (r.confidence > bestConfidence) {
+            bestPlate = r.plate;
+            bestConfidence = r.confidence;
+            bestPass = r.pass;
+          }
+          if (r.confidence >= 70) break;
+        }
+
+        if (!bestPlate) {
+          setHint("번호판을 찾지 못했습니다. 가이드 박스에 번호판을 맞춰주세요.");
+          return "";
+        }
+        setHint(`OCR 추출: ${bestPlate} (${bestPass})`);
+        return bestPlate;
+      } finally {
+        state.ocrBusy = false;
+      }
     }
 
     async function checkPlate(raw, source) {
       const plate = norm(raw);
-      if (plate.length < 4) {
+      if (plate.length < 7) {
         setResult("warn", "번호판 입력값이 너무 짧습니다.");
         return;
       }
@@ -2114,6 +2235,25 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
         setResult("warn", `판정: ${verdictKo}${suffix}`);
       }
       await loadRecent();
+    }
+
+    async function analyzeAndCheck(source) {
+      await startCamera();
+      const plate = await runOcr();
+      if (!plate) return false;
+
+      const now = Date.now();
+      if (source === "AUTO") {
+        if (state.lastAutoPlate === plate && (now - state.lastAutoAt) < AUTO_SCAN_DEDUP_MS) {
+          return false;
+        }
+        state.lastAutoPlate = plate;
+        state.lastAutoAt = now;
+      }
+
+      plateInput.value = plate;
+      await checkPlate(plate, source);
+      return true;
     }
 
     async function saveViolation() {
@@ -2164,18 +2304,62 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       renderRecent(data.items || []);
     }
 
+    function setAutoScanMode(on) {
+      state.autoScan = !!on;
+      const btn = $("btnAutoScan");
+      if (!btn) return;
+      btn.textContent = state.autoScan ? "즉시스캔 중지" : "즉시스캔 시작";
+      if (state.autoScan) btn.classList.add("warn");
+      else btn.classList.remove("warn");
+    }
+
+    function stopAutoScan() {
+      if (state.autoScanTimer) {
+        clearTimeout(state.autoScanTimer);
+        state.autoScanTimer = null;
+      }
+      setAutoScanMode(false);
+    }
+
+    async function autoScanTick() {
+      if (!state.autoScan) return;
+      try {
+        await analyzeAndCheck("AUTO");
+      } catch (e) {
+        setHint(`즉시스캔 오류: ${String(e.message || e)}`);
+      } finally {
+        if (state.autoScan) {
+          state.autoScanTimer = setTimeout(autoScanTick, AUTO_SCAN_INTERVAL_MS);
+        }
+      }
+    }
+
     $("btnCam").addEventListener("click", async () => {
       try { await startCamera(); } catch (e) { setHint(String(e.message || e)); }
     });
 
     $("btnShot").addEventListener("click", async () => {
       try {
-        await startCamera();
-        const plate = await runOcr();
-        plateInput.value = plate;
-        await checkPlate(plate, "OCR");
+        await analyzeAndCheck("OCR");
       } catch (e) {
         setHint(`OCR 오류: ${String(e.message || e)}`);
+      }
+    });
+
+    $("btnAutoScan").addEventListener("click", async () => {
+      try {
+        if (state.autoScan) {
+          stopAutoScan();
+          setHint("즉시스캔을 중지했습니다.");
+          return;
+        }
+        await startCamera();
+        setAutoScanMode(true);
+        setHint("즉시스캔 시작: 촬영 저장 없이 현재 프레임을 반복 분석합니다.");
+        autoScanTick();
+      } catch (e) {
+        stopAutoScan();
+        setHint(`즉시스캔 시작 실패: ${String(e.message || e)}`);
       }
     });
 
@@ -2192,6 +2376,15 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
         await saveViolation();
       } catch (e) {
         setResult("warn", `저장 실패: ${String(e.message || e)}`);
+      }
+    });
+
+    window.addEventListener("beforeunload", () => {
+      stopAutoScan();
+      if (state.stream) {
+        try {
+          state.stream.getTracks().forEach((t) => t.stop());
+        } catch (_e) {}
       }
     });
 
@@ -2219,7 +2412,7 @@ def scanner_page(request: Request):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     context = {
-        "site_code": normalize_site_code(str(sess.get("sc") or DEFAULT_SITE_CODE)),
+        "site_code": _session_site_code(sess),
         "site_name": str(sess.get("site_name") or "").strip(),
         "display_name": str(sess.get("display_name") or "").strip(),
         "user_login": str(sess.get("u") or "").strip(),
