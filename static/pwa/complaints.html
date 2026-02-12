@@ -8,7 +8,8 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
-  <link rel="stylesheet" href="/pwa/complaints.css?v=20260213a" />
+  <link rel="stylesheet" href="/pwa/complaints.css?v=20260213b" />
+  <link rel="stylesheet" href="/pwa/unit_selector.css?v=20260213b" />
 </head>
 <body>
   <header class="top">
@@ -38,6 +39,10 @@
           <span>동/호(선택)</span>
           <input id="unitLabel" type="text" maxlength="80" placeholder="예: 101-1201" />
         </label>
+        <div class="field grow">
+          <span class="inline-help">A(구조형) + B(검색형) + C(그리드형 통합 모듈)</span>
+          <div id="unitSelectorMount"></div>
+        </div>
         <label class="field">
           <span>민원 구분</span>
           <select id="scopeSelect">
@@ -236,6 +241,7 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/complaints.js?v=20260213a"></script>
+  <script src="/pwa/unit_selector.js?v=20260213b"></script>
+  <script src="/pwa/complaints.js?v=20260213c"></script>
 </body>
 </html>

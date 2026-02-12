@@ -25,6 +25,7 @@
   let categories = [];
   let selectedComplaintId = null;
   let selectedAdminComplaintId = null;
+  let unitSelector = null;
 
   function isAdmin(user) {
     return !!(user && (user.is_admin || user.is_site_admin));
@@ -136,6 +137,26 @@
     localStorage.setItem(SITE_CODE_KEY, siteCode);
   }
 
+  function initUnitSelector() {
+    if (!window.KAUnitSelector || unitSelector) return;
+    const mount = $("#unitSelectorMount");
+    const input = $("#unitLabel");
+    if (!mount || !input) return;
+    unitSelector = window.KAUnitSelector.create({
+      mount,
+      input,
+      siteCodeInput: "#siteCode",
+      siteNameInput: "#siteName",
+    });
+  }
+
+  function getUnitLabelValue() {
+    if (unitSelector && typeof unitSelector.getValue === "function") {
+      return normalizeText(unitSelector.getValue(), 80, "동/호", false);
+    }
+    return normalizeText($("#unitLabel").value, 80, "동/호", false);
+  }
+
   function updateMetaLine() {
     const el = $("#metaLine");
     if (!el || !me) return;
@@ -183,7 +204,7 @@
     const scope = getSelectedScope();
     const site_name = normalizeText($("#siteName").value, 80, "단지명", false);
     const site_code = normalizeText($("#siteCode").value, 32, "단지코드", false).toUpperCase();
-    const unit_label = normalizeText($("#unitLabel").value, 80, "동/호", false);
+    const unit_label = getUnitLabelValue();
     const title = normalizeText($("#titleInput").value, 140, "제목", true);
     const description = normalizeText($("#descInput").value, 8000, "내용", true);
     const location_detail = normalizeText($("#locInput").value, 200, "위치", false);
@@ -494,6 +515,8 @@
 
   function wire() {
     $("#scopeSelect")?.addEventListener("change", () => fillCategories());
+    $("#siteCode")?.addEventListener("change", () => unitSelector && unitSelector.refresh && unitSelector.refresh());
+    $("#siteName")?.addEventListener("change", () => unitSelector && unitSelector.refresh && unitSelector.refresh());
     $("#btnReload")?.addEventListener("click", () => {
       init().catch((err) => setMsg(err.message || String(err), true));
     });
@@ -564,6 +587,7 @@
     me = await KAAuth.requireAuth();
     updateMetaLine();
     normalizeSiteContext();
+    initUnitSelector();
     await loadCategories();
     await loadMyComplaints();
     if (isAdmin(me)) {

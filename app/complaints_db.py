@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 import urllib.parse
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -69,6 +70,31 @@ def _clean_attachment_urls(values: Optional[List[str]]) -> List[str]:
             raise ValueError("attachment url host is required")
         out.append(raw)
     return out
+
+
+def _normalize_unit_label(value: Any) -> str:
+    raw = _clean_text(value, required=False, max_len=80, field="unit_label")
+    if not raw:
+        return ""
+    compact = re.sub(r"\s+", "", raw)
+
+    m = re.match(r"^(\d{2,4})-(\d{3,4})$", compact)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+
+    m = re.match(r"^(\d{2,4})동(\d{3,4})호?$", compact)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+
+    m = re.match(r"^(\d{2,4})(\d{3,4})$", compact)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+
+    m = re.match(r"^(\d{3,4})호?$", compact)
+    if m:
+        return m.group(1)
+
+    return raw
 
 
 def _ensure_schema(con: sqlite3.Connection) -> None:
@@ -528,7 +554,7 @@ def create_complaint(
     clean_location = _clean_text(location_detail, required=False, max_len=200, field="location_detail")
     clean_site_code = _clean_text(site_code, required=False, max_len=32, field="site_code").upper()
     clean_site_name = _clean_text(site_name, required=False, max_len=80, field="site_name")
-    clean_unit = _clean_text(unit_label, required=False, max_len=80, field="unit_label")
+    clean_unit = _normalize_unit_label(unit_label)
     clean_attachments = _clean_attachment_urls(attachment_urls)
 
     if force_emergency:

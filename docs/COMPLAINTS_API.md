@@ -47,6 +47,11 @@ Use existing session token:
   - complaint detail timeline (status history)
   - comment thread
   - admin processing panel (visible to admin/site_admin only)
+  - unit selector module (A+B+C):
+    - A: `동 -> 라인(선택) -> 호`
+    - B: search + auto normalization (`101-1203`, `102동 904호`, `1203`)
+    - C: floor x line touch grid
+    - smart recommended mode auto-switch
 
 ## Security notes
 
@@ -55,3 +60,4 @@ Use existing session token:
   - only `http/https`
   - max 10 URLs
   - max 500 chars per URL
+- Unit label is normalized on server to canonical format where possible (`동-호`).
