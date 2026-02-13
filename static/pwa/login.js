@@ -22,7 +22,16 @@
 
   function isResidentRoleText(role) {
     const txt = String(role || "").trim();
-    return txt === "입주민" || txt === "주민";
+    return txt === "입주민" || txt === "주민" || txt === "세대주민";
+  }
+
+  function isBoardRoleText(role) {
+    const txt = String(role || "").trim();
+    return txt === "입대의" || txt === "입주자대표" || txt === "입주자대표회의";
+  }
+
+  function isComplaintsRoleText(role) {
+    return isResidentRoleText(role) || isBoardRoleText(role);
   }
 
   function isSecurityRoleText(role) {
@@ -38,7 +47,7 @@
     if (fromServer) return fromServer;
     const role = String((user && user.role) || "").trim();
     if (isSecurityRoleText(role)) return "/parking/admin2";
-    if (isResidentRoleText(role)) return "/pwa/complaints.html";
+    if (isComplaintsRoleText(role)) return "/pwa/complaints.html";
     return "/pwa/";
   }
 
@@ -48,7 +57,7 @@
     if (isSecurityRoleText(role)) {
       return requested.startsWith("/parking") ? requested : defaultLandingPath(user);
     }
-    if (isResidentRoleText(role)) {
+    if (isComplaintsRoleText(role)) {
       return requested.startsWith("/pwa/complaints.html") ? requested : defaultLandingPath(user);
     }
     return requested || defaultLandingPath(user);
@@ -77,7 +86,6 @@
       phone: ($("#suPhone").value || "").trim(),
       site_name: ($("#suSiteName").value || "").trim(),
       role: ($("#suRole").value || "").trim(),
-      unit_label: ($("#suUnitLabel").value || "").trim(),
       address: ($("#suAddress").value || "").trim(),
       office_phone: ($("#suOfficePhone").value || "").trim(),
       office_fax: ($("#suOfficeFax").value || "").trim(),
@@ -88,10 +96,6 @@
     const body = signupPayloadFromForm();
     if (!body.name || !body.phone || !body.site_name || !body.role || !body.address || !body.office_phone || !body.office_fax) {
       setMsg($("#signupMsg"), "필수 항목을 모두 입력하세요.", true);
-      return;
-    }
-    if (isResidentRoleText(body.role) && !body.unit_label) {
-      setMsg($("#signupMsg"), "입주민은 동/호를 입력해야 합니다.", true);
       return;
     }
     const data = await KAAuth.requestJson("/api/auth/signup/request_phone_verification", {

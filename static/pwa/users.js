@@ -5,9 +5,12 @@
   let users = [];
   let roles = [];
   let permissionLevels = [
-    { key: "admin", label: "관리자" },
+    { key: "admin", label: "최고/운영관리자" },
     { key: "site_admin", label: "단지관리자" },
     { key: "user", label: "사용자" },
+    { key: "security_guard", label: "보안/경비" },
+    { key: "resident", label: "입주민" },
+    { key: "board_member", label: "입대의" },
   ];
   let adminScopes = [
     { key: "super_admin", label: "최고관리자" },
@@ -67,7 +70,7 @@
 
   function isResidentRole(role) {
     const txt = String(role || "").trim();
-    return txt === "입주민" || txt === "주민";
+    return txt === "입주민" || txt === "주민" || txt === "세대주민";
   }
 
   function applyMode() {
@@ -437,7 +440,7 @@
       setMsg("신규 사용자는 비밀번호를 입력해야 합니다.", true);
       return;
     }
-    if (isResidentRole(body.role) && !body.unit_label) {
+    if ((String(body.permission_level || "") === "resident" || isResidentRole(body.role)) && !body.unit_label) {
       setMsg("입주민 역할은 동/호를 입력해야 합니다.", true);
       return;
     }

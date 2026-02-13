@@ -98,14 +98,37 @@ from ..utils import build_excel, build_pdf, safe_ymd, today_ymd
 
 router = APIRouter()
 
-VALID_USER_ROLES = ["관리소장", "과장", "주임", "기사", "행정", "경비", "보안/경비", "입주민", "미화", "기타"]
-VALID_PERMISSION_LEVELS = ["admin", "site_admin", "user"]
+VALID_USER_ROLES = [
+    "서버관리자",
+    "관리소장",
+    "부장",
+    "전기과장",
+    "시설과장",
+    "기술과장",
+    "시설대리",
+    "시설주임",
+    "경리",
+    "보안/경비",
+    "미화원",
+    "입주민",
+    "세대주민",
+    "입대의",
+    "과장",
+    "주임",
+    "기사",
+    "행정",
+    "경비",
+    "미화",
+    "기타",
+]
+VALID_PERMISSION_LEVELS = ["admin", "site_admin", "user", "security_guard", "resident", "board_member"]
 VALID_ADMIN_SCOPES = ["super_admin", "ops_admin"]
 ADMIN_SCOPE_LABELS = {
     "super_admin": "최고관리자",
     "ops_admin": "운영관리자",
 }
-RESIDENT_ROLE_SET = {"입주민", "주민"}
+RESIDENT_ROLE_SET = {"입주민", "주민", "세대주민"}
+BOARD_ROLE_SET = {"입대의", "입주자대표", "입주자대표회의"}
 SECURITY_ROLE_KEYWORDS = ("보안", "경비")
 DEFAULT_SITE_NAME = "미지정단지"
 PHONE_VERIFY_TTL_MINUTES = 5
@@ -229,6 +252,14 @@ def _is_resident_role(value: Any) -> bool:
     return _normalized_role_text(value) in RESIDENT_ROLE_SET
 
 
+def _is_board_role(value: Any) -> bool:
+    return _normalized_role_text(value) in BOARD_ROLE_SET
+
+
+def _is_complaints_only_role(value: Any) -> bool:
+    return _is_resident_role(value) or _is_board_role(value)
+
+
 def _is_security_role(value: Any) -> bool:
     role = _normalized_role_text(value)
     if not role:
@@ -243,7 +274,7 @@ def _allowed_modules_for_user(user: Dict[str, Any]) -> List[str]:
     role = _normalized_role_text(user.get("role"))
     if _is_security_role(role):
         return ["parking"]
-    if _is_resident_role(role):
+    if _is_complaints_only_role(role):
         return ["complaints"]
     return ["main", "parking", "complaints"]
 
@@ -310,6 +341,17 @@ def _assert_resident_household_available(
     )
     if exists > 0:
         raise HTTPException(status_code=409, detail="해당 세대에는 이미 입주민 계정이 등록되어 있습니다.")
+
+
+def _effective_role_for_permission_level(role: str, permission_level: str) -> str:
+    level = str(permission_level or "").strip().lower()
+    if level == "security_guard":
+        return "보안/경비"
+    if level == "resident":
+        return "입주민"
+    if level == "board_member":
+        return "입대의"
+    return role
 
 
 def _clean_site_name(value: Any, *, required: bool = False) -> str:
@@ -512,6 +554,37 @@ def _permission_level_from_user(user: Dict[str, Any]) -> str:
         return "admin"
     if int(user.get("is_site_admin") or 0) == 1:
         return "site_admin"
+    role = _normalized_role_text(user.get("role"))
+    if _is_security_role(role):
+        return "security_guard"
+    if _is_resident_role(role):
+        return "resident"
+    if _is_board_role(role):
+        return "board_member"
+    return "user"
+
+
+def _account_type_from_user(user: Dict[str, Any]) -> str:
+    level = _permission_level_from_user(user)
+    if level == "admin":
+        return "최고/운영관리자"
+    if level == "site_admin":
+        return "단지관리자"
+    if level == "security_guard":
+        return "보안/경비"
+    if level == "resident":
+        return "입주민"
+    if level == "board_member":
+        return "입대의"
+    return "사용자"
+
+
+def _parking_permission_level_from_user(user: Dict[str, Any]) -> str:
+    level = _permission_level_from_user(user)
+    if level == "security_guard":
+        return "site_admin"
+    if level in {"admin", "site_admin"}:
+        return level
     return "user"
 
 
@@ -575,6 +648,8 @@ def _resolve_permission_flags(
             return 1, 0, level, scope
         if level == "site_admin":
             return 0, 1, level, ""
+        if level in {"security_guard", "resident", "board_member"}:
+            return 0, 0, level, ""
         return 0, 0, level, ""
 
     is_admin = _clean_bool(payload.get("is_admin"), default=default_admin)
@@ -629,7 +704,7 @@ def _bind_user_site_code_if_missing(user: Dict[str, Any]) -> Dict[str, Any]:
         return user
 
     try:
-        resolved = _resolve_site_code_for_site(site_name, "", allow_create=False, allow_remap=False)
+        resolved = _resolve_site_code_for_site(site_name, "", allow_create=True, allow_remap=False)
     except HTTPException:
         return user
     if not resolved:
@@ -649,6 +724,7 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     permission_level = _permission_level_from_user(user)
     admin_scope = _admin_scope_from_user(user)
     allowed_modules = _allowed_modules_for_user(user)
+    account_type = _account_type_from_user(user)
     return {
         "id": int(user.get("id")),
         "login_id": user.get("login_id"),
@@ -668,6 +744,7 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "admin_scope": admin_scope,
         "admin_scope_label": _admin_scope_label(admin_scope),
         "permission_level": permission_level,
+        "account_type": account_type,
         "allowed_modules": allowed_modules,
         "default_landing_path": _default_landing_path_for_user(user),
         "is_active": bool(user.get("is_active")),
@@ -880,11 +957,11 @@ def _enforce_api_module_scope(user: Dict[str, Any], request_path: str) -> None:
         if path in allowed_paths:
             return
         raise HTTPException(status_code=403, detail="보안/경비 계정은 주차관리 모듈만 사용할 수 있습니다.")
-    if _is_resident_role(role):
+    if _is_complaints_only_role(role):
         allowed_paths = {"/api/auth/me", "/api/auth/logout", "/api/auth/change_password"}
         if path in allowed_paths:
             return
-        raise HTTPException(status_code=403, detail="입주민 계정은 민원 모듈만 사용할 수 있습니다.")
+        raise HTTPException(status_code=403, detail="입대의/세대주민 계정은 민원 모듈만 사용할 수 있습니다.")
 
 
 def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
@@ -1161,7 +1238,7 @@ def parking_context(
     site_code: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
-    permission_level = _permission_level_from_user(user)
+    permission_level = _parking_permission_level_from_user(user)
 
     clean_site_name, clean_site_code = _resolve_main_site_target(
         user,
@@ -2149,14 +2226,14 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
                 resolved_code = _resolve_site_code_for_site(
                     existing_site_name,
                     "",
-                    allow_create=False,
+                    allow_create=True,
                     allow_remap=False,
                 )
             except HTTPException as e:
                 if e.status_code == 404:
                     raise HTTPException(
                         status_code=403,
-                        detail="해당 단지의 site_code가 아직 등록되지 않았습니다. 최고관리자에게 등록을 요청하세요.",
+                        detail="단지코드 조회/생성에 실패했습니다. 잠시 후 다시 시도하세요.",
                     ) from e
                 raise
             set_staff_user_site_code(int(existing["id"]), resolved_code)
@@ -2190,14 +2267,14 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         resolved_site_code = _resolve_site_code_for_site(
             site_name,
             site_code,
-            allow_create=False,
+            allow_create=True,
             allow_remap=False,
         )
     except HTTPException as e:
         if e.status_code == 404:
             raise HTTPException(
                 status_code=403,
-                detail="가입 대상 단지의 site_code가 등록되지 않았습니다. 최고관리자에게 등록을 요청하세요.",
+                detail="단지코드 조회/생성에 실패했습니다. 잠시 후 다시 시도하세요.",
             ) from e
         raise
     existing_site_user_count = count_staff_users_for_site(site_name, site_code=resolved_site_code)
@@ -2337,9 +2414,12 @@ def api_user_roles(request: Request):
         "ok": True,
         "roles": VALID_USER_ROLES,
         "permission_levels": [
-            {"key": "admin", "label": "관리자(최고/운영)"},
+            {"key": "admin", "label": "최고/운영관리자"},
             {"key": "site_admin", "label": "단지관리자"},
             {"key": "user", "label": "사용자"},
+            {"key": "security_guard", "label": "보안/경비"},
+            {"key": "resident", "label": "입주민"},
+            {"key": "board_member", "label": "입대의"},
         ],
         "admin_scopes": [
             {"key": "super_admin", "label": ADMIN_SCOPE_LABELS["super_admin"]},
@@ -2373,6 +2453,7 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
 
     restricted_keys = {
         "login_id",
+        "role",
         "site_code",
         "site_name",
         "is_admin",
@@ -2565,20 +2646,30 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     actor_super = _is_super_admin(actor)
     login_id = _clean_login_id(payload.get("login_id"))
     name = _clean_name(payload.get("name"))
-    role = _clean_role(payload.get("role"))
+    raw_role = _clean_role(payload.get("role"))
+    is_admin, is_site_admin, permission_level, admin_scope = _resolve_permission_flags(
+        payload,
+        default_admin=False,
+        default_site_admin=False,
+        default_admin_scope="ops_admin",
+    )
+    role = _effective_role_for_permission_level(raw_role, permission_level)
     phone = _normalize_phone(payload.get("phone"), required=False, field_name="phone")
     site_code = _clean_site_code(payload.get("site_code"), required=False)
     site_name = _clean_optional_text(payload.get("site_name"), 80)
+    allow_site_code_create = bool(not is_admin)
+    if is_admin:
+        allow_site_code_create = bool(actor_super)
     if site_name:
         try:
             site_code = _resolve_site_code_for_site(
                 site_name,
                 site_code,
-                allow_create=actor_super,
+                allow_create=allow_site_code_create,
                 allow_remap=False,
             )
         except HTTPException as e:
-            if e.status_code == 404 and not actor_super:
+            if e.status_code == 404 and not allow_site_code_create:
                 raise HTTPException(
                     status_code=403,
                     detail="운영관리자는 기존 단지코드만 사용할 수 있습니다. 최고관리자에게 등록 요청하세요.",
@@ -2590,12 +2681,6 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     note = _clean_optional_text(payload.get("note"), 200)
     unit_label, household_key = _extract_resident_household(payload, role=role)
     password = _clean_password(payload.get("password"), required=True)
-    is_admin, is_site_admin, _permission_level, admin_scope = _resolve_permission_flags(
-        payload,
-        default_admin=False,
-        default_site_admin=False,
-        default_admin_scope="ops_admin",
-    )
     if is_admin and not actor_super:
         raise HTTPException(status_code=403, detail="운영관리자는 관리자 계정을 생성할 수 없습니다.")
     if not is_admin:
@@ -2645,20 +2730,30 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
 
     login_id = _clean_login_id(payload.get("login_id", current.get("login_id")))
     name = _clean_name(payload.get("name", current.get("name")))
-    role = _clean_role(payload.get("role", current.get("role")))
+    raw_role = _clean_role(payload.get("role", current.get("role")))
+    is_admin, is_site_admin, permission_level, admin_scope = _resolve_permission_flags(
+        payload,
+        default_admin=bool(current.get("is_admin")),
+        default_site_admin=bool(current.get("is_site_admin")),
+        default_admin_scope=current_admin_scope,
+    )
+    role = _effective_role_for_permission_level(raw_role, permission_level)
     phone = _normalize_phone(payload["phone"] if "phone" in payload else current.get("phone"), required=False, field_name="phone")
     site_code = _clean_site_code(payload["site_code"] if "site_code" in payload else current.get("site_code"), required=False)
     site_name = _clean_optional_text(payload["site_name"] if "site_name" in payload else current.get("site_name"), 80)
+    allow_site_code_create = bool(not is_admin)
+    if is_admin:
+        allow_site_code_create = bool(actor_super)
     if site_name:
         try:
             site_code = _resolve_site_code_for_site(
                 site_name,
                 site_code,
-                allow_create=actor_super,
+                allow_create=allow_site_code_create,
                 allow_remap=False,
             )
         except HTTPException as e:
-            if e.status_code == 404 and not actor_super:
+            if e.status_code == 404 and not allow_site_code_create:
                 raise HTTPException(
                     status_code=403,
                     detail="운영관리자는 기존 단지코드만 사용할 수 있습니다. 최고관리자에게 등록 요청하세요.",
@@ -2680,13 +2775,6 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
         payload,
         role=role,
         current_unit_label=current.get("unit_label"),
-    )
-
-    is_admin, is_site_admin, _permission_level, admin_scope = _resolve_permission_flags(
-        payload,
-        default_admin=bool(current.get("is_admin")),
-        default_site_admin=bool(current.get("is_site_admin")),
-        default_admin_scope=current_admin_scope,
     )
     if not is_admin:
         admin_scope = ""

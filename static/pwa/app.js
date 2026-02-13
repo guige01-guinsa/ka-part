@@ -108,6 +108,8 @@
   }
 
   function permissionLabel(user) {
+    const accountType = String((user && user.account_type) || "").trim();
+    if (accountType) return accountType;
     if (hasAdminPermission(user)) return isSuperAdmin(user) ? "최고관리자" : "운영관리자";
     if (hasSiteAdminPermission(user)) return "단지관리자";
     return "사용자";
@@ -119,7 +121,16 @@
 
   function isResidentRole(user) {
     const role = roleText(user);
-    return role === "입주민" || role === "주민";
+    return role === "입주민" || role === "주민" || role === "세대주민";
+  }
+
+  function isBoardRole(user) {
+    const role = roleText(user);
+    return role === "입대의" || role === "입주자대표" || role === "입주자대표회의";
+  }
+
+  function isComplaintsOnlyRole(user) {
+    return isResidentRole(user) || isBoardRole(user);
   }
 
   function isSecurityRole(user) {
@@ -334,7 +345,7 @@
 
   async function ensureAuth() {
     authUser = await window.KAAuth.requireAuth();
-    if (isResidentRole(authUser)) {
+    if (isComplaintsOnlyRole(authUser)) {
       window.location.href = "/pwa/complaints.html";
       throw new Error("모듈 전환 중");
     }
