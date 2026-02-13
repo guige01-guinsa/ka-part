@@ -316,6 +316,86 @@ def _backfill_site_identity_columns(con: sqlite3.Connection) -> None:
         """,
         (ts,),
     )
+    con.execute(
+        """
+        UPDATE site_registry
+        SET site_name=(SELECT s.name FROM sites s WHERE s.id=site_registry.site_id),
+            updated_at=?
+        WHERE site_id IS NOT NULL
+          AND site_id>0
+          AND EXISTS(SELECT 1 FROM sites s WHERE s.id=site_registry.site_id)
+          AND TRIM(COALESCE(site_name,''))<>(
+            SELECT TRIM(COALESCE(s.name,'')) FROM sites s WHERE s.id=site_registry.site_id
+          );
+        """,
+        (ts,),
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET site_name=(SELECT s.name FROM sites s WHERE s.id=staff_users.site_id),
+            updated_at=?
+        WHERE site_id IS NOT NULL
+          AND site_id>0
+          AND EXISTS(SELECT 1 FROM sites s WHERE s.id=staff_users.site_id)
+          AND TRIM(COALESCE(site_name,''))<>(
+            SELECT TRIM(COALESCE(s.name,'')) FROM sites s WHERE s.id=staff_users.site_id
+          );
+        """,
+        (ts,),
+    )
+    con.execute(
+        """
+        UPDATE site_env_configs
+        SET site_name=(SELECT s.name FROM sites s WHERE s.id=site_env_configs.site_id),
+            updated_at=?
+        WHERE site_id IS NOT NULL
+          AND site_id>0
+          AND EXISTS(SELECT 1 FROM sites s WHERE s.id=site_env_configs.site_id)
+          AND TRIM(COALESCE(site_name,''))<>(
+            SELECT TRIM(COALESCE(s.name,'')) FROM sites s WHERE s.id=site_env_configs.site_id
+          );
+        """,
+        (ts,),
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET site_code=(SELECT r.site_code FROM site_registry r WHERE r.site_id=staff_users.site_id LIMIT 1),
+            updated_at=?
+        WHERE site_id IS NOT NULL
+          AND site_id>0
+          AND EXISTS(
+            SELECT 1 FROM site_registry r
+            WHERE r.site_id=staff_users.site_id
+              AND r.site_code IS NOT NULL
+              AND TRIM(r.site_code)<>''
+          )
+          AND TRIM(COALESCE(site_code,''))<>(
+            SELECT TRIM(COALESCE(r.site_code,'')) FROM site_registry r WHERE r.site_id=staff_users.site_id LIMIT 1
+          );
+        """,
+        (ts,),
+    )
+    con.execute(
+        """
+        UPDATE site_env_configs
+        SET site_code=(SELECT r.site_code FROM site_registry r WHERE r.site_id=site_env_configs.site_id LIMIT 1),
+            updated_at=?
+        WHERE site_id IS NOT NULL
+          AND site_id>0
+          AND EXISTS(
+            SELECT 1 FROM site_registry r
+            WHERE r.site_id=site_env_configs.site_id
+              AND r.site_code IS NOT NULL
+              AND TRIM(r.site_code)<>''
+          )
+          AND TRIM(COALESCE(site_code,''))<>(
+            SELECT TRIM(COALESCE(r.site_code,'')) FROM site_registry r WHERE r.site_id=site_env_configs.site_id LIMIT 1
+          );
+        """,
+        (ts,),
+    )
 
 def _normalize_staff_permission_flags(is_admin: Any, is_site_admin: Any) -> tuple[int, int]:
     admin = 1 if int(is_admin or 0) == 1 else 0
@@ -1211,6 +1291,184 @@ def resolve_or_create_site_code(
         con.close()
 
 
+def find_site_name_by_id(site_id: Any) -> str | None:
+    clean_site_id = _clean_site_id_value(site_id)
+    if not clean_site_id:
+        return None
+    con = _connect()
+    try:
+        row = con.execute("SELECT name FROM sites WHERE id=? LIMIT 1", (clean_site_id,)).fetchone()
+        if not row:
+            return None
+        name = str(row["name"] or "").strip()
+        return name if name else None
+    finally:
+        con.close()
+
+
+def find_site_code_by_id(site_id: Any) -> str | None:
+    clean_site_id = _clean_site_id_value(site_id)
+    if not clean_site_id:
+        return None
+    con = _connect()
+    try:
+        queries = [
+            (
+                """
+                SELECT site_code
+                FROM site_registry
+                WHERE site_id=?
+                  AND site_code IS NOT NULL
+                  AND TRIM(site_code)<>''
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (clean_site_id,),
+            ),
+            (
+                """
+                SELECT site_code
+                FROM site_env_configs
+                WHERE site_id=?
+                  AND site_code IS NOT NULL
+                  AND TRIM(site_code)<>''
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (clean_site_id,),
+            ),
+            (
+                """
+                SELECT site_code
+                FROM staff_users
+                WHERE site_id=?
+                  AND site_code IS NOT NULL
+                  AND TRIM(site_code)<>''
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (clean_site_id,),
+            ),
+        ]
+        for sql, params in queries:
+            row = con.execute(sql, params).fetchone()
+            if not row:
+                continue
+            code = _clean_site_code_value(row["site_code"])
+            if code:
+                return code
+        return None
+    finally:
+        con.close()
+
+
+def resolve_site_identity(
+    *,
+    site_id: Any = None,
+    site_name: Any = None,
+    site_code: Any = None,
+    create_site_if_missing: bool = False,
+) -> Dict[str, Any]:
+    clean_site_id = _clean_site_id_value(site_id)
+    clean_site_name = str(site_name or "").strip()
+    clean_site_code = _clean_site_code_value(site_code)
+
+    con = _connect()
+    try:
+        ts = now_iso()
+        resolved_id = clean_site_id
+        resolved_name = clean_site_name
+        resolved_code = clean_site_code
+
+        if clean_site_id:
+            row_site = con.execute("SELECT id, name FROM sites WHERE id=? LIMIT 1", (clean_site_id,)).fetchone()
+            if row_site:
+                resolved_id = int(row_site["id"])
+                resolved_name = str(row_site["name"] or "").strip() or resolved_name
+            row_reg_by_id = con.execute(
+                """
+                SELECT site_id, site_name, site_code
+                FROM site_registry
+                WHERE site_id=?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (clean_site_id,),
+            ).fetchone()
+            if row_reg_by_id:
+                resolved_id = _clean_site_id_value(row_reg_by_id["site_id"]) or resolved_id
+                resolved_name = str(row_reg_by_id["site_name"] or "").strip() or resolved_name
+                resolved_code = _clean_site_code_value(row_reg_by_id["site_code"]) or resolved_code
+
+        row_reg_by_code = None
+        if clean_site_code:
+            row_reg_by_code = con.execute(
+                """
+                SELECT site_id, site_name, site_code
+                FROM site_registry
+                WHERE site_code=?
+                LIMIT 1
+                """,
+                (clean_site_code,),
+            ).fetchone()
+            if row_reg_by_code:
+                resolved_id = _clean_site_id_value(row_reg_by_code["site_id"]) or resolved_id
+                resolved_name = str(row_reg_by_code["site_name"] or "").strip() or resolved_name
+                resolved_code = _clean_site_code_value(row_reg_by_code["site_code"]) or resolved_code
+
+        if clean_site_name and (not resolved_id or not resolved_code):
+            row_reg_by_name = con.execute(
+                """
+                SELECT site_id, site_name, site_code
+                FROM site_registry
+                WHERE site_name=?
+                LIMIT 1
+                """,
+                (clean_site_name,),
+            ).fetchone()
+            if row_reg_by_name:
+                resolved_id = _clean_site_id_value(row_reg_by_name["site_id"]) or resolved_id
+                resolved_name = str(row_reg_by_name["site_name"] or "").strip() or resolved_name
+                resolved_code = _clean_site_code_value(row_reg_by_name["site_code"]) or resolved_code
+
+        if not resolved_name and resolved_id:
+            row_site = con.execute("SELECT name FROM sites WHERE id=? LIMIT 1", (resolved_id,)).fetchone()
+            if row_site:
+                resolved_name = str(row_site["name"] or "").strip()
+
+        if resolved_name and not resolved_id:
+            if create_site_if_missing:
+                resolved_id = _ensure_site_id_for_name_in_tx(con, resolved_name, ts=ts)
+            else:
+                row_site = con.execute("SELECT id FROM sites WHERE name=? LIMIT 1", (resolved_name,)).fetchone()
+                if row_site:
+                    resolved_id = int(row_site["id"])
+
+        if not resolved_code and resolved_id:
+            row_reg_by_id = con.execute(
+                """
+                SELECT site_code
+                FROM site_registry
+                WHERE site_id=?
+                  AND site_code IS NOT NULL
+                  AND TRIM(site_code)<>''
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (resolved_id,),
+            ).fetchone()
+            if row_reg_by_id:
+                resolved_code = _clean_site_code_value(row_reg_by_id["site_code"]) or resolved_code
+
+        return {
+            "site_id": _clean_site_id_value(resolved_id),
+            "site_name": str(resolved_name or "").strip(),
+            "site_code": _clean_site_code_value(resolved_code) or "",
+        }
+    finally:
+        con.close()
+
+
 def find_site_code_by_name(site_name: str) -> str | None:
     clean_site_name = _require_site_name_value(site_name)
     con = _connect()
@@ -1409,6 +1667,67 @@ def set_staff_user_site_code(user_id: int, site_code: str) -> bool:
         return cur.rowcount > 0
     finally:
         con.close()
+
+
+def normalize_staff_user_site_identity(user_id: int) -> Optional[Dict[str, Any]]:
+    uid = int(user_id or 0)
+    if uid <= 0:
+        return None
+
+    current = get_staff_user(uid)
+    if not current:
+        return None
+
+    identity = resolve_site_identity(
+        site_id=current.get("site_id"),
+        site_name=current.get("site_name"),
+        site_code=current.get("site_code"),
+        create_site_if_missing=bool(str(current.get("site_name") or "").strip()),
+    )
+    resolved_site_id = _clean_site_id_value(identity.get("site_id"))
+    resolved_site_name = str(identity.get("site_name") or "").strip()
+    resolved_site_code = _clean_site_code_value(identity.get("site_code"))
+
+    current_site_id = _clean_site_id_value(current.get("site_id"))
+    current_site_name = str(current.get("site_name") or "").strip()
+    current_site_code = _clean_site_code_value(current.get("site_code"))
+
+    next_site_id = resolved_site_id or current_site_id
+    next_site_name = resolved_site_name or current_site_name
+    next_site_code = resolved_site_code or current_site_code
+
+    if (
+        next_site_id == current_site_id
+        and next_site_name == current_site_name
+        and next_site_code == current_site_code
+    ):
+        return current
+
+    con = _connect()
+    try:
+        ts = now_iso()
+        con.execute(
+            """
+            UPDATE staff_users
+            SET site_id=?,
+                site_name=?,
+                site_code=?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (
+                next_site_id,
+                next_site_name or None,
+                next_site_code,
+                ts,
+                uid,
+            ),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    return get_staff_user(uid)
 
 
 def get_first_staff_user_for_site(site_name: str, *, site_code: str | None = None) -> Optional[Dict[str, Any]]:

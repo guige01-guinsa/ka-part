@@ -39,9 +39,11 @@ from ..db import (
     delete_site_env_config,
     delete_staff_user,
     ensure_site,
+    find_site_code_by_id,
     get_auth_user_by_token,
     get_privileged_change_request,
     get_latest_signup_phone_verification,
+    find_site_name_by_id,
     find_site_code_by_name,
     find_site_name_by_code,
     get_site_env_config,
@@ -62,6 +64,7 @@ from ..db import (
     load_entry_by_id,
     mark_staff_user_login,
     mark_privileged_change_request_executed,
+    normalize_staff_user_site_identity,
     migrate_site_code,
     approve_privileged_change_request,
     revoke_all_user_sessions,
@@ -386,6 +389,23 @@ def _clean_site_code(value: Any, *, required: bool = False) -> str:
     return site_code
 
 
+def _clean_site_id(value: Any, *, required: bool = False) -> int:
+    raw = str(value or "").strip()
+    if not raw:
+        if required:
+            raise HTTPException(status_code=400, detail="site_id is required")
+        return 0
+    try:
+        site_id = int(raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="site_id must be integer") from e
+    if site_id <= 0:
+        if required:
+            raise HTTPException(status_code=400, detail="site_id must be positive")
+        return 0
+    return site_id
+
+
 def _clean_password(value: Any, *, required: bool = True) -> str | None:
     txt = (str(value or "")).strip()
     if not txt:
@@ -707,11 +727,20 @@ def _resolve_site_code_for_site(
         raise HTTPException(status_code=500, detail=f"site_code resolve failed: {e}") from e
 
 
-def _bind_user_site_code_if_missing(user: Dict[str, Any]) -> Dict[str, Any]:
+def _bind_user_site_identity(user: Dict[str, Any]) -> Dict[str, Any]:
     if not user:
         return user
+    uid = int(user.get("id") or 0)
+    if uid > 0:
+        normalized = normalize_staff_user_site_identity(uid)
+        if normalized:
+            merged = dict(user)
+            merged.update(normalized)
+            user = merged
+
     if int(user.get("is_admin") or 0) == 1:
         return user
+
     current_code = _clean_site_code(user.get("site_code"), required=False)
     if current_code:
         return user
@@ -730,10 +759,9 @@ def _bind_user_site_code_if_missing(user: Dict[str, Any]) -> Dict[str, Any]:
         return user
     if not resolved:
         return user
-    uid = int(user.get("id") or 0)
     if uid > 0:
         set_staff_user_site_code(uid, resolved)
-        fresh = get_staff_user(uid)
+        fresh = normalize_staff_user_site_identity(uid) or get_staff_user(uid)
         if fresh:
             merged = dict(user)
             merged.update(fresh)
@@ -836,6 +864,10 @@ def _resolve_spec_env_site_target(
             if not resolved_name:
                 raise HTTPException(status_code=404, detail="입력한 site_code에 해당하는 site_name을 찾을 수 없습니다.")
             clean_site_name = _clean_site_name(resolved_name, required=True)
+        if clean_site_code:
+            mapped_name = find_site_name_by_code(clean_site_code)
+            if mapped_name:
+                clean_site_name = _clean_site_name(mapped_name, required=True)
         if clean_site_name:
             allow_create = bool(for_write and is_super)
             try:
@@ -878,15 +910,33 @@ def _resolve_spec_env_site_target(
     return clean_site_name, clean_site_code
 
 
-def _resolve_site_identity_for_main(user: Dict[str, Any], requested_site_name: Any, requested_site_code: Any) -> Tuple[str, str]:
+def _resolve_site_identity_for_main(
+    user: Dict[str, Any],
+    requested_site_name: Any,
+    requested_site_code: Any,
+    requested_site_id: Any = 0,
+) -> Tuple[str, str]:
     raw_site_name = str(requested_site_name or "").strip()
     raw_site_code = str(requested_site_code or "").strip().upper()
+    raw_site_id = _clean_site_id(requested_site_id, required=False)
     is_admin = int(user.get("is_admin") or 0) == 1
 
     if is_admin:
         is_super = _is_super_admin(user)
         clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
         clean_site_code = _clean_site_code(raw_site_code, required=False)
+        clean_site_id = raw_site_id
+
+        if clean_site_id:
+            if not clean_site_name:
+                clean_site_name = _clean_site_name(find_site_name_by_id(clean_site_id), required=False)
+            if not clean_site_code:
+                clean_site_code = _clean_site_code(find_site_code_by_id(clean_site_id), required=False)
+
+        if clean_site_code:
+            mapped_name = find_site_name_by_code(clean_site_code)
+            if mapped_name:
+                clean_site_name = _clean_site_name(mapped_name, required=True)
 
         if clean_site_code and not clean_site_name:
             resolved_name = find_site_name_by_code(clean_site_code)
@@ -913,13 +963,27 @@ def _resolve_site_identity_for_main(user: Dict[str, Any], requested_site_name: A
 
         fallback_name = str(user.get("site_name") or "").strip()
         fallback_code = _clean_site_code(user.get("site_code"), required=False)
+        fallback_site_id = _clean_site_id(user.get("site_id"), required=False)
+        if not fallback_name and fallback_site_id:
+            fallback_name = _clean_site_name(find_site_name_by_id(fallback_site_id), required=False)
+        if not fallback_code and fallback_site_id:
+            fallback_code = _clean_site_code(find_site_code_by_id(fallback_site_id), required=False)
+        if fallback_code and not fallback_name:
+            fallback_name = _clean_site_name(find_site_name_by_code(fallback_code), required=False)
         return fallback_name, fallback_code
 
     # Non-admin accounts are always bound to assigned site identity.
     # Ignore client-sent site params to avoid stale local/query values causing conflicts.
-    assigned_site_name = _normalized_assigned_site_name(user)
+    assigned_site_id = _clean_site_id(user.get("site_id"), required=False)
+    assigned_site_name = str(user.get("site_name") or "").strip()
+    if not assigned_site_name and assigned_site_id:
+        assigned_site_name = _clean_site_name(find_site_name_by_id(assigned_site_id), required=False)
+    if not assigned_site_name:
+        assigned_site_name = _normalized_assigned_site_name(user)
     assigned_site_code = _clean_site_code(user.get("site_code"), required=False)
 
+    if not assigned_site_code and assigned_site_id:
+        assigned_site_code = _clean_site_code(find_site_code_by_id(assigned_site_id), required=False)
     if not assigned_site_code:
         assigned_site_code = _clean_site_code(find_site_code_by_name(assigned_site_name), required=False)
 
@@ -995,7 +1059,7 @@ def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
     user = get_auth_user_by_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="invalid or expired session")
-    user = _bind_user_site_code_if_missing(user)
+    user = _bind_user_site_identity(user)
     _enforce_api_module_scope(user, request.url.path)
     return user, token
 
@@ -1436,9 +1500,14 @@ def api_site_env(request: Request, site_name: str = Query(default=""), site_code
 
 
 @router.get("/site_identity")
-def api_site_identity(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
+def api_site_identity(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+):
     user, _token = _require_auth(request)
-    clean_site_name, clean_site_code = _resolve_site_identity_for_main(user, site_name, site_code)
+    clean_site_name, clean_site_code = _resolve_site_identity_for_main(user, site_name, site_code, site_id)
     admin_scope = _admin_scope_from_user(user)
     resolved_site_id = None
     if clean_site_name:
@@ -2274,6 +2343,9 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
 
     existing = get_staff_user_by_phone(phone)
     if existing:
+        normalized_existing = normalize_staff_user_site_identity(int(existing.get("id") or 0))
+        if normalized_existing:
+            existing = normalized_existing
         existing_site_name = _clean_required_text(existing.get("site_name"), 80, "site_name")
         existing_site_code = _clean_site_code(existing.get("site_code"), required=False)
         if not existing_site_code:
@@ -2382,7 +2454,7 @@ def auth_login(request: Request, payload: Dict[str, Any] = Body(...)):
     user = get_staff_user_by_login(login_id)
     if not user or int(user.get("is_active") or 0) != 1:
         raise HTTPException(status_code=401, detail="invalid credentials")
-    user = _bind_user_site_code_if_missing(user)
+    user = _bind_user_site_identity(user)
     password_hash = user.get("password_hash")
     if not password_hash:
         raise HTTPException(status_code=403, detail="password is not set for this account")
@@ -2497,7 +2569,7 @@ def api_user_roles(request: Request):
 @router.get("/users/me")
 def api_users_me(request: Request):
     actor, _token = _require_auth(request)
-    actor = _bind_user_site_code_if_missing(actor)
+    actor = _bind_user_site_identity(actor)
     return {"ok": True, "user": _public_user(actor)}
 
 

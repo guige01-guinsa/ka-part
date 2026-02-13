@@ -83,6 +83,7 @@
   const HOME_DRAFT_KEY = "ka_home_draft_v2";
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
+  const SITE_ID_KEY = "ka_current_site_id_v1";
   const MOBILE_ACTIONS_COLLAPSED_KEY = "ka_mobile_actions_collapsed_v1";
   const DEFAULT_SITE_NAME = "미지정단지";
 
@@ -92,6 +93,7 @@
   let authUser = null;
   let maintenancePollTimer = null;
   let reloginByConflictInProgress = false;
+  let siteIdentityRecoverInProgress = false;
   let mobileActionsCollapsed = true;
 
   function hasAdminPermission(user) {
@@ -189,6 +191,53 @@
     window.KAAuth.redirectLogin("/pwa/");
   }
 
+  function rewriteRequestUrlWithCurrentSiteIdentity(rawUrl) {
+    const source = String(rawUrl || "").trim();
+    if (!source) return source;
+    if (source.startsWith("/api/auth/")) return source;
+    const isAbsolute = /^https?:\/\//i.test(source);
+    let u;
+    try {
+      u = new URL(source, window.location.origin);
+    } catch (_e) {
+      return source;
+    }
+    const hasSiteParams =
+      u.searchParams.has("site_id") || u.searchParams.has("site_name") || u.searchParams.has("site_code");
+    if (!hasSiteParams) return source;
+    const siteName = getSiteNameRaw() || getSiteName();
+    const siteCode = getSiteCodeRaw() || getSiteCode();
+    const siteId = getSiteId();
+    if (siteId > 0) u.searchParams.set("site_id", String(siteId));
+    else u.searchParams.delete("site_id");
+    if (siteName) u.searchParams.set("site_name", siteName);
+    else u.searchParams.delete("site_name");
+    if (siteCode) u.searchParams.set("site_code", siteCode);
+    else u.searchParams.delete("site_code");
+    if (isAbsolute) return u.toString();
+    return `${u.pathname}${u.search ? `?${u.searchParams.toString()}` : ""}`;
+  }
+
+  async function tryRecoverSiteIdentityConflict() {
+    if (siteIdentityRecoverInProgress) return false;
+    siteIdentityRecoverInProgress = true;
+    try {
+      const data = await window.KAAuth.requestJson("/api/site_identity");
+      if (!data || !data.ok) return false;
+      if (Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
+      if (Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
+      if (Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
+      enforceSiteIdentityPolicy();
+      enforceHomeSiteIdentityPolicy();
+      updateAddressBarSiteQuery();
+      return true;
+    } catch (_e) {
+      return false;
+    } finally {
+      siteIdentityRecoverInProgress = false;
+    }
+  }
+
   function setTabRunStatus(tabTitle = "", isRunning = false) {
     const el = $("#tabRunStatus");
     if (!el) return;
@@ -283,6 +332,18 @@
     } catch (err) {
       const msg = err && err.message ? String(err.message) : String(err || "");
       if (isSiteIdentityConflictMessage(msg)) {
+        const recovered = await tryRecoverSiteIdentityConflict();
+        if (recovered) {
+          const retryUrl = rewriteRequestUrlWithCurrentSiteIdentity(url);
+          try {
+            return await window.KAAuth.requestJson(retryUrl, opts);
+          } catch (retryErr) {
+            const retryMsg = retryErr && retryErr.message ? String(retryErr.message) : String(retryErr || "");
+            if (!isSiteIdentityConflictMessage(retryMsg)) {
+              throw retryErr;
+            }
+          }
+        }
         await reloginBySiteIdentityConflict(msg);
         throw new Error("단지코드/단지명 충돌로 로그아웃되었습니다.");
       }
@@ -299,6 +360,18 @@
     }
     const role = permissionLabel(user);
     chip.textContent = `${user.name || user.login_id} (${role})`;
+  }
+
+  function normalizeSiteId(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    const id = Math.trunc(n);
+    return id > 0 ? id : 0;
+  }
+
+  function assignedSiteIdForUser() {
+    if (!authUser || hasAdminPermission(authUser)) return 0;
+    return normalizeSiteId(authUser.site_id);
   }
 
   function assignedSiteNameForUser() {
@@ -339,6 +412,8 @@
       throw new Error("계정에 소속 단지가 지정되지 않았습니다. 관리자에게 문의하세요.");
     }
     const assignedCode = assignedSiteCodeForUser();
+    const assignedId = assignedSiteIdForUser();
+    setSiteId(assignedId);
     setSiteName(assignedName);
     setSiteCode(assignedCode);
     if (nameEl) {
@@ -370,6 +445,7 @@
     if (btnSpec && !hasSiteAdminPermission(authUser)) btnSpec.style.display = "none";
     const btnBackup = $("#btnBackup");
     if (btnBackup && !hasSiteAdminPermission(authUser)) btnBackup.style.display = "none";
+    setSiteId(normalizeSiteId(authUser && authUser.site_id));
     enforceSiteIdentityPolicy();
     const assignedCode = assignedSiteCodeForUser();
     if (assignedCode) setSiteCode(assignedCode);
@@ -437,6 +513,16 @@
     return (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
   }
 
+  function getSiteIdRaw() {
+    return normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
+  }
+
+  function getSiteId() {
+    const assigned = assignedSiteIdForUser();
+    if (assigned > 0) return assigned;
+    return getSiteIdRaw();
+  }
+
   function syncHomeSiteIdentityDisplay(name = null, code = null) {
     const nameEl = document.getElementById("f-home-complex_name");
     const codeEl = document.getElementById("f-home-complex_code");
@@ -468,10 +554,19 @@
     return clean;
   }
 
-  function buildSiteQuery(siteName, siteCode) {
+  function setSiteId(siteId) {
+    const clean = normalizeSiteId(siteId);
+    if (clean > 0) localStorage.setItem(SITE_ID_KEY, String(clean));
+    else localStorage.removeItem(SITE_ID_KEY);
+    return clean;
+  }
+
+  function buildSiteQuery(siteName, siteCode, siteId = null) {
     const qs = new URLSearchParams();
     const s = String(siteName || "").trim();
     const c = String(siteCode || "").trim().toUpperCase();
+    const i = normalizeSiteId(siteId === null ? getSiteId() : siteId);
+    if (i > 0) qs.set("site_id", String(i));
     if (s) qs.set("site_name", s);
     if (c) qs.set("site_code", c);
     return qs.toString();
@@ -499,10 +594,24 @@
     return setSiteCode("");
   }
 
+  function resolveSiteId() {
+    const assigned = assignedSiteIdForUser();
+    if (assigned > 0) return setSiteId(assigned);
+    const u = new URL(window.location.href);
+    const q = normalizeSiteId(u.searchParams.get("site_id") || "");
+    if (q > 0) return setSiteId(q);
+    const stored = normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
+    if (stored > 0) return setSiteId(stored);
+    return setSiteId(0);
+  }
+
   function updateAddressBarSiteQuery() {
     const u = new URL(window.location.href);
     const siteName = getSiteNameRaw();
     const siteCode = getSiteCodeRaw();
+    const siteId = getSiteId();
+    if (siteId > 0) u.searchParams.set("site_id", String(siteId));
+    else u.searchParams.delete("site_id");
     if (siteName) u.searchParams.set("site_name", siteName);
     else u.searchParams.delete("site_name");
     if (siteCode) u.searchParams.set("site_code", siteCode);
@@ -532,11 +641,13 @@
   async function syncSiteIdentity({ requireInput = true } = {}) {
     const currentSite = getSiteNameRaw();
     const currentCode = getSiteCodeRaw();
-    if (requireInput && !currentSite && !currentCode) {
+    const currentId = getSiteId();
+    if (requireInput && !currentSite && !currentCode && currentId <= 0) {
       throw new Error("단지명 또는 단지코드를 입력하세요.");
     }
-    const qs = buildSiteQuery(currentSite, currentCode);
+    const qs = buildSiteQuery(currentSite, currentCode, currentId);
     const data = await jfetch(`/api/site_identity?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     enforceSiteIdentityPolicy();
@@ -918,6 +1029,7 @@
     const qs = buildSiteQuery(site, siteCode || getSiteCode());
     const url = `/api/load?${qs}&date=${encodeURIComponent(date)}`;
     const data = await jfetch(url);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     fillTabs(data.tabs || {});
@@ -931,6 +1043,7 @@
     const qs = buildSiteQuery(site, siteCode);
     const url = `/api/list_range?${qs}&date_from=${encodeURIComponent(df)}&date_to=${encodeURIComponent(dt)}`;
     const data = await jfetch(url);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     rangeDates = data && Array.isArray(data.dates) ? data.dates : [];
@@ -1009,6 +1122,7 @@
       if (!ok) return;
     }
     const payload = {
+      site_id: getSiteId(),
       site_name: siteNameForSave,
       site_code: getSiteCodeRaw() || getSiteCode(),
       date: getPickedDate(),
@@ -1107,6 +1221,7 @@
     const onSiteIdentityChange = async (source) => {
       const isAdmin = authUser && hasAdminPermission(authUser);
       if (!isAdmin) {
+        setSiteId(assignedSiteIdForUser());
         setSiteName(assignedSiteNameForUser());
         setSiteCode(assignedSiteCodeForUser());
         enforceSiteIdentityPolicy();
@@ -1213,9 +1328,11 @@
     await ensureAuth();
     resolveSiteName();
     resolveSiteCode();
+    resolveSiteId();
     await syncSiteIdentity({ requireInput: false });
     const data = await jfetch(`/api/schema?${buildSiteQuery(getSiteNameRaw(), getSiteCode())}`);
     const schema = data && data.schema ? data.schema : null;
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && data.site_name) setSiteName(String(data.site_name));
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     if (!schema) throw new Error("스키마를 불러오지 못했습니다.");
