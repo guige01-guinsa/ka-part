@@ -1239,11 +1239,20 @@ def parking_context(
 ):
     user, _token = _require_auth(request)
     permission_level = _parking_permission_level_from_user(user)
+    is_admin_user = int(user.get("is_admin") or 0) == 1
+
+    # Non-admin accounts must always use their assigned site context.
+    # This avoids false "site edit" errors when stale query/local values are sent.
+    requested_site_name = site_name
+    requested_site_code = site_code
+    if not is_admin_user:
+        requested_site_name = str(user.get("site_name") or "").strip()
+        requested_site_code = str(user.get("site_code") or "").strip().upper()
 
     clean_site_name, clean_site_code = _resolve_main_site_target(
         user,
-        site_name,
-        site_code,
+        requested_site_name,
+        requested_site_code,
         required=False,
     )
     clean_site_name = _clean_site_name(clean_site_name, required=False)
@@ -1286,7 +1295,7 @@ def parking_context(
 
     uid = int(user.get("id") or 0)
     user_site_code = _clean_site_code(user.get("site_code"), required=False)
-    if uid > 0 and int(user.get("is_admin") or 0) != 1 and not user_site_code:
+    if uid > 0 and not is_admin_user and not user_site_code:
         set_staff_user_site_code(uid, clean_site_code)
 
     serializer = URLSafeTimedSerializer(_parking_context_secret(), salt="parking-context")
