@@ -175,6 +175,7 @@ def _safe_int_env(name: str, default: int, minimum: int) -> int:
 ALLOW_INSECURE_DEFAULTS = _env_enabled("ALLOW_INSECURE_DEFAULTS", False)
 AUTH_COOKIE_SECURE = _env_enabled("KA_AUTH_COOKIE_SECURE", True)
 AUTH_COOKIE_MAX_AGE = _safe_int_env("KA_AUTH_COOKIE_MAX_AGE", 43200, 300)
+SITE_CODE_AUTOCREATE_NON_ADMIN = _env_enabled("KA_SITE_CODE_AUTOCREATE_NON_ADMIN", False)
 
 
 def _require_secret_env(
@@ -719,7 +720,12 @@ def _bind_user_site_code_if_missing(user: Dict[str, Any]) -> Dict[str, Any]:
         return user
 
     try:
-        resolved = _resolve_site_code_for_site(site_name, "", allow_create=True, allow_remap=False)
+        resolved = _resolve_site_code_for_site(
+            site_name,
+            "",
+            allow_create=SITE_CODE_AUTOCREATE_NON_ADMIN,
+            allow_remap=False,
+        )
     except HTTPException:
         return user
     if not resolved:
@@ -901,17 +907,10 @@ def _resolve_site_identity_for_main(user: Dict[str, Any], requested_site_name: A
         fallback_code = _clean_site_code(user.get("site_code"), required=False)
         return fallback_name, fallback_code
 
+    # Non-admin accounts are always bound to assigned site identity.
+    # Ignore client-sent site params to avoid stale local/query values causing conflicts.
     assigned_site_name = _normalized_assigned_site_name(user)
     assigned_site_code = _clean_site_code(user.get("site_code"), required=False)
-
-    if raw_site_name:
-        requested_name = _clean_site_name(raw_site_name, required=True)
-        if requested_name != assigned_site_name:
-            raise HTTPException(status_code=403, detail="단지명/단지코드 입력·수정은 관리자만 가능합니다.")
-    if raw_site_code:
-        requested_code = _clean_site_code(raw_site_code, required=True)
-        if not assigned_site_code or requested_code != assigned_site_code:
-            raise HTTPException(status_code=403, detail="단지명/단지코드 입력·수정은 관리자만 가능합니다.")
 
     if not assigned_site_code:
         assigned_site_code = _clean_site_code(find_site_code_by_name(assigned_site_name), required=False)
@@ -2261,14 +2260,14 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
                 resolved_code = _resolve_site_code_for_site(
                     existing_site_name,
                     "",
-                    allow_create=True,
+                    allow_create=SITE_CODE_AUTOCREATE_NON_ADMIN,
                     allow_remap=False,
                 )
             except HTTPException as e:
                 if e.status_code == 404:
                     raise HTTPException(
                         status_code=403,
-                        detail="단지코드 조회/생성에 실패했습니다. 잠시 후 다시 시도하세요.",
+                        detail="단지코드가 등록되지 않았습니다. 최고/운영관리자에게 등록을 요청하세요.",
                     ) from e
                 raise
             set_staff_user_site_code(int(existing["id"]), resolved_code)
@@ -2306,14 +2305,14 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         resolved_site_code = _resolve_site_code_for_site(
             site_name,
             site_code,
-            allow_create=True,
+            allow_create=SITE_CODE_AUTOCREATE_NON_ADMIN,
             allow_remap=False,
         )
     except HTTPException as e:
         if e.status_code == 404:
             raise HTTPException(
                 status_code=403,
-                detail="단지코드 조회/생성에 실패했습니다. 잠시 후 다시 시도하세요.",
+                detail="단지코드가 등록되지 않았습니다. 최고/운영관리자에게 등록을 요청하세요.",
             ) from e
         raise
     _assert_resident_household_available(
@@ -2695,9 +2694,9 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     phone = _normalize_phone(payload.get("phone"), required=False, field_name="phone")
     site_code = _clean_site_code(payload.get("site_code"), required=False)
     site_name = _clean_optional_text(payload.get("site_name"), 80)
-    allow_site_code_create = bool(not is_admin)
-    if is_admin:
-        allow_site_code_create = bool(actor_super)
+    allow_site_code_create = bool(actor_super and SITE_CODE_AUTOCREATE_NON_ADMIN)
+    if is_admin and actor_super:
+        allow_site_code_create = True
     if site_name:
         try:
             site_code = _resolve_site_code_for_site(
@@ -2710,7 +2709,7 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
             if e.status_code == 404 and not allow_site_code_create:
                 raise HTTPException(
                     status_code=403,
-                    detail="운영관리자는 기존 단지코드만 사용할 수 있습니다. 최고관리자에게 등록 요청하세요.",
+                    detail="해당 단지코드가 등록되어 있지 않습니다. 최고/운영관리자에게 등록 요청하세요.",
                 ) from e
             raise
     address = _clean_optional_text(payload.get("address"), 200)
@@ -2779,9 +2778,9 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
     phone = _normalize_phone(payload["phone"] if "phone" in payload else current.get("phone"), required=False, field_name="phone")
     site_code = _clean_site_code(payload["site_code"] if "site_code" in payload else current.get("site_code"), required=False)
     site_name = _clean_optional_text(payload["site_name"] if "site_name" in payload else current.get("site_name"), 80)
-    allow_site_code_create = bool(not is_admin)
-    if is_admin:
-        allow_site_code_create = bool(actor_super)
+    allow_site_code_create = bool(actor_super and SITE_CODE_AUTOCREATE_NON_ADMIN)
+    if is_admin and actor_super:
+        allow_site_code_create = True
     if site_name:
         try:
             site_code = _resolve_site_code_for_site(
@@ -2794,7 +2793,7 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
             if e.status_code == 404 and not allow_site_code_create:
                 raise HTTPException(
                     status_code=403,
-                    detail="운영관리자는 기존 단지코드만 사용할 수 있습니다. 최고관리자에게 등록 요청하세요.",
+                    detail="해당 단지코드가 등록되어 있지 않습니다. 최고/운영관리자에게 등록 요청하세요.",
                 ) from e
             raise
     address = _clean_optional_text(payload["address"] if "address" in payload else current.get("address"), 200)
