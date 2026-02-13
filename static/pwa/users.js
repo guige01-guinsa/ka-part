@@ -16,6 +16,14 @@
     { key: "super_admin", label: "최고관리자" },
     { key: "ops_admin", label: "운영관리자" },
   ];
+  const ROLE_BY_PERMISSION = {
+    admin: "최고/운영관리자",
+    site_admin: "단지관리자",
+    user: "사용자",
+    security_guard: "보안/경비",
+    resident: "입주민",
+    board_member: "입대의",
+  };
   let editingId = null;
   let recommendedCount = 9;
   let me = null;
@@ -73,6 +81,34 @@
     return txt === "입주민" || txt === "주민" || txt === "세대주민";
   }
 
+  function permissionFromRole(role) {
+    const txt = String(role || "").trim();
+    if (!txt) return "user";
+    if (txt === "최고/운영관리자" || txt === "최고관리자" || txt === "운영관리자") return "admin";
+    if (txt === "단지관리자") return "site_admin";
+    if (txt === "보안/경비" || txt.includes("보안") || txt.includes("경비")) return "security_guard";
+    if (isResidentRole(txt)) return "resident";
+    if (txt === "입대의" || txt === "입주자대표" || txt === "입주자대표회의") return "board_member";
+    return "user";
+  }
+
+  function roleFromPermission(permissionLevel) {
+    const key = String(permissionLevel || "").trim();
+    return ROLE_BY_PERMISSION[key] || ROLE_BY_PERMISSION.user;
+  }
+
+  function syncRoleByPermission() {
+    const perm = String($("#userPermission")?.value || "user").trim();
+    const role = roleFromPermission(perm);
+    if ($("#userRole")) $("#userRole").value = role;
+  }
+
+  function syncPermissionByRole() {
+    const role = String($("#userRole")?.value || "").trim();
+    const perm = permissionFromRole(role);
+    if ($("#userPermission")) $("#userPermission").value = perm;
+  }
+
   function applyMode() {
     isAdminView = !!(me && me.is_admin);
     isSuperAdminView = isSuperAdmin(me);
@@ -83,6 +119,7 @@
     $("#activeWrap").hidden = !isAdminView;
 
     $("#userPermission").disabled = !isAdminView;
+    $("#userRole").disabled = !isAdminView;
     $("#isActive").disabled = !isAdminView;
     $("#loginId").readOnly = !isAdminView;
     $("#userSiteCode").readOnly = !isAdminView;
@@ -120,9 +157,9 @@
     $("#userNote").value = "";
     $("#userPassword").value = "";
     $("#userPermission").value = "user";
+    syncRoleByPermission();
     $("#adminScope").value = "ops_admin";
     $("#isActive").checked = true;
-    if (roles.length) $("#userRole").value = roles[0];
     syncAdminScopeVisibility();
     setMsg("");
   }
@@ -141,20 +178,22 @@
     $("#userOfficeFax").value = user.office_fax || "";
     $("#userNote").value = user.note || "";
     $("#userPassword").value = "";
-    $("#userPermission").value = String(user.permission_level || (user.is_admin ? "admin" : user.is_site_admin ? "site_admin" : "user"));
+    const perm = String(user.permission_level || (user.is_admin ? "admin" : user.is_site_admin ? "site_admin" : "user"));
+    $("#userPermission").value = perm;
     $("#adminScope").value = String(user.admin_scope || "ops_admin");
     $("#isActive").checked = !!user.is_active;
-    $("#userRole").value = user.role || roles[0] || "";
+    $("#userRole").value = roleFromPermission(perm);
     syncAdminScopeVisibility();
     setMsg("");
   }
 
   function payloadFromForm() {
     const pw = ($("#userPassword").value || "").trim();
+    const permissionLevel = ($("#userPermission").value || "user").trim();
     const payload = {
       login_id: ($("#loginId").value || "").trim(),
       name: ($("#userName").value || "").trim(),
-      role: $("#userRole").value || "",
+      role: roleFromPermission(permissionLevel),
       unit_label: ($("#userUnitLabel").value || "").trim(),
       phone: ($("#userPhone").value || "").trim(),
       site_code: ($("#userSiteCode").value || "").trim().toUpperCase(),
@@ -163,7 +202,7 @@
       office_phone: ($("#userOfficePhone").value || "").trim(),
       office_fax: ($("#userOfficeFax").value || "").trim(),
       note: ($("#userNote").value || "").trim(),
-      permission_level: ($("#userPermission").value || "user").trim(),
+      permission_level: permissionLevel,
       is_active: !!$("#isActive").checked,
     };
     if (payload.permission_level === "admin" && isSuperAdminView) {
@@ -348,15 +387,6 @@
     adminScopes = Array.isArray(data.admin_scopes) && data.admin_scopes.length ? data.admin_scopes : adminScopes;
     recommendedCount = Number(data.recommended_staff_count || 9);
 
-    const roleSel = $("#userRole");
-    roleSel.innerHTML = "";
-    for (const role of roles) {
-      const o = document.createElement("option");
-      o.value = role;
-      o.textContent = role;
-      roleSel.appendChild(o);
-    }
-
     const permSel = $("#userPermission");
     permSel.innerHTML = "";
     const allowAdminPermission = isSuperAdmin(me);
@@ -371,6 +401,18 @@
       permSel.value = "site_admin";
     }
 
+    const roleSel = $("#userRole");
+    roleSel.innerHTML = "";
+    const roleItems = Array.from(new Set(levelItems.map((x) => roleFromPermission(String(x.key || "")))));
+    const sourceRoles = roleItems.length ? roleItems : roles;
+    for (const role of sourceRoles) {
+      const o = document.createElement("option");
+      o.value = role;
+      o.textContent = role;
+      roleSel.appendChild(o);
+    }
+    if (!roleSel.value && sourceRoles.length) roleSel.value = sourceRoles[0];
+
     const scopeSel = $("#adminScope");
     if (scopeSel) {
       scopeSel.innerHTML = "";
@@ -382,6 +424,7 @@
       }
       if (!scopeSel.value) scopeSel.value = "ops_admin";
     }
+    syncRoleByPermission();
     syncAdminScopeVisibility();
   }
 
@@ -416,9 +459,10 @@
 
   function payloadFromSelfForm() {
     const pw = ($("#userPassword").value || "").trim();
+    const role = roleFromPermission(String((selfProfile && selfProfile.permission_level) || permissionFromRole((selfProfile && selfProfile.role) || "")));
     const payload = {
       name: ($("#userName").value || "").trim(),
-      role: $("#userRole").value || "",
+      role,
       unit_label: ($("#userUnitLabel").value || "").trim(),
       phone: ($("#userPhone").value || "").trim(),
       address: ($("#userAddress").value || "").trim(),
@@ -520,6 +564,11 @@
       run.catch((e) => setMsg(e.message, true));
     });
     $("#userPermission")?.addEventListener("change", () => {
+      syncRoleByPermission();
+      syncAdminScopeVisibility();
+    });
+    $("#userRole")?.addEventListener("change", () => {
+      syncPermissionByRole();
       syncAdminScopeVisibility();
     });
 

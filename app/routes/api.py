@@ -31,7 +31,6 @@ from ..db import (
     count_active_resident_household_users,
     count_staff_admins,
     count_super_admins,
-    count_staff_users_for_site,
     create_signup_phone_verification,
     create_auth_session,
     create_privileged_change_request,
@@ -99,16 +98,11 @@ from ..utils import build_excel, build_pdf, safe_ymd, today_ymd
 router = APIRouter()
 
 VALID_USER_ROLES = [
-    "서버관리자",
-    "관리소장",
-    "부장",
-    "과장",
-    "대리",
-    "주임",
-    "경리",
+    "최고/운영관리자",
+    "단지관리자",
+    "사용자",
     "보안/경비",
-    "미화원",
-    "세대주민",
+    "입주민",
     "입대의",
 ]
 VALID_PERMISSION_LEVELS = ["admin", "site_admin", "user", "security_guard", "resident", "board_member"]
@@ -120,6 +114,14 @@ ADMIN_SCOPE_LABELS = {
 RESIDENT_ROLE_SET = {"입주민", "주민", "세대주민"}
 BOARD_ROLE_SET = {"입대의", "입주자대표", "입주자대표회의"}
 SECURITY_ROLE_KEYWORDS = ("보안", "경비")
+ROLE_LABEL_BY_PERMISSION = {
+    "admin": "최고/운영관리자",
+    "site_admin": "단지관리자",
+    "user": "사용자",
+    "security_guard": "보안/경비",
+    "resident": "입주민",
+    "board_member": "입대의",
+}
 DEFAULT_SITE_NAME = "미지정단지"
 PHONE_VERIFY_TTL_MINUTES = 5
 PHONE_VERIFY_MAX_ATTEMPTS = 5
@@ -260,8 +262,26 @@ def _is_security_role(value: Any) -> bool:
     return any(token in role for token in SECURITY_ROLE_KEYWORDS)
 
 
+def _permission_level_from_role_text(value: Any, *, allow_admin_levels: bool = True) -> str:
+    role = _normalized_role_text(value)
+    if allow_admin_levels and role in {"최고/운영관리자", "최고관리자", "운영관리자"}:
+        return "admin"
+    if allow_admin_levels and role == "단지관리자":
+        return "site_admin"
+    if _is_security_role(role):
+        return "security_guard"
+    if _is_resident_role(role):
+        return "resident"
+    if _is_board_role(role):
+        return "board_member"
+    return "user"
+
+
 def _allowed_modules_for_user(user: Dict[str, Any]) -> List[str]:
-    role = _normalized_role_text(user.get("role"))
+    role = _effective_role_for_permission_level(
+        _normalized_role_text(user.get("role")),
+        _permission_level_from_user(user),
+    )
     if _is_security_role(role):
         return ["parking"]
     if _is_complaints_only_role(role):
@@ -335,12 +355,9 @@ def _assert_resident_household_available(
 
 def _effective_role_for_permission_level(role: str, permission_level: str) -> str:
     level = str(permission_level or "").strip().lower()
-    if level == "security_guard":
-        return "보안/경비"
-    if level == "resident":
-        return "세대주민"
-    if level == "board_member":
-        return "입대의"
+    mapped = ROLE_LABEL_BY_PERMISSION.get(level)
+    if mapped:
+        return mapped
     return role
 
 
@@ -544,14 +561,7 @@ def _permission_level_from_user(user: Dict[str, Any]) -> str:
         return "admin"
     if int(user.get("is_site_admin") or 0) == 1:
         return "site_admin"
-    role = _normalized_role_text(user.get("role"))
-    if _is_security_role(role):
-        return "security_guard"
-    if _is_resident_role(role):
-        return "resident"
-    if _is_board_role(role):
-        return "board_member"
-    return "user"
+    return _permission_level_from_role_text(user.get("role"), allow_admin_levels=False)
 
 
 def _account_type_from_user(user: Dict[str, Any]) -> str:
@@ -642,6 +652,21 @@ def _resolve_permission_flags(
             return 0, 0, level, ""
         return 0, 0, level, ""
 
+    if "role" in payload and "is_admin" not in payload and "is_site_admin" not in payload:
+        inferred_level = _permission_level_from_role_text(payload.get("role"))
+        if inferred_level == "admin":
+            scope = _clean_admin_scope(payload.get("admin_scope"), required=False) or _clean_admin_scope(
+                default_admin_scope, required=False
+            )
+            if not scope:
+                scope = "ops_admin"
+            return 1, 0, inferred_level, scope
+        if inferred_level == "site_admin":
+            return 0, 1, inferred_level, ""
+        if inferred_level in {"security_guard", "resident", "board_member"}:
+            return 0, 0, inferred_level, ""
+        return 0, 0, "user", ""
+
     is_admin = _clean_bool(payload.get("is_admin"), default=default_admin)
     is_site_admin = _clean_bool(payload.get("is_site_admin"), default=default_site_admin)
     if is_admin:
@@ -715,11 +740,12 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     admin_scope = _admin_scope_from_user(user)
     allowed_modules = _allowed_modules_for_user(user)
     account_type = _account_type_from_user(user)
+    canonical_role = _effective_role_for_permission_level(_normalized_role_text(user.get("role")), permission_level)
     return {
         "id": int(user.get("id")),
         "login_id": user.get("login_id"),
         "name": user.get("name"),
-        "role": user.get("role"),
+        "role": canonical_role,
         "phone": user.get("phone"),
         "site_code": user.get("site_code"),
         "site_name": user.get("site_name"),
@@ -941,7 +967,10 @@ def _enforce_api_module_scope(user: Dict[str, Any], request_path: str) -> None:
     path = str(request_path or "").split("?", 1)[0].strip()
     if not path:
         return
-    role = _normalized_role_text(user.get("role"))
+    role = _effective_role_for_permission_level(
+        _normalized_role_text(user.get("role")),
+        _permission_level_from_user(user),
+    )
     if _is_security_role(role):
         allowed_paths = {"/api/auth/me", "/api/auth/logout", "/api/auth/change_password", "/api/parking/context"}
         if path in allowed_paths:
@@ -951,7 +980,7 @@ def _enforce_api_module_scope(user: Dict[str, Any], request_path: str) -> None:
         allowed_paths = {"/api/auth/me", "/api/auth/logout", "/api/auth/change_password"}
         if path in allowed_paths:
             return
-        raise HTTPException(status_code=403, detail="입대의/세대주민 계정은 민원 모듈만 사용할 수 있습니다.")
+        raise HTTPException(status_code=403, detail="입대의/입주민 계정은 민원 모듈만 사용할 수 있습니다.")
 
 
 def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
@@ -2083,7 +2112,10 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
 
     login_id = _clean_login_id(payload.get("login_id"))
     name = _clean_name(payload.get("name") or payload.get("login_id"))
-    role = _clean_role(payload.get("role") or "관리소장")
+    role = _effective_role_for_permission_level(
+        _clean_role(payload.get("role") or ROLE_LABEL_BY_PERMISSION["admin"]),
+        "admin",
+    )
     password = _clean_password(payload.get("password"), required=True)
 
     existing = get_staff_user_by_login(login_id)
@@ -2146,7 +2178,11 @@ def auth_signup_request_phone_verification(request: Request, payload: Dict[str, 
     phone = _normalize_phone(payload.get("phone"), required=True, field_name="phone")
     site_code = _clean_site_code(payload.get("site_code"), required=False)
     site_name = _clean_required_text(payload.get("site_name"), 80, "site_name")
-    role = _clean_role(payload.get("role"))
+    raw_role = _clean_role(payload.get("role"))
+    signup_level = _permission_level_from_role_text(raw_role)
+    if signup_level == "admin":
+        raise HTTPException(status_code=403, detail="최고/운영관리자 계정은 자가가입할 수 없습니다.")
+    role = _effective_role_for_permission_level(raw_role, signup_level)
     unit_label, household_key = _extract_resident_household(payload, role=role)
     address = _clean_required_text(payload.get("address"), 200, "address")
     office_phone = _normalize_phone(payload.get("office_phone"), required=True, field_name="office_phone")
@@ -2254,7 +2290,11 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         profile = {}
 
     name = _clean_name(profile.get("name"))
-    role = _clean_role(profile.get("role"))
+    raw_role = _clean_role(profile.get("role"))
+    signup_level = _permission_level_from_role_text(raw_role)
+    if signup_level == "admin":
+        raise HTTPException(status_code=403, detail="최고/운영관리자 계정은 자가가입할 수 없습니다.")
+    role = _effective_role_for_permission_level(raw_role, signup_level)
     unit_label, household_key = _extract_resident_household(profile, role=role)
     site_code = _clean_site_code(profile.get("site_code"), required=False)
     site_name = _clean_required_text(profile.get("site_name"), 80, "site_name")
@@ -2276,7 +2316,6 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
                 detail="단지코드 조회/생성에 실패했습니다. 잠시 후 다시 시도하세요.",
             ) from e
         raise
-    existing_site_user_count = count_staff_users_for_site(site_name, site_code=resolved_site_code)
     _assert_resident_household_available(
         role=role,
         site_code=resolved_site_code,
@@ -2300,7 +2339,7 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         note="자가가입(휴대폰 인증)",
         password_hash=hash_password(temp_password),
         is_admin=0,
-        is_site_admin=1 if existing_site_user_count == 0 else 0,
+        is_site_admin=1 if signup_level == "site_admin" else 0,
         is_active=1,
     )
     touch_signup_phone_verification_attempt(int(row["id"]), success=True, issued_login_id=login_id)

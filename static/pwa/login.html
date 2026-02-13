@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>로그인</title>
-  <link rel="stylesheet" href="/pwa/login.css?v=20260213h" />
+  <link rel="stylesheet" href="/pwa/login.css?v=20260213i" />
 </head>
 <body>
   <main class="wrap">
@@ -45,20 +45,16 @@
           <span>사용자분류</span>
           <select id="suRole">
             <option value="">선택</option>
-            <option value="서버관리자">서버관리자</option>
-            <option value="관리소장">관리소장</option>
-            <option value="부장">부장</option>
-            <option value="과장">과장</option>
-            <option value="대리">대리</option>
-            <option value="주임">주임</option>
-            <option value="경리">경리</option>
+            <option value="최고/운영관리자">최고/운영관리자</option>
+            <option value="단지관리자">단지관리자</option>
+            <option value="사용자">사용자</option>
             <option value="보안/경비">보안/경비</option>
-            <option value="미화원">미화원</option>
-            <option value="세대주민">세대주민</option>
+            <option value="입주민">입주민</option>
+            <option value="입대의">입대의</option>
           </select>
         </label>
         <label class="field">
-          <span>동/호(세대주민 필수)</span>
+          <span>동/호(입주민 필수)</span>
           <input id="suUnitLabel" type="text" placeholder="예: 101-1203 또는 101동 1203호" />
         </label>
       </div>
@@ -101,11 +97,11 @@
       </label>
       <label class="field">
         <span>이름</span>
-        <input id="bsName" type="text" placeholder="예: 관리소장" />
+        <input id="bsName" type="text" placeholder="예: 운영관리자" />
       </label>
       <label class="field">
-        <span>직책</span>
-        <input id="bsRole" type="text" value="관리소장" />
+        <span>사용자분류</span>
+        <input id="bsRole" type="text" value="최고/운영관리자" />
       </label>
       <label class="field">
         <span>비밀번호</span>
@@ -123,6 +119,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/login.js?v=20260213h"></script>
+  <script src="/pwa/login.js?v=20260213i"></script>
 </body>
 </html>

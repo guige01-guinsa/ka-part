@@ -42,9 +42,16 @@
     return txt.includes("보안") || txt.includes("경비");
   }
 
+  function permissionLevelText(user) {
+    return String((user && user.permission_level) || "").trim().toLowerCase();
+  }
+
   function defaultLandingPath(user) {
     const fromServer = normalizePath(user && user.default_landing_path);
     if (fromServer) return fromServer;
+    const level = permissionLevelText(user);
+    if (level === "security_guard") return "/parking/admin2";
+    if (level === "resident" || level === "board_member") return "/pwa/complaints.html";
     const role = String((user && user.role) || "").trim();
     if (isSecurityRoleText(role)) return "/parking/admin2";
     if (isComplaintsRoleText(role)) return "/pwa/complaints.html";
@@ -53,6 +60,13 @@
 
   function resolveNextPath(user) {
     const requested = nextPath();
+    const level = permissionLevelText(user);
+    if (level === "security_guard") {
+      return requested.startsWith("/parking") ? requested : defaultLandingPath(user);
+    }
+    if (level === "resident" || level === "board_member") {
+      return requested.startsWith("/pwa/complaints.html") ? requested : defaultLandingPath(user);
+    }
     const role = String((user && user.role) || "").trim();
     if (isSecurityRoleText(role)) {
       return requested.startsWith("/parking") ? requested : defaultLandingPath(user);
@@ -99,8 +113,12 @@
       setMsg($("#signupMsg"), "필수 항목을 모두 입력하세요.", true);
       return;
     }
+    if (body.role === "최고/운영관리자") {
+      setMsg($("#signupMsg"), "최고/운영관리자 계정은 자가가입할 수 없습니다.", true);
+      return;
+    }
     if (isResidentRoleText(body.role) && !body.unit_label) {
-      setMsg($("#signupMsg"), "세대주민은 동/호를 입력해야 합니다.", true);
+      setMsg($("#signupMsg"), "입주민은 동/호를 입력해야 합니다.", true);
       return;
     }
     const data = await KAAuth.requestJson("/api/auth/signup/request_phone_verification", {

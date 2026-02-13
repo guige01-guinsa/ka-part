@@ -119,12 +119,20 @@
     return String((user && user.role) || "").trim();
   }
 
+  function permissionLevelText(user) {
+    return String((user && user.permission_level) || "").trim().toLowerCase();
+  }
+
   function isResidentRole(user) {
+    const level = permissionLevelText(user);
+    if (level === "resident") return true;
     const role = roleText(user);
     return role === "입주민" || role === "주민" || role === "세대주민";
   }
 
   function isBoardRole(user) {
+    const level = permissionLevelText(user);
+    if (level === "board_member") return true;
     const role = roleText(user);
     return role === "입대의" || role === "입주자대표" || role === "입주자대표회의";
   }
@@ -134,6 +142,8 @@
   }
 
   function isSecurityRole(user) {
+    const level = permissionLevelText(user);
+    if (level === "security_guard") return true;
     const role = roleText(user);
     if (!role) return false;
     const compact = role.replaceAll(" ", "");

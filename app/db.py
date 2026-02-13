@@ -424,6 +424,57 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         WHERE is_admin=1 AND lower(login_id)='admin';
         """
     )
+    # Normalize role taxonomy to the six-category model for stable permission/display behavior.
+    con.execute(
+        """
+        UPDATE staff_users
+        SET role='최고/운영관리자'
+        WHERE is_admin=1 AND TRIM(COALESCE(role,''))<>'최고/운영관리자';
+        """
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET role='단지관리자'
+        WHERE is_admin=0 AND is_site_admin=1 AND TRIM(COALESCE(role,''))<>'단지관리자';
+        """
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET role='보안/경비'
+        WHERE is_admin=0
+          AND is_site_admin=0
+          AND (instr(TRIM(COALESCE(role,'')), '보안')>0 OR instr(TRIM(COALESCE(role,'')), '경비')>0);
+        """
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET role='입주민'
+        WHERE is_admin=0
+          AND is_site_admin=0
+          AND TRIM(COALESCE(role,'')) IN ('입주민','주민','세대주민');
+        """
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET role='입대의'
+        WHERE is_admin=0
+          AND is_site_admin=0
+          AND TRIM(COALESCE(role,'')) IN ('입대의','입주자대표','입주자대표회의');
+        """
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET role='사용자'
+        WHERE is_admin=0
+          AND is_site_admin=0
+          AND TRIM(COALESCE(role,'')) NOT IN ('보안/경비','입주민','입대의');
+        """
+    )
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_staff_users_active
