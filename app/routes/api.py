@@ -28,6 +28,7 @@ from ..backup_manager import (
 )
 from ..db import (
     cleanup_expired_sessions,
+    count_active_resident_household_users,
     count_staff_admins,
     count_super_admins,
     count_staff_users_for_site,
@@ -97,13 +98,15 @@ from ..utils import build_excel, build_pdf, safe_ymd, today_ymd
 
 router = APIRouter()
 
-VALID_USER_ROLES = ["관리소장", "과장", "주임", "기사", "행정", "경비", "미화", "기타"]
+VALID_USER_ROLES = ["관리소장", "과장", "주임", "기사", "행정", "경비", "보안/경비", "입주민", "미화", "기타"]
 VALID_PERMISSION_LEVELS = ["admin", "site_admin", "user"]
 VALID_ADMIN_SCOPES = ["super_admin", "ops_admin"]
 ADMIN_SCOPE_LABELS = {
     "super_admin": "최고관리자",
     "ops_admin": "운영관리자",
 }
+RESIDENT_ROLE_SET = {"입주민", "주민"}
+SECURITY_ROLE_KEYWORDS = ("보안", "경비")
 DEFAULT_SITE_NAME = "미지정단지"
 PHONE_VERIFY_TTL_MINUTES = 5
 PHONE_VERIFY_MAX_ATTEMPTS = 5
@@ -216,6 +219,97 @@ def _clean_role(value: Any) -> str:
     if len(role) < 1 or len(role) > 20:
         raise HTTPException(status_code=400, detail="role length must be 1..20")
     return role
+
+
+def _normalized_role_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _is_resident_role(value: Any) -> bool:
+    return _normalized_role_text(value) in RESIDENT_ROLE_SET
+
+
+def _is_security_role(value: Any) -> bool:
+    role = _normalized_role_text(value)
+    if not role:
+        return False
+    compact = role.replace(" ", "")
+    if compact == "보안/경비":
+        return True
+    return any(token in role for token in SECURITY_ROLE_KEYWORDS)
+
+
+def _allowed_modules_for_user(user: Dict[str, Any]) -> List[str]:
+    role = _normalized_role_text(user.get("role"))
+    if _is_security_role(role):
+        return ["parking"]
+    if _is_resident_role(role):
+        return ["complaints"]
+    return ["main", "complaints"]
+
+
+def _default_landing_path_for_user(user: Dict[str, Any]) -> str:
+    modules = _allowed_modules_for_user(user)
+    if "parking" in modules and len(modules) == 1:
+        return "/parking/admin2"
+    if "complaints" in modules and len(modules) == 1:
+        return "/pwa/complaints.html"
+    return "/pwa/"
+
+
+def _normalize_unit_label(value: Any, *, required: bool = False) -> Tuple[str | None, str | None]:
+    raw = str(value or "").strip()
+    if not raw:
+        if required:
+            raise HTTPException(status_code=400, detail="입주민 계정은 동/호(unit_label)가 필요합니다.")
+        return None, None
+
+    compact = re.sub(r"\s+", "", raw)
+    m = re.match(r"^(\d{2,4})[-/](\d{3,4})$", compact)
+    if not m:
+        m = re.match(r"^(\d{2,4})동(\d{3,4})호?$", compact)
+    if not m:
+        raise HTTPException(status_code=400, detail="unit_label 형식은 예: 101-1203 또는 101동 1203호")
+
+    dong = str(m.group(1)).strip()
+    ho = str(m.group(2)).strip()
+    normalized = f"{dong}-{ho}"
+    return normalized, normalized
+
+
+def _extract_resident_household(payload: Dict[str, Any], *, role: str, current_unit_label: Any = None) -> Tuple[str | None, str | None]:
+    if _is_resident_role(role):
+        source = payload.get("unit_label") if "unit_label" in payload else current_unit_label
+        return _normalize_unit_label(source, required=True)
+
+    if "unit_label" in payload:
+        return _normalize_unit_label(payload.get("unit_label"), required=False)
+    return None, None
+
+
+def _assert_resident_household_available(
+    *,
+    role: str,
+    site_code: str,
+    household_key: str | None,
+    is_active: bool,
+    exclude_user_id: int | None = None,
+) -> None:
+    if not _is_resident_role(role):
+        return
+    if not is_active:
+        return
+    clean_site_code = _clean_site_code(site_code, required=True)
+    clean_household_key = str(household_key or "").strip().upper()
+    if not clean_household_key:
+        raise HTTPException(status_code=400, detail="입주민 계정은 동/호(unit_label)가 필요합니다.")
+    exists = count_active_resident_household_users(
+        site_code=clean_site_code,
+        household_key=clean_household_key,
+        exclude_user_id=exclude_user_id,
+    )
+    if exists > 0:
+        raise HTTPException(status_code=409, detail="해당 세대에는 이미 입주민 계정이 등록되어 있습니다.")
 
 
 def _clean_site_name(value: Any, *, required: bool = False) -> str:
@@ -554,6 +648,7 @@ def _bind_user_site_code_if_missing(user: Dict[str, Any]) -> Dict[str, Any]:
 def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     permission_level = _permission_level_from_user(user)
     admin_scope = _admin_scope_from_user(user)
+    allowed_modules = _allowed_modules_for_user(user)
     return {
         "id": int(user.get("id")),
         "login_id": user.get("login_id"),
@@ -565,12 +660,16 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "address": user.get("address"),
         "office_phone": user.get("office_phone"),
         "office_fax": user.get("office_fax"),
+        "unit_label": user.get("unit_label"),
+        "household_key": user.get("household_key"),
         "note": user.get("note"),
         "is_admin": bool(user.get("is_admin")),
         "is_site_admin": bool(user.get("is_site_admin")),
         "admin_scope": admin_scope,
         "admin_scope_label": _admin_scope_label(admin_scope),
         "permission_level": permission_level,
+        "allowed_modules": allowed_modules,
+        "default_landing_path": _default_landing_path_for_user(user),
         "is_active": bool(user.get("is_active")),
         "created_at": user.get("created_at"),
         "updated_at": user.get("updated_at"),
@@ -771,12 +870,30 @@ def _clear_auth_cookie(resp: JSONResponse) -> None:
     )
 
 
+def _enforce_api_module_scope(user: Dict[str, Any], request_path: str) -> None:
+    path = str(request_path or "").split("?", 1)[0].strip()
+    if not path:
+        return
+    role = _normalized_role_text(user.get("role"))
+    if _is_security_role(role):
+        allowed_paths = {"/api/auth/me", "/api/auth/logout", "/api/auth/change_password", "/api/parking/context"}
+        if path in allowed_paths:
+            return
+        raise HTTPException(status_code=403, detail="보안/경비 계정은 주차관리 모듈만 사용할 수 있습니다.")
+    if _is_resident_role(role):
+        allowed_paths = {"/api/auth/me", "/api/auth/logout", "/api/auth/change_password"}
+        if path in allowed_paths:
+            return
+        raise HTTPException(status_code=403, detail="입주민 계정은 민원 모듈만 사용할 수 있습니다.")
+
+
 def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
     token = _extract_access_token(request)
     user = get_auth_user_by_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="invalid or expired session")
     user = _bind_user_site_code_if_missing(user)
+    _enforce_api_module_scope(user, request.url.path)
     return user, token
 
 
@@ -1044,6 +1161,8 @@ def parking_context(
     site_code: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
+    if not _is_security_role(user.get("role")):
+        raise HTTPException(status_code=403, detail="보안/경비 계정만 주차관리 모듈에 접근할 수 있습니다.")
     permission_level = _permission_level_from_user(user)
 
     clean_site_name, clean_site_code = _resolve_main_site_target(
@@ -1954,6 +2073,7 @@ def auth_signup_request_phone_verification(request: Request, payload: Dict[str, 
     site_code = _clean_site_code(payload.get("site_code"), required=False)
     site_name = _clean_required_text(payload.get("site_name"), 80, "site_name")
     role = _clean_role(payload.get("role"))
+    unit_label, household_key = _extract_resident_household(payload, role=role)
     address = _clean_required_text(payload.get("address"), 200, "address")
     office_phone = _normalize_phone(payload.get("office_phone"), required=True, field_name="office_phone")
     office_fax = _normalize_phone(payload.get("office_fax"), required=True, field_name="office_fax")
@@ -1967,6 +2087,8 @@ def auth_signup_request_phone_verification(request: Request, payload: Dict[str, 
         "site_code": site_code,
         "site_name": site_name,
         "role": role,
+        "unit_label": unit_label,
+        "household_key": household_key,
         "address": address,
         "office_phone": office_phone,
         "office_fax": office_fax,
@@ -2059,6 +2181,7 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
 
     name = _clean_name(profile.get("name"))
     role = _clean_role(profile.get("role"))
+    unit_label, household_key = _extract_resident_household(profile, role=role)
     site_code = _clean_site_code(profile.get("site_code"), required=False)
     site_name = _clean_required_text(profile.get("site_name"), 80, "site_name")
     address = _clean_required_text(profile.get("address"), 200, "address")
@@ -2080,6 +2203,12 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
             ) from e
         raise
     existing_site_user_count = count_staff_users_for_site(site_name, site_code=resolved_site_code)
+    _assert_resident_household_available(
+        role=role,
+        site_code=resolved_site_code,
+        household_key=household_key,
+        is_active=True,
+    )
     login_id = _generate_login_id_from_phone(phone)
     temp_password = _generate_temp_password(10)
     user = create_staff_user(
@@ -2092,6 +2221,8 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         address=address,
         office_phone=office_phone,
         office_fax=office_fax,
+        unit_label=unit_label,
+        household_key=household_key,
         note="자가가입(휴대폰 인증)",
         password_hash=hash_password(temp_password),
         is_admin=0,
@@ -2139,6 +2270,7 @@ def auth_login(request: Request, payload: Dict[str, Any] = Body(...)):
         "token": session["token"],
         "expires_at": session["expires_at"],
         "user": _public_user(fresh),
+        "landing_path": _default_landing_path_for_user(fresh),
     }
     resp = JSONResponse(body)
     _set_auth_cookie(resp, session["token"])
@@ -2160,7 +2292,12 @@ def auth_logout(request: Request):
 @router.get("/auth/me")
 def auth_me(request: Request):
     user, _token = _require_auth(request)
-    return {"ok": True, "user": _public_user(user), "session_expires_at": user.get("expires_at")}
+    return {
+        "ok": True,
+        "user": _public_user(user),
+        "session_expires_at": user.get("expires_at"),
+        "landing_path": _default_landing_path_for_user(user),
+    }
 
 
 @router.post("/auth/change_password")
@@ -2187,6 +2324,7 @@ def auth_change_password(request: Request, payload: Dict[str, Any] = Body(...)):
         "token": session["token"],
         "expires_at": session["expires_at"],
         "user": _public_user(fresh),
+        "landing_path": _default_landing_path_for_user(fresh),
     }
     resp = JSONResponse(body)
     _set_auth_cookie(resp, session["token"])
@@ -2274,10 +2412,22 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
         field_name="office_fax",
     )
     note = _clean_optional_text(payload["note"] if "note" in payload else current.get("note"), 200)
+    unit_label, household_key = _extract_resident_household(
+        payload,
+        role=role,
+        current_unit_label=current.get("unit_label"),
+    )
     is_admin = 1 if bool(current.get("is_admin")) else 0
     is_site_admin = 1 if bool(current.get("is_site_admin")) else 0
     admin_scope = _admin_scope_from_user(current)
     is_active = 1 if bool(current.get("is_active")) else 0
+    _assert_resident_household_available(
+        role=role,
+        site_code=site_code,
+        household_key=household_key,
+        is_active=bool(is_active),
+        exclude_user_id=user_id,
+    )
 
     try:
         user = update_staff_user(
@@ -2291,6 +2441,8 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
             address=address,
             office_phone=office_phone,
             office_fax=office_fax,
+            unit_label=unit_label,
+            household_key=household_key,
             note=note,
             is_admin=is_admin,
             is_site_admin=is_site_admin,
@@ -2368,6 +2520,7 @@ def api_users(
                     str(u.get("phone") or ""),
                     str(u.get("site_code") or ""),
                     str(u.get("site_name") or ""),
+                    str(u.get("unit_label") or ""),
                     str(u.get("address") or ""),
                     str(u.get("office_phone") or ""),
                     str(u.get("office_fax") or ""),
@@ -2437,6 +2590,7 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     office_phone = _normalize_phone(payload.get("office_phone"), required=False, field_name="office_phone")
     office_fax = _normalize_phone(payload.get("office_fax"), required=False, field_name="office_fax")
     note = _clean_optional_text(payload.get("note"), 200)
+    unit_label, household_key = _extract_resident_household(payload, role=role)
     password = _clean_password(payload.get("password"), required=True)
     is_admin, is_site_admin, _permission_level, admin_scope = _resolve_permission_flags(
         payload,
@@ -2449,6 +2603,12 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
     if not is_admin:
         admin_scope = ""
     is_active = 1 if _clean_bool(payload.get("is_active"), default=True) else 0
+    _assert_resident_household_available(
+        role=role,
+        site_code=site_code,
+        household_key=household_key,
+        is_active=bool(is_active),
+    )
     try:
         user = create_staff_user(
             login_id=login_id,
@@ -2460,6 +2620,8 @@ def api_users_create(request: Request, payload: Dict[str, Any] = Body(...)):
             address=address,
             office_phone=office_phone,
             office_fax=office_fax,
+            unit_label=unit_label,
+            household_key=household_key,
             note=note,
             password_hash=hash_password(password),
             is_admin=is_admin,
@@ -2516,6 +2678,11 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
         field_name="office_fax",
     )
     note = _clean_optional_text(payload["note"] if "note" in payload else current.get("note"), 200)
+    unit_label, household_key = _extract_resident_household(
+        payload,
+        role=role,
+        current_unit_label=current.get("unit_label"),
+    )
 
     is_admin, is_site_admin, _permission_level, admin_scope = _resolve_permission_flags(
         payload,
@@ -2529,6 +2696,13 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
         _clean_bool(payload["is_active"], default=bool(current.get("is_active")))
         if "is_active" in payload
         else bool(current.get("is_active"))
+    )
+    _assert_resident_household_available(
+        role=role,
+        site_code=site_code,
+        household_key=household_key,
+        is_active=bool(is_active),
+        exclude_user_id=int(user_id),
     )
 
     if not actor_super:
@@ -2567,6 +2741,8 @@ def api_users_patch(request: Request, user_id: int, payload: Dict[str, Any] = Bo
             address=address,
             office_phone=office_phone,
             office_fax=office_fax,
+            unit_label=unit_label,
+            household_key=household_key,
             note=note,
             is_admin=1 if is_admin else 0,
             is_site_admin=1 if is_site_admin else 0,

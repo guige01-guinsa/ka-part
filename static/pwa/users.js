@@ -65,6 +65,11 @@
     return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
   }
 
+  function isResidentRole(role) {
+    const txt = String(role || "").trim();
+    return txt === "입주민" || txt === "주민";
+  }
+
   function applyMode() {
     isAdminView = !!(me && me.is_admin);
     isSuperAdminView = isSuperAdmin(me);
@@ -103,6 +108,7 @@
     $("#loginId").value = "";
     $("#userName").value = "";
     $("#userPhone").value = "";
+    $("#userUnitLabel").value = "";
     $("#userSiteCode").value = "";
     $("#userSiteName").value = "";
     $("#userAddress").value = "";
@@ -124,6 +130,7 @@
     $("#loginId").value = user.login_id || "";
     $("#userName").value = user.name || "";
     $("#userPhone").value = user.phone || "";
+    $("#userUnitLabel").value = user.unit_label || "";
     $("#userSiteCode").value = user.site_code || "";
     $("#userSiteName").value = user.site_name || "";
     $("#userAddress").value = user.address || "";
@@ -145,6 +152,7 @@
       login_id: ($("#loginId").value || "").trim(),
       name: ($("#userName").value || "").trim(),
       role: $("#userRole").value || "",
+      unit_label: ($("#userUnitLabel").value || "").trim(),
       phone: ($("#userPhone").value || "").trim(),
       site_code: ($("#userSiteCode").value || "").trim().toUpperCase(),
       site_name: ($("#userSiteName").value || "").trim(),
@@ -212,6 +220,7 @@
         <td>${escapeHtml(u.phone || "-")}</td>
         <td>${escapeHtml(u.site_code || "-")}</td>
         <td>${escapeHtml(u.site_name || "-")}</td>
+        <td>${escapeHtml(u.unit_label || "-")}</td>
         <td>${escapeHtml(region)}</td>
         <td>${escapeHtml(u.office_phone || "-")}</td>
         <td>${escapeHtml(u.office_fax || "-")}</td>
@@ -231,7 +240,7 @@
     const body = $("#userSheetBody");
     if (!body) return;
     if (!users.length) {
-      body.innerHTML = '<tr><td colspan="14" class="cell-center">조회된 사용자가 없습니다.</td></tr>';
+      body.innerHTML = '<tr><td colspan="15" class="cell-center">조회된 사용자가 없습니다.</td></tr>';
       return;
     }
     body.innerHTML = users.map((u, idx) => rowHtml(u, idx)).join("");
@@ -407,6 +416,7 @@
     const payload = {
       name: ($("#userName").value || "").trim(),
       role: $("#userRole").value || "",
+      unit_label: ($("#userUnitLabel").value || "").trim(),
       phone: ($("#userPhone").value || "").trim(),
       address: ($("#userAddress").value || "").trim(),
       office_phone: ($("#userOfficePhone").value || "").trim(),
@@ -425,6 +435,10 @@
     }
     if (editingId == null && !body.password) {
       setMsg("신규 사용자는 비밀번호를 입력해야 합니다.", true);
+      return;
+    }
+    if (isResidentRole(body.role) && !body.unit_label) {
+      setMsg("입주민 역할은 동/호를 입력해야 합니다.", true);
       return;
     }
     if (body.password && body.password.length < 8) {
@@ -446,6 +460,10 @@
 
   async function saveSelfUser() {
     const body = payloadFromSelfForm();
+    if (isResidentRole(body.role) && !body.unit_label) {
+      setMsg("입주민 역할은 동/호를 입력해야 합니다.", true);
+      return;
+    }
     if (body.password && body.password.length < 8) {
       setMsg("비밀번호는 8자 이상이어야 합니다.", true);
       return;

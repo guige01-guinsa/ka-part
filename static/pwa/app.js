@@ -113,6 +113,23 @@
     return "사용자";
   }
 
+  function roleText(user) {
+    return String((user && user.role) || "").trim();
+  }
+
+  function isResidentRole(user) {
+    const role = roleText(user);
+    return role === "입주민" || role === "주민";
+  }
+
+  function isSecurityRole(user) {
+    const role = roleText(user);
+    if (!role) return false;
+    const compact = role.replaceAll(" ", "");
+    if (compact === "보안/경비") return true;
+    return role.includes("보안") || role.includes("경비");
+  }
+
   function toast(msg) {
     const el = $("#toast");
     if (!el) return;
@@ -317,6 +334,14 @@
 
   async function ensureAuth() {
     authUser = await window.KAAuth.requireAuth();
+    if (isResidentRole(authUser)) {
+      window.location.href = "/pwa/complaints.html";
+      throw new Error("모듈 전환 중");
+    }
+    if (isSecurityRole(authUser)) {
+      window.location.href = "/parking/admin2";
+      throw new Error("모듈 전환 중");
+    }
     setCurrentUserChip(authUser);
     const btnUsers = $("#btnUsers");
     if (btnUsers && !hasAdminPermission(authUser)) btnUsers.style.display = "none";
@@ -324,6 +349,8 @@
     if (btnSpec && !hasSiteAdminPermission(authUser)) btnSpec.style.display = "none";
     const btnBackup = $("#btnBackup");
     if (btnBackup && !hasSiteAdminPermission(authUser)) btnBackup.style.display = "none";
+    const btnParking = $("#btnParking");
+    if (btnParking && !isSecurityRole(authUser)) btnParking.style.display = "none";
     enforceSiteIdentityPolicy();
     const assignedCode = assignedSiteCodeForUser();
     if (assignedCode) setSiteCode(assignedCode);
@@ -1191,7 +1218,7 @@
 
   init().catch((err) => {
     const msg = err && err.message ? err.message : String(err);
-    if (msg.includes("로그인이 필요") || msg.includes("단지코드/단지명 충돌로 로그아웃되었습니다.")) return;
+    if (msg.includes("로그인이 필요") || msg.includes("단지코드/단지명 충돌로 로그아웃되었습니다.") || msg.includes("모듈 전환 중")) return;
     alert("앱 초기화 오류: " + msg);
   });
 })();

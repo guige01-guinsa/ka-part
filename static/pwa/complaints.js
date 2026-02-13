@@ -31,6 +31,18 @@
     return !!(user && (user.is_admin || user.is_site_admin));
   }
 
+  function roleText(user) {
+    return String((user && user.role) || "").trim();
+  }
+
+  function isSecurityRole(user) {
+    const role = roleText(user);
+    if (!role) return false;
+    const compact = role.replaceAll(" ", "");
+    if (compact === "보안/경비") return true;
+    return role.includes("보안") || role.includes("경비");
+  }
+
   function escapeHtml(v) {
     return String(v || "")
       .replaceAll("&", "&amp;")
@@ -585,6 +597,10 @@
 
   async function init() {
     me = await KAAuth.requireAuth();
+    if (isSecurityRole(me)) {
+      window.location.href = "/parking/admin2";
+      throw new Error("모듈 전환 중");
+    }
     updateMetaLine();
     normalizeSiteContext();
     initUnitSelector();
@@ -603,7 +619,7 @@
   wire();
   init().catch((err) => {
     const msg = err && err.message ? err.message : String(err);
-    if (msg.includes("로그인이 필요")) return;
+    if (msg.includes("로그인이 필요") || msg.includes("모듈 전환 중")) return;
     setMsg(msg, true);
   });
 })();

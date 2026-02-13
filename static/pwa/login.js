@@ -3,13 +3,59 @@
 
   const $ = (s) => document.querySelector(s);
 
-  function nextPath() {
-    const u = new URL(window.location.href);
-    return u.searchParams.get("next") || "/pwa/";
+  function normalizePath(raw) {
+    const txt = String(raw || "").trim();
+    if (!txt) return "";
+    try {
+      const u = new URL(txt, window.location.origin);
+      if (u.origin !== window.location.origin) return "";
+      return `${u.pathname}${u.search}${u.hash}`;
+    } catch (_e) {
+      return "";
+    }
   }
 
-  function goNext() {
-    window.location.href = nextPath();
+  function nextPath() {
+    const u = new URL(window.location.href);
+    return normalizePath(u.searchParams.get("next")) || "/pwa/";
+  }
+
+  function isResidentRoleText(role) {
+    const txt = String(role || "").trim();
+    return txt === "입주민" || txt === "주민";
+  }
+
+  function isSecurityRoleText(role) {
+    const txt = String(role || "").trim();
+    if (!txt) return false;
+    const compact = txt.replaceAll(" ", "");
+    if (compact === "보안/경비") return true;
+    return txt.includes("보안") || txt.includes("경비");
+  }
+
+  function defaultLandingPath(user) {
+    const fromServer = normalizePath(user && user.default_landing_path);
+    if (fromServer) return fromServer;
+    const role = String((user && user.role) || "").trim();
+    if (isSecurityRoleText(role)) return "/parking/admin2";
+    if (isResidentRoleText(role)) return "/pwa/complaints.html";
+    return "/pwa/";
+  }
+
+  function resolveNextPath(user) {
+    const requested = nextPath();
+    const role = String((user && user.role) || "").trim();
+    if (isSecurityRoleText(role)) {
+      return requested.startsWith("/parking") ? requested : defaultLandingPath(user);
+    }
+    if (isResidentRoleText(role)) {
+      return requested.startsWith("/pwa/complaints.html") ? requested : defaultLandingPath(user);
+    }
+    return requested || defaultLandingPath(user);
+  }
+
+  function goNext(user) {
+    window.location.href = resolveNextPath(user || null);
   }
 
   function setMsg(el, msg, isErr = false) {
@@ -31,6 +77,7 @@
       phone: ($("#suPhone").value || "").trim(),
       site_name: ($("#suSiteName").value || "").trim(),
       role: ($("#suRole").value || "").trim(),
+      unit_label: ($("#suUnitLabel").value || "").trim(),
       address: ($("#suAddress").value || "").trim(),
       office_phone: ($("#suOfficePhone").value || "").trim(),
       office_fax: ($("#suOfficeFax").value || "").trim(),
@@ -41,6 +88,10 @@
     const body = signupPayloadFromForm();
     if (!body.name || !body.phone || !body.site_name || !body.role || !body.address || !body.office_phone || !body.office_fax) {
       setMsg($("#signupMsg"), "필수 항목을 모두 입력하세요.", true);
+      return;
+    }
+    if (isResidentRoleText(body.role) && !body.unit_label) {
+      setMsg($("#signupMsg"), "입주민은 동/호를 입력해야 합니다.", true);
       return;
     }
     const data = await KAAuth.requestJson("/api/auth/signup/request_phone_verification", {
@@ -96,7 +147,7 @@
     });
     KAAuth.setSession(data.token, data.user);
     setMsg($("#loginMsg"), "로그인 성공");
-    goNext();
+    goNext(data.user || null);
   }
 
   async function bootstrap() {
@@ -117,7 +168,7 @@
     });
     KAAuth.setSession(data.token, data.user);
     setMsg($("#bootstrapMsg"), "초기 관리자 생성 완료");
-    goNext();
+    goNext(data.user || null);
   }
 
   async function checkAlreadyLoggedIn() {
@@ -126,7 +177,7 @@
       const me = await KAAuth.requestJson("/api/auth/me", { noAuth: !token });
       if (me && me.user) {
         KAAuth.setSession(token, me.user);
-        goNext();
+        goNext(me.user);
       }
     } catch (_e) {
       KAAuth.clearSession();

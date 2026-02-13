@@ -400,6 +400,8 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "staff_users", "address TEXT")
     _ensure_column(con, "staff_users", "office_phone TEXT")
     _ensure_column(con, "staff_users", "office_fax TEXT")
+    _ensure_column(con, "staff_users", "unit_label TEXT")
+    _ensure_column(con, "staff_users", "household_key TEXT")
     _ensure_column(con, "staff_users", "admin_scope TEXT NOT NULL DEFAULT ''")
     con.execute(
         """
@@ -426,6 +428,12 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_staff_users_active
         ON staff_users(is_active, name);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_staff_users_household
+        ON staff_users(site_code, household_key, is_active);
         """
     )
     con.execute(
@@ -998,6 +1006,36 @@ def count_staff_users_for_site(site_name: str, *, site_code: str | None = None) 
                 """,
                 (clean_site_name,),
             ).fetchone()
+        return int(row["c"] if row else 0)
+    finally:
+        con.close()
+
+
+def count_active_resident_household_users(
+    *,
+    site_code: str,
+    household_key: str,
+    exclude_user_id: int | None = None,
+) -> int:
+    clean_site_code = _clean_site_code_value(site_code)
+    clean_household_key = str(household_key or "").strip().upper()
+    if not clean_site_code or not clean_household_key:
+        return 0
+    con = _connect()
+    try:
+        sql = """
+            SELECT COUNT(*) AS c
+            FROM staff_users
+            WHERE is_active=1
+              AND site_code=?
+              AND household_key=?
+              AND TRIM(role) IN ('입주민', '주민')
+        """
+        params: List[Any] = [clean_site_code, clean_household_key]
+        if exclude_user_id is not None and int(exclude_user_id) > 0:
+            sql += " AND id<>?"
+            params.append(int(exclude_user_id))
+        row = con.execute(sql, tuple(params)).fetchone()
         return int(row["c"] if row else 0)
     finally:
         con.close()
@@ -2202,7 +2240,7 @@ def list_staff_users(*, active_only: bool = False) -> List[Dict[str, Any]]:
     con = _connect()
     try:
         sql = """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
         """
         params: List[Any] = []
@@ -2220,7 +2258,7 @@ def get_staff_user(user_id: int) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -2242,6 +2280,8 @@ def create_staff_user(
     address: Optional[str] = None,
     office_phone: Optional[str] = None,
     office_fax: Optional[str] = None,
+    unit_label: Optional[str] = None,
+    household_key: Optional[str] = None,
     note: Optional[str] = None,
     password_hash: Optional[str] = None,
     is_admin: int = 0,
@@ -2253,14 +2293,20 @@ def create_staff_user(
     try:
         ts = now_iso()
         clean_site_code = _clean_site_code_value(site_code)
+        clean_unit_label = str(unit_label or "").strip() or None
+        clean_household_key = str(household_key or "").strip().upper() or None
+        if clean_unit_label and not clean_household_key:
+            clean_household_key = clean_unit_label.upper()
+        if clean_household_key and not clean_unit_label:
+            clean_unit_label = clean_household_key
         clean_is_admin, clean_is_site_admin = _normalize_staff_permission_flags(is_admin, is_site_admin)
         clean_admin_scope = _normalize_admin_scope_value(admin_scope, is_admin=bool(clean_is_admin))
         con.execute(
             """
             INSERT INTO staff_users(
-              login_id, name, role, phone, site_code, site_name, address, office_phone, office_fax, note, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at
+              login_id, name, role, phone, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, note, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 login_id,
@@ -2272,6 +2318,8 @@ def create_staff_user(
                 address,
                 office_phone,
                 office_fax,
+                clean_unit_label,
+                clean_household_key,
                 note,
                 password_hash,
                 clean_is_admin,
@@ -2285,7 +2333,7 @@ def create_staff_user(
         con.commit()
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -2308,6 +2356,8 @@ def update_staff_user(
     address: Optional[str] = None,
     office_phone: Optional[str] = None,
     office_fax: Optional[str] = None,
+    unit_label: Optional[str] = None,
+    household_key: Optional[str] = None,
     note: Optional[str] = None,
     is_admin: int = 0,
     is_site_admin: int = 0,
@@ -2318,12 +2368,18 @@ def update_staff_user(
     try:
         ts = now_iso()
         clean_site_code = _clean_site_code_value(site_code)
+        clean_unit_label = str(unit_label or "").strip() or None
+        clean_household_key = str(household_key or "").strip().upper() or None
+        if clean_unit_label and not clean_household_key:
+            clean_household_key = clean_unit_label.upper()
+        if clean_household_key and not clean_unit_label:
+            clean_unit_label = clean_household_key
         clean_is_admin, clean_is_site_admin = _normalize_staff_permission_flags(is_admin, is_site_admin)
         clean_admin_scope = _normalize_admin_scope_value(admin_scope, is_admin=bool(clean_is_admin))
         cur = con.execute(
             """
             UPDATE staff_users
-            SET login_id=?, name=?, role=?, phone=?, site_code=?, site_name=?, address=?, office_phone=?, office_fax=?, note=?, is_admin=?, is_site_admin=?, admin_scope=?, is_active=?, updated_at=?
+            SET login_id=?, name=?, role=?, phone=?, site_code=?, site_name=?, address=?, office_phone=?, office_fax=?, unit_label=?, household_key=?, note=?, is_admin=?, is_site_admin=?, admin_scope=?, is_active=?, updated_at=?
             WHERE id=?
             """,
             (
@@ -2336,6 +2392,8 @@ def update_staff_user(
                 address,
                 office_phone,
                 office_fax,
+                clean_unit_label,
+                clean_household_key,
                 note,
                 clean_is_admin,
                 clean_is_site_admin,
@@ -2350,7 +2408,7 @@ def update_staff_user(
             return None
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -2419,7 +2477,7 @@ def get_staff_user_by_login(login_id: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -2547,6 +2605,8 @@ def get_auth_user_by_token(token: str) -> Optional[Dict[str, Any]]:
               u.address,
               u.office_phone,
               u.office_fax,
+              u.unit_label,
+              u.household_key,
               u.is_admin,
               u.is_site_admin,
               u.admin_scope,
@@ -2592,7 +2652,7 @@ def get_staff_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE phone=?
             ORDER BY is_active DESC, id ASC

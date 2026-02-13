@@ -29,6 +29,7 @@ from ..db import get_auth_user_by_token
 
 router = APIRouter()
 AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
+SECURITY_ROLE_KEYWORDS = ("보안", "경비")
 
 
 class ComplaintCreatePayload(BaseModel):
@@ -106,11 +107,27 @@ def _extract_access_token(request: Request) -> str:
     raise HTTPException(status_code=401, detail="auth required")
 
 
+def _normalized_role_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _is_security_role(value: Any) -> bool:
+    role = _normalized_role_text(value)
+    if not role:
+        return False
+    compact = role.replace(" ", "")
+    if compact == "보안/경비":
+        return True
+    return any(token in role for token in SECURITY_ROLE_KEYWORDS)
+
+
 def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
     token = _extract_access_token(request)
     user = get_auth_user_by_token(token)
     if not user:
         raise HTTPException(status_code=401, detail="invalid or expired session")
+    if _is_security_role(user.get("role")):
+        raise HTTPException(status_code=403, detail="보안/경비 계정은 주차관리 모듈만 사용할 수 있습니다.")
     return user, token
 
 
@@ -428,4 +445,3 @@ def admin_get_stats(request: Request, site_code: str = Query("")):
     scoped_site = _admin_site_scope(user)
     effective_site_code = scoped_site or site_code
     return {"ok": True, "item": complaint_stats(site_code=effective_site_code)}
-
