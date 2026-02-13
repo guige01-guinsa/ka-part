@@ -231,6 +231,7 @@ def _auto_entry_page(next_path: str) -> str:
       const USER_KEY = "ka_part_auth_user_v1";
       const SITE_NAME_KEY = "ka_current_site_name_v1";
       const SITE_CODE_KEY = "ka_current_site_code_v1";
+      const SITE_ID_KEY = "ka_current_site_id_v1";
       const readStore = (store, key) => {{
         try {{
           return (store.getItem(key) || "").trim();
@@ -294,7 +295,10 @@ def _auto_entry_page(next_path: str) -> str:
         if (token) headers.Authorization = "Bearer " + token;
         const siteName = readSiteValue(SITE_NAME_KEY, "site_name");
         const siteCode = readSiteValue(SITE_CODE_KEY, "site_code").toUpperCase();
+        const siteIdRaw = readSiteValue(SITE_ID_KEY, "site_id");
+        const siteId = Number.parseInt(siteIdRaw, 10);
         const siteQs = new URLSearchParams();
+        if (Number.isFinite(siteId) && siteId > 0) siteQs.set("site_id", String(siteId));
         if (siteName) siteQs.set("site_name", siteName);
         if (siteCode) siteQs.set("site_code", siteCode);
         const endpoint = siteQs.toString() ? "/api/parking/context?" + siteQs.toString() : "/api/parking/context";
@@ -318,6 +322,20 @@ def _auto_entry_page(next_path: str) -> str:
           const detail = data && data.detail ? String(data.detail) : ("HTTP " + String(res.status));
           throw new Error(detail);
         }}
+        try {{
+          const nextSiteId = Number.parseInt(String((data && data.site_id) || ""), 10);
+          if (Number.isFinite(nextSiteId) && nextSiteId > 0) {{
+            sessionStorage.setItem(SITE_ID_KEY, String(nextSiteId));
+          }}
+        }} catch (_e) {{}}
+        try {{
+          const nextSiteName = String((data && data.site_name) || "").trim();
+          if (nextSiteName) sessionStorage.setItem(SITE_NAME_KEY, nextSiteName);
+        }} catch (_e) {{}}
+        try {{
+          const nextSiteCode = String((data && data.site_code) || "").trim().toUpperCase();
+          if (nextSiteCode) sessionStorage.setItem(SITE_CODE_KEY, nextSiteCode);
+        }} catch (_e) {{}}
         clearRetry();
         window.location.replace((data && data.url) ? String(data.url) : nextPath);
       }} catch (e) {{

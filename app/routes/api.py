@@ -70,6 +70,7 @@ from ..db import (
     revoke_all_user_sessions,
     revoke_auth_session,
     resolve_or_create_site_code,
+    resolve_site_identity,
     rollback_site_env_config_version,
     save_tab_values,
     schema_alignment_report,
@@ -869,6 +870,10 @@ def _resolve_spec_env_site_target(
             if mapped_name:
                 clean_site_name = _clean_site_name(mapped_name, required=True)
         if clean_site_name:
+            canonical_code = _clean_site_code(find_site_code_by_name(clean_site_name), required=False)
+            if canonical_code:
+                clean_site_code = canonical_code
+        if clean_site_name:
             allow_create = bool(for_write and is_super)
             try:
                 clean_site_code = _resolve_site_code_for_site(
@@ -937,6 +942,10 @@ def _resolve_site_identity_for_main(
             mapped_name = find_site_name_by_code(clean_site_code)
             if mapped_name:
                 clean_site_name = _clean_site_name(mapped_name, required=True)
+        if clean_site_name:
+            canonical_code = _clean_site_code(find_site_code_by_name(clean_site_name), required=False)
+            if canonical_code:
+                clean_site_code = canonical_code
 
         if clean_site_code and not clean_site_name:
             resolved_name = find_site_name_by_code(clean_site_code)
@@ -1280,10 +1289,28 @@ def _resolve_main_site_target(
     user: Dict[str, Any],
     requested_site_name: Any,
     requested_site_code: Any,
+    requested_site_id: Any = 0,
     *,
     required: bool = False,
 ) -> Tuple[str, str]:
-    clean_site_name, clean_site_code = _resolve_site_identity_for_main(user, requested_site_name, requested_site_code)
+    clean_site_name, clean_site_code = _resolve_site_identity_for_main(
+        user,
+        requested_site_name,
+        requested_site_code,
+        requested_site_id,
+    )
+    canonical = resolve_site_identity(
+        site_id=requested_site_id,
+        site_name=clean_site_name,
+        site_code=clean_site_code,
+        create_site_if_missing=False,
+    )
+    canonical_name = _clean_site_name(canonical.get("site_name"), required=False)
+    canonical_code = _clean_site_code(canonical.get("site_code"), required=False)
+    if canonical_name:
+        clean_site_name = canonical_name
+    if canonical_code:
+        clean_site_code = canonical_code
     clean_site_name = _clean_site_name(clean_site_name, required=False)
     clean_site_code = _clean_site_code(clean_site_code, required=False)
 
@@ -1326,6 +1353,7 @@ def parking_context(
     request: Request,
     site_name: str = Query(default=""),
     site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
 ):
     user, _token = _require_auth(request)
     permission_level = _parking_permission_level_from_user(user)
@@ -1335,14 +1363,17 @@ def parking_context(
     # This avoids false "site edit" errors when stale query/local values are sent.
     requested_site_name = site_name
     requested_site_code = site_code
+    requested_site_id = site_id
     if not is_admin_user:
         requested_site_name = str(user.get("site_name") or "").strip()
         requested_site_code = str(user.get("site_code") or "").strip().upper()
+        requested_site_id = _clean_site_id(user.get("site_id"), required=False)
 
     clean_site_name, clean_site_code = _resolve_main_site_target(
         user,
         requested_site_name,
         requested_site_code,
+        requested_site_id,
         required=False,
     )
     clean_site_name = _clean_site_name(clean_site_name, required=False)
@@ -1388,6 +1419,13 @@ def parking_context(
     if uid > 0 and not is_admin_user and not user_site_code:
         set_staff_user_site_code(uid, clean_site_code)
 
+    resolved_identity = resolve_site_identity(
+        site_name=clean_site_name,
+        site_code=clean_site_code,
+        create_site_if_missing=False,
+    )
+    resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
+
     serializer = URLSafeTimedSerializer(_parking_context_secret(), salt="parking-context")
     ctx = serializer.dumps(
         {
@@ -1408,6 +1446,7 @@ def parking_context(
     return {
         "ok": True,
         "url": parking_url,
+        "site_id": (resolved_site_id or 0),
         "site_code": clean_site_code,
         "site_name": clean_site_name,
         "permission_level": permission_level,

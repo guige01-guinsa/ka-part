@@ -166,6 +166,7 @@
     const msg = String(message || "").trim();
     if (!msg) return false;
     return (
+      msg.includes("site_code is immutable for existing site_name") ||
       msg.includes("site_code already mapped to another site_name") ||
       msg.includes("입력한 site_code가 다른 site_name에 연결되어 있습니다.") ||
       msg.includes("입력한 site_name이 다른 site_code에 연결되어 있습니다.") ||
