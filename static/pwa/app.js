@@ -332,6 +332,13 @@
       return await window.KAAuth.requestJson(url, opts);
     } catch (err) {
       const msg = err && err.message ? String(err.message) : String(err || "");
+      if (msg.includes("invalid or expired session") || msg === "401") {
+        try {
+          window.KAAuth.clearSession();
+        } catch (_e) {}
+        window.KAAuth.redirectLogin("/pwa/");
+        throw new Error("로그인이 필요합니다.");
+      }
       if (isSiteIdentityConflictMessage(msg)) {
         const recovered = await tryRecoverSiteIdentityConflict();
         if (recovered) {

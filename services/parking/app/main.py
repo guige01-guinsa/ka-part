@@ -270,13 +270,8 @@ def _auto_entry_page(next_path: str) -> str:
           return "";
         }}
       }};
+      const hadManualLogout = consumeManualLogout();
       let token = readStore(sessionStorage, TOKEN_KEY);
-      if (consumeManualLogout()) {{
-        clearRetry();
-        clearAuthStore();
-        window.location.replace(loginUrl);
-        return;
-      }}
       if (!token) {{
         const legacyToken = readStore(localStorage, TOKEN_KEY);
         if (legacyToken) {{
@@ -289,6 +284,17 @@ def _auto_entry_page(next_path: str) -> str:
           try {{ localStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
           try {{ localStorage.removeItem(USER_KEY); }} catch (_e) {{}}
         }}
+      }}
+      if (hadManualLogout && !token) {{
+        clearRetry();
+        clearAuthStore();
+        window.location.replace(loginUrl);
+        return;
+      }}
+      if (hadManualLogout && token) {{
+        // A new authenticated session exists after manual logout.
+        // Keep the fresh token and continue entry flow.
+        clearRetry();
       }}
       try {{
         const headers = {{}};
