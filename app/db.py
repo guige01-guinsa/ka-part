@@ -112,6 +112,211 @@ def _require_site_name_value(site_name: Any) -> str:
     return clean
 
 
+def _clean_site_id_value(value: Any) -> int | None:
+    try:
+        num = int(value or 0)
+    except Exception:
+        return None
+    return num if num > 0 else None
+
+
+def _ensure_site_id_for_name_in_tx(con: sqlite3.Connection, site_name: str, *, ts: str | None = None) -> int:
+    clean_name = _require_site_name_value(site_name)
+    row = con.execute("SELECT id FROM sites WHERE name=? LIMIT 1", (clean_name,)).fetchone()
+    if row:
+        return int(row["id"])
+    stamp = str(ts or now_iso())
+    con.execute("INSERT INTO sites(name, created_at) VALUES(?,?)", (clean_name, stamp))
+    row2 = con.execute("SELECT id FROM sites WHERE name=? LIMIT 1", (clean_name,)).fetchone()
+    if not row2:
+        raise ValueError("failed to ensure site row")
+    return int(row2["id"])
+
+
+def _resolve_site_id_from_identity_in_tx(
+    con: sqlite3.Connection,
+    *,
+    site_id: Any = None,
+    site_name: Any = None,
+    site_code: Any = None,
+    create_if_missing: bool = False,
+    ts: str | None = None,
+) -> int | None:
+    clean_site_id = _clean_site_id_value(site_id)
+    if clean_site_id:
+        return clean_site_id
+
+    clean_site_name = str(site_name or "").strip()
+    clean_site_code = _clean_site_code_value(site_code)
+    stamp = str(ts or now_iso())
+
+    if clean_site_name:
+        if create_if_missing:
+            return _ensure_site_id_for_name_in_tx(con, clean_site_name, ts=stamp)
+        row = con.execute("SELECT id FROM sites WHERE name=? LIMIT 1", (clean_site_name,)).fetchone()
+        if row:
+            return int(row["id"])
+
+    if clean_site_code:
+        mapped = con.execute(
+            """
+            SELECT site_id, site_name
+            FROM site_registry
+            WHERE site_code=?
+            LIMIT 1
+            """,
+            (clean_site_code,),
+        ).fetchone()
+        if mapped:
+            mapped_site_id = _clean_site_id_value(mapped["site_id"])
+            if mapped_site_id:
+                return mapped_site_id
+            mapped_name = str(mapped["site_name"] or "").strip()
+            if mapped_name:
+                return _ensure_site_id_for_name_in_tx(con, mapped_name, ts=stamp) if create_if_missing else (
+                    _resolve_site_id_from_identity_in_tx(
+                        con,
+                        site_name=mapped_name,
+                        create_if_missing=False,
+                        ts=stamp,
+                    )
+                )
+        mapped_env = con.execute(
+            """
+            SELECT site_id, site_name
+            FROM site_env_configs
+            WHERE site_code=?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (clean_site_code,),
+        ).fetchone()
+        if mapped_env:
+            mapped_site_id = _clean_site_id_value(mapped_env["site_id"])
+            if mapped_site_id:
+                return mapped_site_id
+            mapped_name = str(mapped_env["site_name"] or "").strip()
+            if mapped_name:
+                return _ensure_site_id_for_name_in_tx(con, mapped_name, ts=stamp) if create_if_missing else (
+                    _resolve_site_id_from_identity_in_tx(
+                        con,
+                        site_name=mapped_name,
+                        create_if_missing=False,
+                        ts=stamp,
+                    )
+                )
+    return None
+
+
+def _backfill_site_identity_columns(con: sqlite3.Connection) -> None:
+    ts = now_iso()
+    seen_names: set[str] = set()
+    for table_name in ("site_registry", "site_env_configs", "staff_users"):
+        rows = con.execute(
+            f"""
+            SELECT DISTINCT site_name
+            FROM {table_name}
+            WHERE site_name IS NOT NULL AND TRIM(site_name)<>''
+            """
+        ).fetchall()
+        for row in rows:
+            name = str(row["site_name"] or "").strip()
+            if not name or name in seen_names:
+                continue
+            _ensure_site_id_for_name_in_tx(con, name, ts=ts)
+            seen_names.add(name)
+
+    con.execute(
+        """
+        UPDATE site_registry
+        SET site_id=(SELECT s.id FROM sites s WHERE s.name=site_registry.site_name),
+            updated_at=?
+        WHERE (site_id IS NULL OR site_id<=0)
+          AND site_name IS NOT NULL
+          AND TRIM(site_name)<>''
+          AND EXISTS(SELECT 1 FROM sites s WHERE s.name=site_registry.site_name);
+        """,
+        (ts,),
+    )
+    con.execute(
+        """
+        UPDATE site_env_configs
+        SET site_id=(SELECT s.id FROM sites s WHERE s.name=site_env_configs.site_name),
+            updated_at=?
+        WHERE (site_id IS NULL OR site_id<=0)
+          AND site_name IS NOT NULL
+          AND TRIM(site_name)<>''
+          AND EXISTS(SELECT 1 FROM sites s WHERE s.name=site_env_configs.site_name);
+        """,
+        (ts,),
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET site_id=(SELECT s.id FROM sites s WHERE s.name=staff_users.site_name),
+            updated_at=?
+        WHERE (site_id IS NULL OR site_id<=0)
+          AND site_name IS NOT NULL
+          AND TRIM(site_name)<>''
+          AND EXISTS(SELECT 1 FROM sites s WHERE s.name=staff_users.site_name);
+        """,
+        (ts,),
+    )
+    con.execute(
+        """
+        UPDATE site_registry
+        SET site_id=(SELECT r2.site_id FROM site_registry r2 WHERE r2.site_code=site_registry.site_code LIMIT 1),
+            updated_at=?
+        WHERE (site_id IS NULL OR site_id<=0)
+          AND site_code IS NOT NULL
+          AND TRIM(site_code)<>''
+          AND EXISTS(
+            SELECT 1
+            FROM site_registry r2
+            WHERE r2.site_code=site_registry.site_code
+              AND r2.site_id IS NOT NULL
+              AND r2.site_id>0
+          );
+        """,
+        (ts,),
+    )
+    con.execute(
+        """
+        UPDATE site_env_configs
+        SET site_id=(SELECT r.site_id FROM site_registry r WHERE r.site_code=site_env_configs.site_code LIMIT 1),
+            updated_at=?
+        WHERE (site_id IS NULL OR site_id<=0)
+          AND site_code IS NOT NULL
+          AND TRIM(site_code)<>''
+          AND EXISTS(
+            SELECT 1
+            FROM site_registry r
+            WHERE r.site_code=site_env_configs.site_code
+              AND r.site_id IS NOT NULL
+              AND r.site_id>0
+          );
+        """,
+        (ts,),
+    )
+    con.execute(
+        """
+        UPDATE staff_users
+        SET site_id=(SELECT r.site_id FROM site_registry r WHERE r.site_code=staff_users.site_code LIMIT 1),
+            updated_at=?
+        WHERE (site_id IS NULL OR site_id<=0)
+          AND site_code IS NOT NULL
+          AND TRIM(site_code)<>''
+          AND EXISTS(
+            SELECT 1
+            FROM site_registry r
+            WHERE r.site_code=staff_users.site_code
+              AND r.site_id IS NOT NULL
+              AND r.site_id>0
+          );
+        """,
+        (ts,),
+    )
+
 def _normalize_staff_permission_flags(is_admin: Any, is_site_admin: Any) -> tuple[int, int]:
     admin = 1 if int(is_admin or 0) == 1 else 0
     site_admin = 1 if int(is_site_admin or 0) == 1 else 0
@@ -397,6 +602,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "staff_users", "last_login_at TEXT")
     _ensure_column(con, "staff_users", "site_code TEXT")
     _ensure_column(con, "staff_users", "site_name TEXT")
+    _ensure_column(con, "staff_users", "site_id INTEGER")
     _ensure_column(con, "staff_users", "address TEXT")
     _ensure_column(con, "staff_users", "office_phone TEXT")
     _ensure_column(con, "staff_users", "office_fax TEXT")
@@ -544,6 +750,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(con, "site_env_configs", "site_code TEXT")
+    _ensure_column(con, "site_env_configs", "site_id INTEGER")
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS site_registry (
@@ -555,6 +762,8 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "site_registry", "site_id INTEGER")
+    _backfill_site_identity_columns(con)
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_site_registry_name
@@ -584,6 +793,24 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_site_env_configs_code
         ON site_env_configs(site_code);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_staff_users_site_id
+        ON staff_users(site_id);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_site_env_configs_site_id
+        ON site_env_configs(site_id);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_site_registry_site_id
+        ON site_registry(site_id);
         """
     )
     con.execute(
@@ -810,20 +1037,22 @@ def resolve_or_create_site_code(
     con = _connect()
     try:
         ts = now_iso()
+        clean_site_id = _ensure_site_id_for_name_in_tx(con, clean_site_name, ts=ts)
         by_name = con.execute(
             """
-            SELECT id, site_name, site_code
+            SELECT id, site_id, site_name, site_code
             FROM site_registry
-            WHERE site_name=?
+            WHERE site_id=? OR site_name=?
+            ORDER BY CASE WHEN site_id=? THEN 0 ELSE 1 END, id ASC
             LIMIT 1
             """,
-            (clean_site_name,),
+            (clean_site_id, clean_site_name, clean_site_id),
         ).fetchone()
         by_code = None
         if clean_preferred:
             by_code = con.execute(
                 """
-                SELECT id, site_name, site_code
+                SELECT id, site_id, site_name, site_code
                 FROM site_registry
                 WHERE site_code=?
                 LIMIT 1
@@ -835,32 +1064,53 @@ def resolve_or_create_site_code(
 
         if by_name:
             resolved_code = str(by_name["site_code"] or "").strip().upper()
+            existing_site_id = _clean_site_id_value(by_name["site_id"])
+            existing_name = str(by_name["site_name"] or "").strip()
+            update_cols: List[str] = []
+            update_params: List[Any] = []
+
+            if existing_site_id != clean_site_id:
+                update_cols.append("site_id=?")
+                update_params.append(clean_site_id)
+            if existing_name != clean_site_name:
+                update_cols.append("site_name=?")
+                update_params.append(clean_site_name)
+
             if clean_preferred and clean_preferred != resolved_code:
                 if not allow_remap:
                     raise ValueError("site_code is immutable for existing site_name; use approved migration")
                 if by_code and int(by_code["id"]) != int(by_name["id"]):
                     raise ValueError("site_code already mapped to another site_name")
+                update_cols.append("site_code=?")
+                update_params.append(clean_preferred)
+                resolved_code = clean_preferred
+            if update_cols:
+                update_cols.append("updated_at=?")
+                update_params.append(ts)
+                update_params.append(int(by_name["id"]))
                 con.execute(
-                    """
+                    f"""
                     UPDATE site_registry
-                    SET site_code=?, updated_at=?
+                    SET {", ".join(update_cols)}
                     WHERE id=?
                     """,
-                    (clean_preferred, ts, int(by_name["id"])),
+                    tuple(update_params),
                 )
-                resolved_code = clean_preferred
         elif by_code:
             mapped_name = str(by_code["site_name"] or "").strip()
-            if mapped_name and mapped_name != clean_site_name:
+            mapped_site_id = _clean_site_id_value(by_code["site_id"])
+            if mapped_site_id and mapped_site_id != clean_site_id:
                 raise ValueError("site_code already mapped to another site_name")
-            if mapped_name != clean_site_name:
+            if mapped_name and mapped_name != clean_site_name and mapped_site_id != clean_site_id:
+                raise ValueError("site_code already mapped to another site_name")
+            if mapped_name != clean_site_name or mapped_site_id != clean_site_id:
                 con.execute(
                     """
                     UPDATE site_registry
-                    SET site_name=?, updated_at=?
+                    SET site_name=?, site_id=?, updated_at=?
                     WHERE id=?
                     """,
-                    (clean_site_name, ts, int(by_code["id"])),
+                    (clean_site_name, clean_site_id, ts, int(by_code["id"])),
                 )
             resolved_code = str(by_code["site_code"] or "").strip().upper()
         else:
@@ -898,10 +1148,10 @@ def resolve_or_create_site_code(
             resolved_code = legacy or _next_site_code(con)
             con.execute(
                 """
-                INSERT INTO site_registry(site_name, site_code, created_at, updated_at)
-                VALUES(?,?,?,?)
+                INSERT INTO site_registry(site_name, site_code, site_id, created_at, updated_at)
+                VALUES(?,?,?,?,?)
                 """,
-                (clean_site_name, resolved_code, ts, ts),
+                (clean_site_name, resolved_code, clean_site_id, ts, ts),
             )
 
         if not resolved_code:
@@ -909,11 +1159,43 @@ def resolve_or_create_site_code(
 
         con.execute(
             """
+            UPDATE site_registry
+            SET site_name=?, site_id=?, updated_at=?
+            WHERE site_code=?
+              AND (
+                site_name<>?
+                OR site_id IS NULL
+                OR site_id<=0
+                OR site_id<>?
+              )
+            """,
+            (clean_site_name, clean_site_id, ts, resolved_code, clean_site_name, clean_site_id),
+        )
+        con.execute(
+            """
+            UPDATE staff_users
+            SET site_id=?, updated_at=?
+            WHERE (site_name=? OR site_code=?)
+              AND (site_id IS NULL OR site_id<=0)
+            """,
+            (clean_site_id, ts, clean_site_name, resolved_code),
+        )
+        con.execute(
+            """
             UPDATE staff_users
             SET site_code=?, updated_at=?
             WHERE site_name=? AND (site_code IS NULL OR TRIM(site_code)='')
             """,
             (resolved_code, ts, clean_site_name),
+        )
+        con.execute(
+            """
+            UPDATE site_env_configs
+            SET site_id=?, updated_at=?
+            WHERE (site_name=? OR site_code=?)
+              AND (site_id IS NULL OR site_id<=0)
+            """,
+            (clean_site_id, ts, clean_site_name, resolved_code),
         )
         con.execute(
             """
@@ -1099,14 +1381,30 @@ def set_staff_user_site_code(user_id: int, site_code: str) -> bool:
     con = _connect()
     try:
         ts = now_iso()
-        cur = con.execute(
-            """
-            UPDATE staff_users
-            SET site_code=?, updated_at=?
-            WHERE id=?
-            """,
-            (clean_site_code, ts, int(user_id)),
+        resolved_site_id = _resolve_site_id_from_identity_in_tx(
+            con,
+            site_code=clean_site_code,
+            create_if_missing=False,
+            ts=ts,
         )
+        if resolved_site_id:
+            cur = con.execute(
+                """
+                UPDATE staff_users
+                SET site_code=?, site_id=?, updated_at=?
+                WHERE id=?
+                """,
+                (clean_site_code, resolved_site_id, ts, int(user_id)),
+            )
+        else:
+            cur = con.execute(
+                """
+                UPDATE staff_users
+                SET site_code=?, updated_at=?
+                WHERE id=?
+                """,
+                (clean_site_code, ts, int(user_id)),
+            )
         con.commit()
         return cur.rowcount > 0
     finally:
@@ -1121,7 +1419,7 @@ def get_first_staff_user_for_site(site_name: str, *, site_code: str | None = Non
         if clean_site_code:
             row = con.execute(
                 """
-                SELECT id, login_id, name, site_name, site_code, created_at
+                SELECT id, login_id, name, site_name, site_code, site_id, created_at
                 FROM staff_users
                 WHERE site_name=? OR site_code=?
                 ORDER BY created_at ASC, id ASC
@@ -1132,7 +1430,7 @@ def get_first_staff_user_for_site(site_name: str, *, site_code: str | None = Non
         else:
             row = con.execute(
                 """
-                SELECT id, login_id, name, site_name, site_code, created_at
+                SELECT id, login_id, name, site_name, site_code, site_id, created_at
                 FROM staff_users
                 WHERE site_name=?
                 ORDER BY created_at ASC, id ASC
@@ -1182,7 +1480,7 @@ def get_site_env_record(site_name: str = "", site_code: str | None = None) -> Di
         if clean_site_code:
             row = con.execute(
                 """
-                SELECT site_code, site_name, env_json, created_at, updated_at
+                SELECT site_code, site_name, site_id, env_json, created_at, updated_at
                 FROM site_env_configs
                 WHERE site_code=?
                 """,
@@ -1191,7 +1489,7 @@ def get_site_env_record(site_name: str = "", site_code: str | None = None) -> Di
         if row is None and clean_site_name:
             row = con.execute(
                 """
-                SELECT site_code, site_name, env_json, created_at, updated_at
+                SELECT site_code, site_name, site_id, env_json, created_at, updated_at
                 FROM site_env_configs
                 WHERE site_name=?
                 """,
@@ -1234,6 +1532,13 @@ def upsert_site_env_config(
         ts = now_iso()
         clean_site_name = str(site_name or "").strip()
         clean_site_code = _clean_site_code_value(site_code)
+        resolved_site_id = _resolve_site_id_from_identity_in_tx(
+            con,
+            site_name=clean_site_name,
+            site_code=clean_site_code,
+            create_if_missing=bool(clean_site_name),
+            ts=ts,
+        )
         env_json = json.dumps(config if isinstance(config, dict) else {}, ensure_ascii=False, separators=(",", ":"))
 
         target = None
@@ -1241,7 +1546,7 @@ def upsert_site_env_config(
         if clean_site_code:
             target = con.execute(
                 """
-                SELECT id, site_code, site_name, env_json
+                SELECT id, site_code, site_name, site_id, env_json
                 FROM site_env_configs
                 WHERE site_code=?
                 LIMIT 1
@@ -1251,7 +1556,7 @@ def upsert_site_env_config(
         if target is None:
             target = con.execute(
                 """
-                SELECT id, site_code, site_name, env_json
+                SELECT id, site_code, site_name, site_id, env_json
                 FROM site_env_configs
                 WHERE site_name=?
                 LIMIT 1
@@ -1268,24 +1573,24 @@ def upsert_site_env_config(
         if target is None:
             con.execute(
                 """
-                INSERT INTO site_env_configs(site_code, site_name, env_json, created_at, updated_at)
-                VALUES(?,?,?,?,?)
+                INSERT INTO site_env_configs(site_code, site_name, site_id, env_json, created_at, updated_at)
+                VALUES(?,?,?,?,?,?)
                 """,
-                (clean_site_code, clean_site_name, env_json, ts, ts),
+                (clean_site_code, clean_site_name, resolved_site_id, env_json, ts, ts),
             )
         else:
             con.execute(
                 """
                 UPDATE site_env_configs
-                SET site_code=?, site_name=?, env_json=?, updated_at=?
+                SET site_code=?, site_name=?, site_id=?, env_json=?, updated_at=?
                 WHERE id=?
                 """,
-                (clean_site_code, clean_site_name, env_json, ts, int(target["id"])),
+                (clean_site_code, clean_site_name, resolved_site_id, env_json, ts, int(target["id"])),
             )
 
         row = con.execute(
             """
-            SELECT site_code, site_name, env_json, created_at, updated_at
+            SELECT site_code, site_name, site_id, env_json, created_at, updated_at
             FROM site_env_configs
             WHERE site_name=? OR (site_code=? AND site_code IS NOT NULL AND TRIM(site_code)<>'')
             ORDER BY updated_at DESC
@@ -1299,6 +1604,7 @@ def upsert_site_env_config(
             else {
                 "site_code": clean_site_code,
                 "site_name": clean_site_name,
+                "site_id": resolved_site_id,
                 "env_json": env_json,
                 "created_at": ts,
                 "updated_at": ts,
@@ -1341,12 +1647,12 @@ def delete_site_env_config(
         target = None
         if clean_site_code:
             target = con.execute(
-                "SELECT site_code, site_name, env_json FROM site_env_configs WHERE site_code=? LIMIT 1",
+                "SELECT site_code, site_name, site_id, env_json FROM site_env_configs WHERE site_code=? LIMIT 1",
                 (clean_site_code,),
             ).fetchone()
         if target is None and clean_site_name:
             target = con.execute(
-                "SELECT site_code, site_name, env_json FROM site_env_configs WHERE site_name=? LIMIT 1",
+                "SELECT site_code, site_name, site_id, env_json FROM site_env_configs WHERE site_name=? LIMIT 1",
                 (clean_site_name,),
             ).fetchone()
         if target is None:
@@ -1382,7 +1688,7 @@ def list_site_env_configs() -> List[Dict[str, Any]]:
     try:
         rows = con.execute(
             """
-            SELECT site_code, site_name, env_json, created_at, updated_at
+            SELECT site_code, site_name, site_id, env_json, created_at, updated_at
             FROM site_env_configs
             ORDER BY COALESCE(site_code, ''), site_name ASC
             """
@@ -1920,9 +2226,16 @@ def migrate_site_code(
     con = _connect()
     try:
         ts = now_iso()
+        clean_site_id = _ensure_site_id_for_name_in_tx(con, clean_site_name, ts=ts)
         row_by_name = con.execute(
-            "SELECT id, site_name, site_code FROM site_registry WHERE site_name=? LIMIT 1",
-            (clean_site_name,),
+            """
+            SELECT id, site_name, site_code, site_id
+            FROM site_registry
+            WHERE site_id=? OR site_name=?
+            ORDER BY CASE WHEN site_id=? THEN 0 ELSE 1 END, id ASC
+            LIMIT 1
+            """,
+            (clean_site_id, clean_site_name, clean_site_id),
         ).fetchone()
         if row_by_name:
             current = _clean_site_code_value(row_by_name["site_code"])
@@ -1930,21 +2243,27 @@ def migrate_site_code(
                 raise ValueError("site_name currently mapped to another site_code")
 
         row_by_old = con.execute(
-            "SELECT id, site_name FROM site_registry WHERE site_code=? LIMIT 1",
+            "SELECT id, site_name, site_id FROM site_registry WHERE site_code=? LIMIT 1",
             (old_code,),
         ).fetchone()
         if row_by_old:
             old_name = str(row_by_old["site_name"] or "").strip()
-            if old_name and old_name != clean_site_name:
+            old_site_id = _clean_site_id_value(row_by_old["site_id"])
+            if old_site_id and old_site_id != clean_site_id:
+                raise ValueError("old_site_code is mapped to another site_name")
+            if old_name and old_name != clean_site_name and old_site_id != clean_site_id:
                 raise ValueError("old_site_code is mapped to another site_name")
 
         row_by_new = con.execute(
-            "SELECT id, site_name FROM site_registry WHERE site_code=? LIMIT 1",
+            "SELECT id, site_name, site_id FROM site_registry WHERE site_code=? LIMIT 1",
             (new_code,),
         ).fetchone()
         if row_by_new:
             new_name = str(row_by_new["site_name"] or "").strip()
-            if new_name and new_name != clean_site_name:
+            new_site_id = _clean_site_id_value(row_by_new["site_id"])
+            if new_site_id and new_site_id != clean_site_id:
+                raise ValueError("new_site_code is already mapped to another site_name")
+            if new_name and new_name != clean_site_name and new_site_id != clean_site_id:
                 raise ValueError("new_site_code is already mapped to another site_name")
 
         tables = con.execute(
@@ -1975,18 +2294,18 @@ def migrate_site_code(
 
         if row_by_name:
             con.execute(
-                "UPDATE site_registry SET site_code=?, updated_at=? WHERE id=?",
-                (new_code, ts, int(row_by_name["id"])),
+                "UPDATE site_registry SET site_name=?, site_code=?, site_id=?, updated_at=? WHERE id=?",
+                (clean_site_name, new_code, clean_site_id, ts, int(row_by_name["id"])),
             )
         elif row_by_old:
             con.execute(
-                "UPDATE site_registry SET site_name=?, site_code=?, updated_at=? WHERE id=?",
-                (clean_site_name, new_code, ts, int(row_by_old["id"])),
+                "UPDATE site_registry SET site_name=?, site_code=?, site_id=?, updated_at=? WHERE id=?",
+                (clean_site_name, new_code, clean_site_id, ts, int(row_by_old["id"])),
             )
         else:
             con.execute(
-                "INSERT INTO site_registry(site_name, site_code, created_at, updated_at) VALUES(?,?,?,?)",
-                (clean_site_name, new_code, ts, ts),
+                "INSERT INTO site_registry(site_name, site_code, site_id, created_at, updated_at) VALUES(?,?,?,?,?)",
+                (clean_site_name, new_code, clean_site_id, ts, ts),
             )
 
         con.commit()
@@ -2291,7 +2610,7 @@ def list_staff_users(*, active_only: bool = False) -> List[Dict[str, Any]]:
     con = _connect()
     try:
         sql = """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, site_id, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
         """
         params: List[Any] = []
@@ -2309,7 +2628,7 @@ def get_staff_user(user_id: int) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, site_id, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -2328,6 +2647,7 @@ def create_staff_user(
     phone: Optional[str] = None,
     site_code: Optional[str] = None,
     site_name: Optional[str] = None,
+    site_id: Optional[int] = None,
     address: Optional[str] = None,
     office_phone: Optional[str] = None,
     office_fax: Optional[str] = None,
@@ -2344,6 +2664,15 @@ def create_staff_user(
     try:
         ts = now_iso()
         clean_site_code = _clean_site_code_value(site_code)
+        clean_site_name = str(site_name or "").strip() or None
+        clean_site_id = _resolve_site_id_from_identity_in_tx(
+            con,
+            site_id=site_id,
+            site_name=clean_site_name,
+            site_code=clean_site_code,
+            create_if_missing=bool(clean_site_name),
+            ts=ts,
+        )
         clean_unit_label = str(unit_label or "").strip() or None
         clean_household_key = str(household_key or "").strip().upper() or None
         if clean_unit_label and not clean_household_key:
@@ -2355,9 +2684,9 @@ def create_staff_user(
         con.execute(
             """
             INSERT INTO staff_users(
-              login_id, name, role, phone, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, note, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at
+              login_id, name, role, phone, site_code, site_name, site_id, address, office_phone, office_fax, unit_label, household_key, note, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 login_id,
@@ -2365,7 +2694,8 @@ def create_staff_user(
                 role,
                 phone,
                 clean_site_code,
-                site_name,
+                clean_site_name,
+                clean_site_id,
                 address,
                 office_phone,
                 office_fax,
@@ -2384,7 +2714,7 @@ def create_staff_user(
         con.commit()
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, site_id, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -2404,6 +2734,7 @@ def update_staff_user(
     phone: Optional[str] = None,
     site_code: Optional[str] = None,
     site_name: Optional[str] = None,
+    site_id: Optional[int] = None,
     address: Optional[str] = None,
     office_phone: Optional[str] = None,
     office_fax: Optional[str] = None,
@@ -2419,6 +2750,15 @@ def update_staff_user(
     try:
         ts = now_iso()
         clean_site_code = _clean_site_code_value(site_code)
+        clean_site_name = str(site_name or "").strip() or None
+        clean_site_id = _resolve_site_id_from_identity_in_tx(
+            con,
+            site_id=site_id,
+            site_name=clean_site_name,
+            site_code=clean_site_code,
+            create_if_missing=bool(clean_site_name),
+            ts=ts,
+        )
         clean_unit_label = str(unit_label or "").strip() or None
         clean_household_key = str(household_key or "").strip().upper() or None
         if clean_unit_label and not clean_household_key:
@@ -2430,7 +2770,7 @@ def update_staff_user(
         cur = con.execute(
             """
             UPDATE staff_users
-            SET login_id=?, name=?, role=?, phone=?, site_code=?, site_name=?, address=?, office_phone=?, office_fax=?, unit_label=?, household_key=?, note=?, is_admin=?, is_site_admin=?, admin_scope=?, is_active=?, updated_at=?
+            SET login_id=?, name=?, role=?, phone=?, site_code=?, site_name=?, site_id=COALESCE(?, site_id), address=?, office_phone=?, office_fax=?, unit_label=?, household_key=?, note=?, is_admin=?, is_site_admin=?, admin_scope=?, is_active=?, updated_at=?
             WHERE id=?
             """,
             (
@@ -2439,7 +2779,8 @@ def update_staff_user(
                 role,
                 phone,
                 clean_site_code,
-                site_name,
+                clean_site_name,
+                clean_site_id,
                 address,
                 office_phone,
                 office_fax,
@@ -2459,7 +2800,7 @@ def update_staff_user(
             return None
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, site_id, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE id=?
             """,
@@ -2528,7 +2869,7 @@ def get_staff_user_by_login(login_id: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, site_id, address, office_phone, office_fax, unit_label, household_key, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE login_id=?
             """,
@@ -2653,6 +2994,7 @@ def get_auth_user_by_token(token: str) -> Optional[Dict[str, Any]]:
               u.note,
               u.site_code,
               u.site_name,
+              u.site_id,
               u.address,
               u.office_phone,
               u.office_fax,
@@ -2703,7 +3045,7 @@ def get_staff_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     try:
         row = con.execute(
             """
-            SELECT id, login_id, name, role, phone, note, site_code, site_name, address, office_phone, office_fax, unit_label, household_key, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, site_id, address, office_phone, office_fax, unit_label, household_key, password_hash, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
             FROM staff_users
             WHERE phone=?
             ORDER BY is_active DESC, id ASC

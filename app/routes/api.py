@@ -747,12 +747,20 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     allowed_modules = _allowed_modules_for_user(user)
     account_type = _account_type_from_user(user)
     canonical_role = _effective_role_for_permission_level(_normalized_role_text(user.get("role")), permission_level)
+    raw_site_id = user.get("site_id")
+    site_id: int | None
+    try:
+        parsed_site_id = int(raw_site_id)
+        site_id = parsed_site_id if parsed_site_id > 0 else None
+    except Exception:
+        site_id = None
     return {
         "id": int(user.get("id")),
         "login_id": user.get("login_id"),
         "name": user.get("name"),
         "role": canonical_role,
         "phone": user.get("phone"),
+        "site_id": site_id,
         "site_code": user.get("site_code"),
         "site_name": user.get("site_name"),
         "address": user.get("address"),
@@ -1432,8 +1440,21 @@ def api_site_identity(request: Request, site_name: str = Query(default=""), site
     user, _token = _require_auth(request)
     clean_site_name, clean_site_code = _resolve_site_identity_for_main(user, site_name, site_code)
     admin_scope = _admin_scope_from_user(user)
+    resolved_site_id = None
+    if clean_site_name:
+        try:
+            resolved_site_id = ensure_site(clean_site_name)
+        except Exception:
+            resolved_site_id = None
+    if resolved_site_id is None:
+        try:
+            parsed = int(user.get("site_id") or 0)
+            resolved_site_id = parsed if parsed > 0 else None
+        except Exception:
+            resolved_site_id = None
     return {
         "ok": True,
+        "site_id": resolved_site_id,
         "site_name": clean_site_name,
         "site_code": clean_site_code,
         "editable": int(user.get("is_admin") or 0) == 1,
