@@ -86,6 +86,7 @@
       phone: ($("#suPhone").value || "").trim(),
       site_name: ($("#suSiteName").value || "").trim(),
       role: ($("#suRole").value || "").trim(),
+      unit_label: ($("#suUnitLabel").value || "").trim(),
       address: ($("#suAddress").value || "").trim(),
       office_phone: ($("#suOfficePhone").value || "").trim(),
       office_fax: ($("#suOfficeFax").value || "").trim(),
@@ -96,6 +97,10 @@
     const body = signupPayloadFromForm();
     if (!body.name || !body.phone || !body.site_name || !body.role || !body.address || !body.office_phone || !body.office_fax) {
       setMsg($("#signupMsg"), "필수 항목을 모두 입력하세요.", true);
+      return;
+    }
+    if (isResidentRoleText(body.role) && !body.unit_label) {
+      setMsg($("#signupMsg"), "세대주민은 동/호를 입력해야 합니다.", true);
       return;
     }
     const data = await KAAuth.requestJson("/api/auth/signup/request_phone_verification", {

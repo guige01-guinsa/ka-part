@@ -102,24 +102,14 @@ VALID_USER_ROLES = [
     "서버관리자",
     "관리소장",
     "부장",
-    "전기과장",
-    "시설과장",
-    "기술과장",
-    "시설대리",
-    "시설주임",
+    "과장",
+    "대리",
+    "주임",
     "경리",
     "보안/경비",
     "미화원",
-    "입주민",
     "세대주민",
     "입대의",
-    "과장",
-    "주임",
-    "기사",
-    "행정",
-    "경비",
-    "미화",
-    "기타",
 ]
 VALID_PERMISSION_LEVELS = ["admin", "site_admin", "user", "security_guard", "resident", "board_member"]
 VALID_ADMIN_SCOPES = ["super_admin", "ops_admin"]
@@ -348,7 +338,7 @@ def _effective_role_for_permission_level(role: str, permission_level: str) -> st
     if level == "security_guard":
         return "보안/경비"
     if level == "resident":
-        return "입주민"
+        return "세대주민"
     if level == "board_member":
         return "입대의"
     return role

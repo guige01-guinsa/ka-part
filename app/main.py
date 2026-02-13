@@ -125,6 +125,7 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
       const nextPath = {quoted_next};
       const loginUrl = {quoted_login};
       const LOOP_KEY = "ka_parking_entry_retry_v1";
+      const MANUAL_LOGOUT_KEY = "ka_parking_manual_logout_v1";
       const readRetry = () => {{
         try {{
           const raw = (sessionStorage.getItem(LOOP_KEY) || "0").trim();
@@ -165,6 +166,16 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
         try {{ localStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
         try {{ localStorage.removeItem(USER_KEY); }} catch (_e) {{}}
       }};
+      const consumeManualLogout = () => {{
+        try {{
+          const raw = (sessionStorage.getItem(MANUAL_LOGOUT_KEY) || "").trim();
+          if (raw !== "1") return false;
+          sessionStorage.removeItem(MANUAL_LOGOUT_KEY);
+          return true;
+        }} catch (_e) {{
+          return false;
+        }}
+      }};
       const readSiteValue = (storageKey, queryKey) => {{
         const fromSession = readStore(sessionStorage, storageKey);
         if (fromSession) return fromSession;
@@ -181,6 +192,12 @@ def _parking_handoff_page(next_path: str = "/parking/admin2") -> str:
         }}
       }};
       let token = readStore(sessionStorage, TOKEN_KEY);
+      if (consumeManualLogout()) {{
+        clearRetry();
+        clearAuthStore();
+        window.location.replace(loginUrl);
+        return;
+      }}
       if (!token) {{
         const legacyToken = readStore(localStorage, TOKEN_KEY);
         if (legacyToken) {{

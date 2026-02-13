@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>로그인</title>
-  <link rel="stylesheet" href="/pwa/login.css?v=20260213g" />
+  <link rel="stylesheet" href="/pwa/login.css?v=20260213h" />
 </head>
 <body>
   <main class="wrap">
@@ -42,21 +42,24 @@
           <input id="suSiteName" type="text" placeholder="예: 아이유파크" />
         </label>
         <label class="field">
-          <span>관리소 직원</span>
+          <span>사용자분류</span>
           <select id="suRole">
             <option value="">선택</option>
             <option value="서버관리자">서버관리자</option>
             <option value="관리소장">관리소장</option>
             <option value="부장">부장</option>
-            <option value="전기과장">전기과장</option>
-            <option value="시설과장">시설과장</option>
-            <option value="기술과장">기술과장</option>
-            <option value="시설대리">시설대리</option>
-            <option value="시설주임">시설주임</option>
+            <option value="과장">과장</option>
+            <option value="대리">대리</option>
+            <option value="주임">주임</option>
             <option value="경리">경리</option>
             <option value="보안/경비">보안/경비</option>
             <option value="미화원">미화원</option>
+            <option value="세대주민">세대주민</option>
           </select>
+        </label>
+        <label class="field">
+          <span>동/호(세대주민 필수)</span>
+          <input id="suUnitLabel" type="text" placeholder="예: 101-1203 또는 101동 1203호" />
         </label>
       </div>
       <label class="field">
@@ -120,6 +123,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/login.js?v=20260213g"></script>
+  <script src="/pwa/login.js?v=20260213h"></script>
 </body>
 </html>

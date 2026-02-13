@@ -203,6 +203,7 @@ def _auto_entry_page(next_path: str) -> str:
       const nextPath = {quoted_next};
       const loginUrl = {quoted_login};
       const LOOP_KEY = "ka_parking_entry_retry_v1";
+      const MANUAL_LOGOUT_KEY = "ka_parking_manual_logout_v1";
       const readRetry = () => {{
         try {{
           const raw = (sessionStorage.getItem(LOOP_KEY) || "0").trim();
@@ -243,6 +244,16 @@ def _auto_entry_page(next_path: str) -> str:
         try {{ localStorage.removeItem(TOKEN_KEY); }} catch (_e) {{}}
         try {{ localStorage.removeItem(USER_KEY); }} catch (_e) {{}}
       }};
+      const consumeManualLogout = () => {{
+        try {{
+          const raw = (sessionStorage.getItem(MANUAL_LOGOUT_KEY) || "").trim();
+          if (raw !== "1") return false;
+          sessionStorage.removeItem(MANUAL_LOGOUT_KEY);
+          return true;
+        }} catch (_e) {{
+          return false;
+        }}
+      }};
       const readSiteValue = (storageKey, queryKey) => {{
         const fromSession = readStore(sessionStorage, storageKey);
         if (fromSession) return fromSession;
@@ -259,6 +270,12 @@ def _auto_entry_page(next_path: str) -> str:
         }}
       }};
       let token = readStore(sessionStorage, TOKEN_KEY);
+      if (consumeManualLogout()) {{
+        clearRetry();
+        clearAuthStore();
+        window.location.replace(loginUrl);
+        return;
+      }}
       if (!token) {{
         const legacyToken = readStore(localStorage, TOKEN_KEY);
         if (legacyToken) {{
@@ -1755,6 +1772,31 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       fileInput.value = "";
     }
 
+    function clearPortalAuthStore() {
+      const tokenKey = "ka_part_auth_token_v1";
+      const userKey = "ka_part_auth_user_v1";
+      const logoutMarkKey = "ka_parking_manual_logout_v1";
+      try { sessionStorage.setItem(logoutMarkKey, "1"); } catch (_e) {}
+      try { sessionStorage.removeItem(tokenKey); } catch (_e) {}
+      try { sessionStorage.removeItem(userKey); } catch (_e) {}
+      try { localStorage.removeItem(tokenKey); } catch (_e) {}
+      try { localStorage.removeItem(userKey); } catch (_e) {}
+    }
+
+    async function runIntegratedLogout() {
+      try {
+        await fetch(boot.logout_url || "./logout", { method: "POST", credentials: "include" });
+      } catch (_) {}
+      try {
+        const portalLogoutUrl = String(boot.portal_logout_url || "/api/auth/logout").trim();
+        if (portalLogoutUrl) {
+          await fetch(portalLogoutUrl, { method: "POST", credentials: "include" });
+        }
+      } catch (_) {}
+      clearPortalAuthStore();
+      location.href = boot.logout_redirect_url || "/pwa/login.html";
+    }
+
     function bindEvents(){
       on("btnRefreshAll", "click", async () => {
         try {
@@ -1770,10 +1812,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       });
 
       on("btnLogout", "click", async () => {
-        try {
-          await fetch(boot.logout_url || "./logout", { method: "POST", credentials: "include" });
-        } catch (_) {}
-        location.href = boot.back_url || "/pwa/";
+        await runIntegratedLogout();
       });
 
       if (!isManager) return;
@@ -1846,6 +1885,16 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         el.dataset.fallbackBound = "1";
         el.addEventListener("click", fn);
       };
+      const clearPortalAuthStore = () => {
+        const tokenKey = "ka_part_auth_token_v1";
+        const userKey = "ka_part_auth_user_v1";
+        const logoutMarkKey = "ka_parking_manual_logout_v1";
+        try { sessionStorage.setItem(logoutMarkKey, "1"); } catch (_e) {}
+        try { sessionStorage.removeItem(tokenKey); } catch (_e) {}
+        try { sessionStorage.removeItem(userKey); } catch (_e) {}
+        try { localStorage.removeItem(tokenKey); } catch (_e) {}
+        try { localStorage.removeItem(userKey); } catch (_e) {}
+      };
       const apiBase = String(boot.api_base || "/parking/api/session").replace(/\/+$/, "");
       const api = async (path, opts) => {
         const p = String(path || "").replace(/^\/+/, "");
@@ -1874,6 +1923,20 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
         if ($("fTo")) $("fTo").value = "";
         if ($("fNote")) $("fNote").value = "";
       };
+
+      bind("btnLogout", async () => {
+        try {
+          await fetch(boot.logout_url || "./logout", { method: "POST", credentials: "include" });
+        } catch (_e) {}
+        try {
+          const portalLogoutUrl = String(boot.portal_logout_url || "/api/auth/logout").trim();
+          if (portalLogoutUrl) {
+            await fetch(portalLogoutUrl, { method: "POST", credentials: "include" });
+          }
+        } catch (_e) {}
+        clearPortalAuthStore();
+        location.href = boot.logout_redirect_url || "/pwa/login.html";
+      });
 
       bind("btnCreate", async () => {
         try {
@@ -1961,6 +2024,7 @@ def admin2(request: Request):
     site_code = _session_site_code(s)
     site_name = str(s.get("site_name") or "").strip()
     display_name = str(s.get("display_name") or s.get("u") or "").strip() or "사용자"
+    logout_redirect_url = app_url("/login") if LOCAL_LOGIN_ENABLED else portal_login_url(app_url("/admin2"))
     context = {
         "role": role,
         "is_manager": _is_manager_session(s),
@@ -1970,6 +2034,8 @@ def admin2(request: Request):
         "api_base": app_url("/api/session"),
         "scanner_url": app_url("/scanner"),
         "logout_url": app_url("/logout"),
+        "portal_logout_url": "/api/auth/logout",
+        "logout_redirect_url": logout_redirect_url,
         "back_url": "/pwa/",
     }
     html = ADMIN2_HTML_TEMPLATE.replace("__ADMIN_BOOT_JSON__", json.dumps(context, ensure_ascii=False))
