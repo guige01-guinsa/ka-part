@@ -245,7 +245,7 @@ def _allowed_modules_for_user(user: Dict[str, Any]) -> List[str]:
         return ["parking"]
     if _is_resident_role(role):
         return ["complaints"]
-    return ["main", "complaints"]
+    return ["main", "parking", "complaints"]
 
 
 def _default_landing_path_for_user(user: Dict[str, Any]) -> str:
@@ -1161,8 +1161,6 @@ def parking_context(
     site_code: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
-    if not _is_security_role(user.get("role")):
-        raise HTTPException(status_code=403, detail="보안/경비 계정만 주차관리 모듈에 접근할 수 있습니다.")
     permission_level = _permission_level_from_user(user)
 
     clean_site_name, clean_site_code = _resolve_main_site_target(

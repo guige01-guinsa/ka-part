@@ -349,8 +349,6 @@
     if (btnSpec && !hasSiteAdminPermission(authUser)) btnSpec.style.display = "none";
     const btnBackup = $("#btnBackup");
     if (btnBackup && !hasSiteAdminPermission(authUser)) btnBackup.style.display = "none";
-    const btnParking = $("#btnParking");
-    if (btnParking && !isSecurityRole(authUser)) btnParking.style.display = "none";
     enforceSiteIdentityPolicy();
     const assignedCode = assignedSiteCodeForUser();
     if (assignedCode) setSiteCode(assignedCode);
