@@ -125,6 +125,10 @@ body {
     color-mix(in srgb, var(--bg) 92%, black 8%);
 }
 
+.menu-drawer[hidden] {
+  display: none !important;
+}
+
 .menu-head {
   display: flex;
   align-items: center;
