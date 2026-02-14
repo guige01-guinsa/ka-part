@@ -932,11 +932,11 @@ def _resolve_site_identity_for_main(
         clean_site_code = _clean_site_code(raw_site_code, required=False)
         clean_site_id = raw_site_id
 
-        if clean_site_id:
-            if not clean_site_name:
-                clean_site_name = _clean_site_name(find_site_name_by_id(clean_site_id), required=False)
-            if not clean_site_code:
-                clean_site_code = _clean_site_code(find_site_code_by_id(clean_site_id), required=False)
+        # site_id is treated as a fallback hint, not as authoritative input.
+        # If name/code are provided, they should drive canonical resolution.
+        if clean_site_id and not clean_site_name and not clean_site_code:
+            clean_site_name = _clean_site_name(find_site_name_by_id(clean_site_id), required=False)
+            clean_site_code = _clean_site_code(find_site_code_by_id(clean_site_id), required=False)
 
         if clean_site_code:
             mapped_name = find_site_name_by_code(clean_site_code)
@@ -1299,8 +1299,11 @@ def _resolve_main_site_target(
         requested_site_code,
         requested_site_id,
     )
+    canonical_site_id = _clean_site_id(requested_site_id, required=False)
+    if clean_site_name or clean_site_code:
+        canonical_site_id = 0
     canonical = resolve_site_identity(
-        site_id=requested_site_id,
+        site_id=canonical_site_id,
         site_name=clean_site_name,
         site_code=clean_site_code,
         create_site_if_missing=False,
@@ -1704,6 +1707,7 @@ def api_site_env_list(request: Request):
         "count": len(rows),
         "items": [
             {
+                "site_id": r.get("site_id"),
                 "site_name": r.get("site_name"),
                 "site_code": r.get("site_code"),
                 "updated_at": r.get("updated_at"),

@@ -4,6 +4,7 @@
   const $ = (s) => document.querySelector(s);
   const SITE_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
+  const SITE_ID_KEY = "ka_current_site_id_v1";
   const TAB_ORDER = [
     "home",
     "tr1",
@@ -121,10 +122,30 @@
     else localStorage.removeItem(SITE_CODE_KEY);
   }
 
+  function normalizeSiteId(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    const id = Math.trunc(n);
+    return id > 0 ? id : 0;
+  }
+
+  function getSiteId() {
+    return normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
+  }
+
+  function setSiteId(siteId) {
+    const clean = normalizeSiteId(siteId);
+    if (clean > 0) localStorage.setItem(SITE_ID_KEY, String(clean));
+    else localStorage.removeItem(SITE_ID_KEY);
+    return clean;
+  }
+
   function buildSiteQuery(siteName, siteCode) {
     const qs = new URLSearchParams();
     const site = String(siteName || "").trim();
     const code = String(siteCode || "").trim().toUpperCase();
+    const siteId = getSiteId();
+    if (siteId > 0) qs.set("site_id", String(siteId));
     if (site) qs.set("site_name", site);
     if (code) qs.set("site_code", code);
     return qs.toString();
@@ -139,6 +160,7 @@
     }
     const qs = buildSiteQuery(site, siteCode);
     const data = await jfetch(`/api/site_identity?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     return data || null;
@@ -647,7 +669,7 @@
     return compactConfig(out);
   }
 
-  function applySelectedTemplate() {
+  async function applySelectedTemplate() {
     const t = getSelectedTemplate();
     if (!t) {
       setMsg("템플릿을 선택하세요.", true);
@@ -677,7 +699,10 @@
     const schemaPreview = applyConfigToSchema(baseSchema, next);
     renderPreview({ site_name: getSiteName(), site_code: getSiteCode(), schema: schemaPreview });
     markActionSuccess($("#btnTemplateApply"), "✓");
-    setMsg("선택한 탭메뉴와 항목들을 불러왔습니다.이제 [저장]을 누르고 [메인으로]를 누르세요");
+    setMsg("선택한 탭메뉴와 항목을 적용했습니다. 저장 중입니다...");
+    await saveConfig();
+    markActionSuccess($("#btnTemplateApply"), "✓");
+    setMsg("선택한 탭메뉴/항목 불러오기와 저장이 완료되었습니다. [메인으로]를 누르세요.");
   }
 
   async function loadTemplates() {
@@ -712,7 +737,7 @@
         (x) =>
           `<button class="btn site-item" type="button" data-site="${escapeHtmlAttr(x.site_name || "")}" data-code="${escapeHtmlAttr(
             x.site_code || ""
-          )}">${escapeHtml(x.site_name || "")}${x.site_code ? ` <code>[${escapeHtml(x.site_code)}]</code>` : ""}</button> <span style="opacity:.75">${escapeHtml(
+          )}" data-site-id="${escapeHtmlAttr(x.site_id || "")}">${escapeHtml(x.site_name || "")}${x.site_code ? ` <code>[${escapeHtml(x.site_code)}]</code>` : ""}</button> <span style="opacity:.75">${escapeHtml(
             x.updated_at || ""
           )}</span>`
       )
@@ -859,13 +884,17 @@
     $("#btnPreview").addEventListener("click", () => previewSchema().catch((e) => setMsg(e.message || String(e), true)));
 
     $("#templateSelect").addEventListener("change", updateTemplateDescAndScope);
-    $("#btnTemplateApply").addEventListener("click", applySelectedTemplate);
+    $("#btnTemplateApply").addEventListener("click", () =>
+      applySelectedTemplate().catch((e) => setMsg(e.message || String(e), true))
+    );
     $("#siteName")?.addEventListener("change", () => {
       setSiteName(getSiteName());
+      setSiteId(0);
       syncSiteIdentity(true).catch(() => {});
     });
     $("#siteCode")?.addEventListener("change", () => {
       setSiteCode(getSiteCode());
+      setSiteId(0);
       syncSiteIdentity(true).catch(() => {});
     });
     $("#btnTplAllOn").addEventListener("click", () => {
@@ -885,7 +914,9 @@
       if (!btn) return;
       const site = String(btn.dataset.site || "").trim();
       const code = String(btn.dataset.code || "").trim().toUpperCase();
+      const siteId = normalizeSiteId(btn.dataset.siteId || "");
       if (!site) return;
+      setSiteId(siteId);
       setSiteName(site);
       setSiteCode(code);
       reloadConfig().catch((err) => setMsg(err.message || String(err), true));
@@ -911,6 +942,7 @@
     if (!assignedSite) {
       throw new Error("계정에 소속 단지가 지정되지 않았습니다. 관리자에게 문의하세요.");
     }
+    setSiteId(normalizeSiteId(me.site_id));
     setSiteName(assignedSite);
     const assignedCode = String(me.site_code || "").trim().toUpperCase();
     setSiteCode(assignedCode || "");
@@ -932,8 +964,12 @@
     const u = new URL(window.location.href);
     const qSite = (u.searchParams.get("site_name") || "").trim();
     const qCode = (u.searchParams.get("site_code") || "").trim().toUpperCase();
+    const qSiteId = normalizeSiteId(u.searchParams.get("site_id") || "");
     const stored = (localStorage.getItem(SITE_KEY) || "").trim();
     const storedCode = (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
+    const storedSiteId = normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
+    const meSiteId = normalizeSiteId(me.site_id);
+    setSiteId(qSiteId || storedSiteId || meSiteId || 0);
     setSiteName(qSite || stored || String(me.site_name || "").trim());
     setSiteCode(qCode || storedCode || "");
     enforceSitePolicy();

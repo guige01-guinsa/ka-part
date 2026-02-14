@@ -1239,8 +1239,10 @@
       }
       if (source === "siteName") {
         setSiteName(getSiteNameRaw());
+        setSiteId(0);
       } else if (source === "siteCode") {
         setSiteCode(getSiteCodeRaw());
+        setSiteId(0);
       }
       await syncSiteIdentity({ requireInput: true });
       await loadRange().catch(() => {});
