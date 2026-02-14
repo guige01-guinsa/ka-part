@@ -41,6 +41,7 @@ from ..db import (
     create_auth_session,
     create_privileged_change_request,
     create_staff_user,
+    delete_privileged_change_request,
     delete_entry,
     delete_site_env_config,
     delete_staff_user,
@@ -2348,6 +2349,39 @@ def api_site_registry_request_execute(
         "signup_ready": signup_ready,
         "request": _site_registry_request_public(executed),
         "message": "요청을 처리하여 단지코드를 등록했습니다.",
+    }
+
+
+@router.delete("/site_registry/requests/{request_id}")
+def api_site_registry_request_delete(request: Request, request_id: int):
+    user, _token = _require_super_admin(request)
+    item = get_privileged_change_request(int(request_id))
+    if not item:
+        raise HTTPException(status_code=404, detail="요청을 찾을 수 없습니다.")
+    if str(item.get("change_type") or "").strip().lower() != SITE_REGISTRY_REQUEST_CHANGE_TYPE:
+        raise HTTPException(status_code=400, detail="지원하지 않는 요청 유형입니다.")
+
+    deleted = delete_privileged_change_request(request_id=int(request_id))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="이미 삭제되었거나 요청을 찾을 수 없습니다.")
+
+    _audit_security(
+        user=user,
+        event_type="site_registry_request_delete",
+        severity="WARNING",
+        outcome="ok",
+        target_site_code=str(item.get("target_site_code") or "").strip().upper(),
+        target_site_name=str(item.get("target_site_name") or "").strip(),
+        request_id=int(request_id),
+        detail={
+            "status": str(item.get("status") or "").strip().lower(),
+            "requested_by_login": str(item.get("requested_by_login") or "").strip(),
+        },
+    )
+    return {
+        "ok": True,
+        "request_id": int(request_id),
+        "message": "요청을 삭제했습니다.",
     }
 
 

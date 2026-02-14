@@ -360,6 +360,7 @@
           <div class="cell-actions">
             <button class="btn primary" data-action="execute-site-req" data-id="${Number(item.id || 0)}" type="button" ${canExecute ? "" : "disabled"}>등록 처리</button>
             <button class="btn" data-action="copy-site-setup-url" data-url="${encodedSetupUrl}" type="button" ${setupUrl ? "" : "disabled"}>설정링크 복사</button>
+            <button class="btn danger" data-action="delete-site-req" data-id="${Number(item.id || 0)}" type="button">삭제</button>
           </div>
         </td>
       </tr>
@@ -423,6 +424,20 @@
       lines.push(`신규가입 안내 미발송: ${String(ready.reason)}`);
     }
     setSiteReqMsg(lines.join(" / "), false);
+    await loadSiteRegistryRequests();
+  }
+
+  async function deleteSiteRegistryRequest(id) {
+    const req = siteRegistryRequests.find((x) => Number(x.id) === Number(id));
+    if (!req) return;
+    const siteName = String(req.site_name || "-");
+    const requester = String(req.requester_name || "-");
+    const ok = confirm(`요청 #${id} (${siteName} / ${requester}) 을(를) 삭제할까요? 이 작업은 되돌릴 수 없습니다.`);
+    if (!ok) return;
+    const data = await jfetch(`/api/site_registry/requests/${Number(id)}`, {
+      method: "DELETE",
+    });
+    setSiteReqMsg(String((data && data.message) || `요청 #${id} 삭제 완료`), false);
     await loadSiteRegistryRequests();
   }
 
@@ -776,6 +791,11 @@
           if (action === "execute-site-req") {
             const reqId = Number(btn.dataset.id);
             executeSiteRegistryRequest(reqId).catch((err) => setSiteReqMsg(err.message || String(err), true));
+            return;
+          }
+          if (action === "delete-site-req") {
+            const reqId = Number(btn.dataset.id);
+            deleteSiteRegistryRequest(reqId).catch((err) => setSiteReqMsg(err.message || String(err), true));
             return;
           }
           if (action === "copy-site-setup-url") {

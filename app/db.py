@@ -2508,6 +2508,16 @@ def list_privileged_change_requests(
         con.close()
 
 
+def delete_privileged_change_request(*, request_id: int) -> bool:
+    con = _connect()
+    try:
+        cur = con.execute("DELETE FROM privileged_change_requests WHERE id=?", (int(request_id),))
+        con.commit()
+        return int(getattr(cur, "rowcount", 0) or 0) > 0
+    finally:
+        con.close()
+
+
 def approve_privileged_change_request(
     *,
     request_id: int,
