@@ -1991,6 +1991,11 @@ def _site_registry_request_public(item: Dict[str, Any]) -> Dict[str, Any]:
         "signup_ready_expires_at": str(signup_ready.get("expires_at") or "").strip(),
         "signup_ready_setup_url": str(signup_ready.get("setup_url") or "").strip(),
         "signup_ready_message": str(signup_ready.get("message") or signup_ready.get("reason") or "").strip(),
+        "signup_ready_debug_code": (
+            str(signup_ready.get("debug_code") or "").strip()
+            if str(signup_ready.get("delivery") or "").strip().lower() == "mock"
+            else ""
+        ),
     }
 
 
@@ -3079,6 +3084,7 @@ def auth_signup_request_ready_verification(request: Request, payload: Dict[str, 
         "expires_at": str(notice.get("expires_at") or ""),
         "expires_in_sec": PHONE_VERIFY_TTL_MINUTES * 60,
         "delivery": str(notice.get("delivery") or "sms"),
+        "setup_url": str(notice.get("setup_url") or ""),
         "message": str(notice.get("message") or "인증번호를 전송했습니다."),
     }
     if notice.get("debug_code"):

@@ -48,9 +48,7 @@
     };
   }
 
-  function applySignupReadyContext() {
-    const ctx = signupReadyContextFromQuery();
-    if (!ctx) return;
+  function enableSignupReadyMode(opts = {}) {
     signupReadyMode = true;
     const card = $("#signupCard");
     if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -58,17 +56,40 @@
     if (sub) {
       sub.textContent = "관리자 등록처리가 완료되었습니다. 문자 인증번호 확인 후 비밀번호를 설정하세요.";
     }
-    if (ctx.phone && $("#suPhone")) $("#suPhone").value = ctx.phone;
-    if (ctx.loginId && $("#suLoginId")) {
-      $("#suLoginId").value = ctx.loginId;
+    const phone = String((opts && opts.phone) || "").trim();
+    const loginId = normalizeSignupLoginId((opts && opts.loginId) || "");
+    if (phone && $("#suPhone")) $("#suPhone").value = phone;
+    if (loginId && $("#suLoginId")) {
+      $("#suLoginId").value = loginId;
       scheduleSignupLoginIdCheck();
     }
     showSiteRegisterAssist(false);
-    const reqTag = ctx.requestId ? ` (요청 #${ctx.requestId})` : "";
-    setMsg($("#signupMsg"), `등록처리 완료${reqTag}. 문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.`);
-    showSignupResult("최고관리자가 등록처리를 완료했습니다.\n인증번호 확인 후 비밀번호를 설정하면 최종 가입이 완료됩니다.");
     const reqBtn = $("#btnReqCode");
     if (reqBtn) reqBtn.textContent = "인증번호 재요청";
+    const modeBtn = $("#btnEnableReadyMode");
+    if (modeBtn) {
+      modeBtn.disabled = true;
+      modeBtn.textContent = "등록처리 모드";
+    }
+    const reqTag = String((opts && opts.requestId) || "").trim();
+    const tagText = reqTag ? ` (요청 #${reqTag})` : "";
+    const intro = opts && opts.fromQuery
+      ? `등록처리 완료${tagText}. 문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.`
+      : "등록처리된 휴대폰번호를 입력하고 [인증번호 재요청]을 눌러 비밀번호 설정을 진행하세요.";
+    setMsg($("#signupMsg"), intro);
+    showSignupResult("인증번호 확인 후 비밀번호를 설정하면 최종 가입이 완료됩니다.");
+  }
+
+  function applySignupReadyContext() {
+    const ctx = signupReadyContextFromQuery();
+    if (!ctx) return;
+    enableSignupReadyMode({
+      fromQuery: true,
+      phone: ctx.phone,
+      loginId: ctx.loginId,
+      requestId: ctx.requestId,
+    });
+    showSignupResult("최고관리자가 등록처리를 완료했습니다.\n인증번호 확인 후 비밀번호를 설정하면 최종 가입이 완료됩니다.");
   }
 
   function isResidentRoleText(role) {
@@ -711,6 +732,9 @@
     });
     $("#btnPrepareSiteReg")?.addEventListener("click", () => {
       prepareSiteRegisterReservation().catch((e) => setSiteRegMsg(e.message || String(e), true));
+    });
+    $("#btnEnableReadyMode")?.addEventListener("click", () => {
+      enableSignupReadyMode({ fromQuery: false });
     });
     $("#suSiteName")?.addEventListener("input", () => {
       const sr = $("#srSiteName");

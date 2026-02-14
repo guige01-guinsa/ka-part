@@ -69,6 +69,25 @@
     el.classList.toggle("err", !!isErr);
   }
 
+  async function copyTextToClipboard(text) {
+    const value = String(text || "").trim();
+    if (!value) throw new Error("복사할 내용이 없습니다.");
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const ta = document.createElement("textarea");
+    ta.value = value;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+
   function permissionLabel(user) {
     const key = String(user.permission_level || (user.is_admin ? "admin" : user.is_site_admin ? "site_admin" : "user"));
     if (key === "admin") {
@@ -313,7 +332,18 @@
     const unit = String(item.requester_unit_label || "-");
     const resultCode = String(item.resolved_site_code || "-");
     const resultName = String(item.resolved_site_name || "");
-    const resultText = resultName && resultName !== "-" ? `${resultName} (${resultCode})` : resultCode;
+    const readyDelivery = String(item.signup_ready_delivery || "").trim().toLowerCase();
+    const readyMessage = String(item.signup_ready_message || "").trim();
+    const readyDebugCode = String(item.signup_ready_debug_code || "").trim();
+    const readySuffix =
+      readyDelivery === "mock"
+        ? ` / MOCK${readyDebugCode ? `:${readyDebugCode}` : ""}`
+        : readyMessage
+          ? ` / ${readyMessage}`
+          : "";
+    const resultText = `${resultName && resultName !== "-" ? `${resultName} (${resultCode})` : resultCode}${readySuffix}`;
+    const setupUrl = String(item.signup_ready_setup_url || "").trim();
+    const encodedSetupUrl = encodeURIComponent(setupUrl);
     const canExecute = String(item.status || "").trim().toLowerCase() !== "executed";
     return `
       <tr data-id="${Number(item.id || 0)}">
@@ -329,6 +359,7 @@
         <td>
           <div class="cell-actions">
             <button class="btn primary" data-action="execute-site-req" data-id="${Number(item.id || 0)}" type="button" ${canExecute ? "" : "disabled"}>등록 처리</button>
+            <button class="btn" data-action="copy-site-setup-url" data-url="${encodedSetupUrl}" type="button" ${setupUrl ? "" : "disabled"}>설정링크 복사</button>
           </div>
         </td>
       </tr>
@@ -380,9 +411,14 @@
     const ready = data && data.signup_ready ? data.signup_ready : null;
     if (ready && ready.notified) {
       const delivery = String(ready.delivery || "sms").trim() || "sms";
-      lines.push(`신규가입 안내 발송: ${delivery}`);
-      if (ready.setup_url) lines.push(`설정링크 발급됨`);
+      if (delivery.toLowerCase() === "mock") {
+        lines.push("신규가입 안내: 실제 SMS 미연동(MOCK)");
+      } else {
+        lines.push(`신규가입 안내 발송: ${delivery}`);
+      }
+      if (ready.setup_url) lines.push(`설정링크: ${String(ready.setup_url)}`);
       if (ready.debug_code) lines.push(`개발용 인증번호: ${String(ready.debug_code)}`);
+      if (ready.message) lines.push(String(ready.message));
     } else if (ready && ready.reason) {
       lines.push(`신규가입 안내 미발송: ${String(ready.reason)}`);
     }
@@ -734,10 +770,20 @@
 
       if (isSuperAdminView) {
         $("#siteReqBody")?.addEventListener("click", (e) => {
-          const btn = e.target.closest("button[data-action='execute-site-req']");
+          const btn = e.target.closest("button[data-action]");
           if (!btn) return;
-          const reqId = Number(btn.dataset.id);
-          executeSiteRegistryRequest(reqId).catch((err) => setSiteReqMsg(err.message || String(err), true));
+          const action = String(btn.dataset.action || "").trim();
+          if (action === "execute-site-req") {
+            const reqId = Number(btn.dataset.id);
+            executeSiteRegistryRequest(reqId).catch((err) => setSiteReqMsg(err.message || String(err), true));
+            return;
+          }
+          if (action === "copy-site-setup-url") {
+            const raw = decodeURIComponent(String(btn.dataset.url || "").trim());
+            copyTextToClipboard(raw)
+              .then(() => setSiteReqMsg("설정링크를 복사했습니다."))
+              .catch((err) => setSiteReqMsg(err.message || String(err), true));
+          }
         });
       }
     }
