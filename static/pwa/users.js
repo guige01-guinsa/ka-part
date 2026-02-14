@@ -375,12 +375,18 @@
       body: JSON.stringify(payload),
     });
     const resolvedCode = String((data && data.site_code) || "").trim().toUpperCase();
-    setSiteReqMsg(
-      resolvedCode
-        ? `요청 #${id} 처리 완료: ${siteName} (${resolvedCode})`
-        : `요청 #${id} 처리 완료`,
-      false
-    );
+    const lines = [];
+    lines.push(resolvedCode ? `요청 #${id} 처리 완료: ${siteName} (${resolvedCode})` : `요청 #${id} 처리 완료`);
+    const ready = data && data.signup_ready ? data.signup_ready : null;
+    if (ready && ready.notified) {
+      const delivery = String(ready.delivery || "sms").trim() || "sms";
+      lines.push(`신규가입 안내 발송: ${delivery}`);
+      if (ready.setup_url) lines.push(`설정링크 발급됨`);
+      if (ready.debug_code) lines.push(`개발용 인증번호: ${String(ready.debug_code)}`);
+    } else if (ready && ready.reason) {
+      lines.push(`신규가입 안내 미발송: ${String(ready.reason)}`);
+    }
+    setSiteReqMsg(lines.join(" / "), false);
     await loadSiteRegistryRequests();
   }
 

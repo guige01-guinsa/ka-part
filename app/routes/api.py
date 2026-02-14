@@ -486,17 +486,25 @@ def _phone_code_hash(phone: str, code: str) -> str:
     return hashlib.sha256(src.encode("utf-8")).hexdigest()
 
 
-def _send_sms_verification(phone: str, code: str) -> Dict[str, Any]:
-    message = f"[아파트 시설관리] 인증번호 {code} (유효 {PHONE_VERIFY_TTL_MINUTES}분)"
+def _send_sms_message(
+    phone: str,
+    message: str,
+    *,
+    debug_code: str = "",
+    mock_message: str = "",
+) -> Dict[str, Any]:
     webhook = (os.getenv("KA_SMS_WEBHOOK_URL") or "").strip()
     if not webhook:
-        return {
+        fallback = mock_message or "KA_SMS_WEBHOOK_URL 미설정 상태입니다. 현재는 화면에 인증번호를 표시합니다."
+        out: Dict[str, Any] = {
             "delivery": "mock",
-            "debug_code": code,
-            "message": "KA_SMS_WEBHOOK_URL 미설정 상태입니다. 현재는 화면에 인증번호를 표시합니다.",
+            "message": fallback,
         }
+        if debug_code:
+            out["debug_code"] = str(debug_code)
+        return out
 
-    payload = json.dumps({"to": phone, "message": message}, ensure_ascii=False).encode("utf-8")
+    payload = json.dumps({"to": phone, "message": str(message or "")}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         webhook,
         data=payload,
@@ -514,6 +522,188 @@ def _send_sms_verification(phone: str, code: str) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"sms delivery failed: {e}") from e
     return {"delivery": "sms"}
+
+
+def _send_sms_verification(phone: str, code: str) -> Dict[str, Any]:
+    message = f"[아파트 시설관리] 인증번호 {code} (유효 {PHONE_VERIFY_TTL_MINUTES}분)"
+    return _send_sms_message(
+        phone,
+        message,
+        debug_code=code,
+        mock_message="KA_SMS_WEBHOOK_URL 미설정 상태입니다. 현재는 화면에 인증번호를 표시합니다.",
+    )
+
+
+def _mask_phone(phone: str) -> str:
+    digits = _phone_digits(phone)
+    if len(digits) < 7:
+        return str(phone or "")
+    if len(digits) == 11:
+        return f"{digits[:3]}-****-{digits[-4:]}"
+    return f"{digits[:3]}***{digits[-4:]}"
+
+
+def _signup_ready_setup_url(*, request: Request, phone: str, login_id: str = "") -> str:
+    base = str(request.base_url or "").strip().rstrip("/")
+    if not base:
+        base = ""
+    query = {"signup_ready": "1", "phone": str(phone or "").strip()}
+    clean_login_id = str(login_id or "").strip().lower()
+    if clean_login_id:
+        query["login_id"] = clean_login_id
+    return f"{base}/pwa/login.html?{urllib.parse.urlencode(query)}"
+
+
+def _send_sms_signup_ready(phone: str, code: str, *, setup_url: str) -> Dict[str, Any]:
+    message = (
+        f"[아파트 시설관리] 단지코드 등록이 완료되었습니다. 인증번호 {code} (유효 {PHONE_VERIFY_TTL_MINUTES}분). "
+        f"아래 링크에서 인증확인 후 비밀번호를 설정하세요. {setup_url}"
+    )
+    return _send_sms_message(
+        phone,
+        message,
+        debug_code=code,
+        mock_message="KA_SMS_WEBHOOK_URL 미설정 상태입니다. 사용자관리 요청처리 결과에 인증번호를 표시합니다.",
+    )
+
+
+def _build_signup_profile_from_site_registry_payload(
+    req_payload: Dict[str, Any],
+    *,
+    site_name: str,
+    site_code: str,
+) -> Tuple[Dict[str, Any] | None, str]:
+    payload = req_payload if isinstance(req_payload, dict) else {}
+    try:
+        name = _clean_name(payload.get("signup_name", payload.get("requester_name")))
+        phone = _normalize_phone(
+            payload.get("signup_phone", payload.get("requester_phone")),
+            required=True,
+            field_name="requester_phone",
+        )
+        desired_raw = payload.get("signup_login_id", payload.get("requester_login_id"))
+        desired_text = str(desired_raw or "").strip()
+        if desired_text:
+            try:
+                desired_login_id = _clean_signup_login_id(desired_text)
+            except HTTPException:
+                desired_login_id = _generate_login_id_from_phone(phone)
+        else:
+            desired_login_id = _generate_login_id_from_phone(phone)
+
+        raw_role = _clean_role(payload.get("signup_role", payload.get("requester_role")))
+        signup_level = _permission_level_from_role_text(raw_role)
+        if signup_level == "admin":
+            raise HTTPException(status_code=403, detail="최고/운영관리자 계정은 자가가입할 수 없습니다.")
+        role = _effective_role_for_permission_level(raw_role, signup_level)
+
+        unit_source = payload.get("signup_unit_label", payload.get("requester_unit_label"))
+        unit_label, household_key = _extract_resident_household({"unit_label": unit_source}, role=role)
+        address = _clean_required_text(payload.get("signup_address", payload.get("requester_address")), 200, "address")
+        office_phone = _normalize_phone(
+            payload.get("signup_office_phone", payload.get("requester_office_phone")),
+            required=True,
+            field_name="office_phone",
+        )
+        office_fax = _normalize_phone(
+            payload.get("signup_office_fax", payload.get("requester_office_fax")),
+            required=True,
+            field_name="office_fax",
+        )
+        _assert_resident_household_available(
+            role=role,
+            site_code=site_code,
+            household_key=household_key,
+            is_active=True,
+        )
+        existing = get_staff_user_by_phone(phone)
+        if existing:
+            raise HTTPException(status_code=409, detail="이미 등록된 휴대폰번호입니다.")
+
+        profile = {
+            "name": name,
+            "phone": phone,
+            "desired_login_id": desired_login_id,
+            "site_code": site_code,
+            "site_name": site_name,
+            "role": role,
+            "unit_label": unit_label,
+            "household_key": household_key,
+            "address": address,
+            "office_phone": office_phone,
+            "office_fax": office_fax,
+        }
+        return profile, ""
+    except HTTPException as e:
+        return None, str(e.detail or "signup_profile_invalid")
+    except Exception as e:
+        return None, str(e)
+
+
+def _issue_site_registry_signup_ready_notice(
+    *,
+    request: Request,
+    req_payload: Dict[str, Any],
+    site_name: str,
+    site_code: str,
+) -> Dict[str, Any]:
+    profile, reason = _build_signup_profile_from_site_registry_payload(
+        req_payload,
+        site_name=site_name,
+        site_code=site_code,
+    )
+    if not profile:
+        return {
+            "notified": False,
+            "reason": reason or "signup_profile_missing",
+        }
+
+    phone = str(profile.get("phone") or "").strip()
+    desired_login_id = str(profile.get("desired_login_id") or "").strip().lower()
+    code = f"{secrets.randbelow(1000000):06d}"
+    code_hash = _phone_code_hash(phone, code)
+    expires_at = (datetime.now() + timedelta(minutes=PHONE_VERIFY_TTL_MINUTES)).replace(microsecond=0).isoformat(sep=" ")
+    create_signup_phone_verification(
+        phone=phone,
+        code_hash=code_hash,
+        payload=profile,
+        expires_at=expires_at,
+        request_ip=(request.client.host if request.client else None),
+    )
+    setup_url = _signup_ready_setup_url(request=request, phone=phone, login_id=desired_login_id)
+    delivery = _send_sms_signup_ready(phone, code, setup_url=setup_url)
+    out = {
+        "notified": True,
+        "delivery": delivery.get("delivery") or "sms",
+        "phone_masked": _mask_phone(phone),
+        "expires_at": expires_at,
+        "setup_url": setup_url,
+        "message": "등록처리 완료 안내를 발송했습니다.",
+    }
+    if delivery.get("message"):
+        out["message"] = str(delivery.get("message"))
+    if delivery.get("debug_code"):
+        out["debug_code"] = str(delivery.get("debug_code"))
+    return out
+
+
+def _latest_executed_site_registry_request_for_phone(phone: str) -> Dict[str, Any] | None:
+    target_digits = _phone_digits(phone)
+    if not target_digits:
+        return None
+    rows = list_privileged_change_requests(
+        change_type=SITE_REGISTRY_REQUEST_CHANGE_TYPE,
+        status="executed",
+        limit=500,
+    )
+    for item in rows:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        row_phone = str(payload.get("signup_phone") or payload.get("requester_phone") or "").strip()
+        if not row_phone:
+            continue
+        if _phone_digits(row_phone) == target_digits:
+            return item
+    return None
 
 
 def _generate_login_id_from_phone(phone: str) -> str:
@@ -1769,6 +1959,7 @@ def _site_registry_request_status_label(status: str) -> str:
 def _site_registry_request_public(item: Dict[str, Any]) -> Dict[str, Any]:
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
     result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    signup_ready = result.get("signup_ready") if isinstance(result.get("signup_ready"), dict) else {}
     requested_site_code = str(payload.get("requested_site_code") or item.get("target_site_code") or "").strip().upper()
     resolved_site_code = str(result.get("site_code") or "").strip().upper()
     resolved_site_name = str(result.get("site_name") or "").strip()
@@ -1794,6 +1985,12 @@ def _site_registry_request_public(item: Dict[str, Any]) -> Dict[str, Any]:
         "approved_at": str(item.get("approved_at") or "").strip(),
         "processed_at": str(item.get("executed_at") or "").strip(),
         "expires_at": str(item.get("expires_at") or "").strip(),
+        "signup_ready_notified": bool(signup_ready.get("notified")),
+        "signup_ready_delivery": str(signup_ready.get("delivery") or "").strip(),
+        "signup_ready_phone_masked": str(signup_ready.get("phone_masked") or "").strip(),
+        "signup_ready_expires_at": str(signup_ready.get("expires_at") or "").strip(),
+        "signup_ready_setup_url": str(signup_ready.get("setup_url") or "").strip(),
+        "signup_ready_message": str(signup_ready.get("message") or signup_ready.get("reason") or "").strip(),
     }
 
 
@@ -1815,6 +2012,29 @@ def api_site_registry_request(request: Request, payload: Dict[str, Any] = Body(.
         ) or ""
     except HTTPException:
         requester_phone = ""
+    signup_name = _clean_optional_text(payload.get("signup_name", requester_name), 40) or requester_name
+    signup_login_id = _clean_optional_text(payload.get("signup_login_id", requester_login_id), 32) or requester_login_id.lower()
+    signup_role = _clean_optional_text(payload.get("signup_role", requester_role), 20) or requester_role
+    signup_unit_label = _clean_optional_text(payload.get("signup_unit_label", requester_unit_label), 20) or requester_unit_label
+    signup_address = _clean_optional_text(payload.get("signup_address", payload.get("requester_address")), 200) or ""
+    signup_office_phone = ""
+    try:
+        signup_office_phone = _normalize_phone(
+            payload.get("signup_office_phone", payload.get("requester_office_phone")),
+            required=False,
+            field_name="signup_office_phone",
+        ) or ""
+    except HTTPException:
+        signup_office_phone = ""
+    signup_office_fax = ""
+    try:
+        signup_office_fax = _normalize_phone(
+            payload.get("signup_office_fax", payload.get("requester_office_fax")),
+            required=False,
+            field_name="signup_office_fax",
+        ) or ""
+    except HTTPException:
+        signup_office_fax = ""
     phone_digits = _phone_digits(requester_phone)
     requested_by_login = f"signup-{phone_digits[-4:]}" if phone_digits else "signup-request"
 
@@ -1829,6 +2049,14 @@ def api_site_registry_request(request: Request, payload: Dict[str, Any] = Body(.
             "requester_role": requester_role,
             "requester_unit_label": requester_unit_label,
             "requester_note": requester_note,
+            "signup_name": signup_name,
+            "signup_phone": requester_phone,
+            "signup_login_id": signup_login_id.lower(),
+            "signup_role": signup_role,
+            "signup_unit_label": signup_unit_label,
+            "signup_address": signup_address,
+            "signup_office_phone": signup_office_phone,
+            "signup_office_fax": signup_office_fax,
             "request_ip": (request.client.host if request.client else ""),
         },
         requested_by_user_id=0,
@@ -1909,9 +2137,12 @@ def api_site_registry_request_execute(
 
     status = str(item.get("status") or "").strip().lower()
     if status == "executed":
+        existing_result = item.get("result") if isinstance(item.get("result"), dict) else {}
+        existing_signup_ready = existing_result.get("signup_ready") if isinstance(existing_result.get("signup_ready"), dict) else {}
         return {
             "ok": True,
             "already_processed": True,
+            "signup_ready": existing_signup_ready,
             "request": _site_registry_request_public(item),
             "message": "이미 처리된 요청입니다.",
         }
@@ -1949,11 +2180,22 @@ def api_site_registry_request_execute(
         allow_create=True,
         allow_remap=False,
     )
+    signup_ready: Dict[str, Any]
+    try:
+        signup_ready = _issue_site_registry_signup_ready_notice(
+            request=request,
+            req_payload=req_payload,
+            site_name=site_name,
+            site_code=resolved_site_code,
+        )
+    except Exception as e:
+        signup_ready = {"notified": False, "reason": str(e)}
     result = {
         "site_name": site_name,
         "site_code": resolved_site_code,
         "requested_site_code": requested_site_code,
         "process_note": process_note,
+        "signup_ready": signup_ready,
     }
     try:
         executed = mark_privileged_change_request_executed(
@@ -1979,6 +2221,7 @@ def api_site_registry_request_execute(
         "ok": True,
         "site_name": site_name,
         "site_code": resolved_site_code,
+        "signup_ready": signup_ready,
         "request": _site_registry_request_public(executed),
         "message": "요청을 처리하여 단지코드를 등록했습니다.",
     }
@@ -2786,6 +3029,61 @@ def auth_signup_check_login_id(login_id: str = Query(...), phone: str = Query(de
         "available": bool(available),
         "message": "사용 가능한 아이디입니다." if available else "이미 사용 중인 아이디입니다.",
     }
+
+
+@router.post("/auth/signup/request_ready_verification")
+def auth_signup_request_ready_verification(request: Request, payload: Dict[str, Any] = Body(...)):
+    phone = _normalize_phone(payload.get("phone"), required=True, field_name="phone")
+    existing = get_staff_user_by_phone(phone)
+    if existing:
+        return {
+            "ok": True,
+            "already_registered": True,
+            "login_id": existing.get("login_id"),
+            "message": "이미 등록된 휴대폰번호입니다. 기존 아이디로 로그인하세요.",
+        }
+
+    req_item = _latest_executed_site_registry_request_for_phone(phone)
+    if not req_item:
+        raise HTTPException(status_code=404, detail="등록처리 완료 내역을 찾을 수 없습니다.")
+
+    req_payload = req_item.get("payload") if isinstance(req_item.get("payload"), dict) else {}
+    req_result = req_item.get("result") if isinstance(req_item.get("result"), dict) else {}
+    site_name = _clean_site_name(
+        req_result.get("site_name") or req_payload.get("site_name") or req_item.get("target_site_name"),
+        required=True,
+    )
+    site_code = _clean_site_code(
+        req_result.get("site_code") or req_payload.get("requested_site_code") or req_item.get("target_site_code"),
+        required=False,
+    )
+    if not site_code:
+        site_code = _resolve_site_code_for_site(site_name, "", allow_create=False, allow_remap=False)
+    notice = _issue_site_registry_signup_ready_notice(
+        request=request,
+        req_payload=req_payload,
+        site_name=site_name,
+        site_code=site_code,
+    )
+    if not notice.get("notified"):
+        raise HTTPException(
+            status_code=409,
+            detail=str(notice.get("reason") or "등록처리 정보가 불완전합니다. 가입정보를 다시 입력해 주세요."),
+        )
+
+    out = {
+        "ok": True,
+        "already_registered": False,
+        "phone": phone,
+        "request_id": int(req_item.get("id") or 0),
+        "expires_at": str(notice.get("expires_at") or ""),
+        "expires_in_sec": PHONE_VERIFY_TTL_MINUTES * 60,
+        "delivery": str(notice.get("delivery") or "sms"),
+        "message": str(notice.get("message") or "인증번호를 전송했습니다."),
+    }
+    if notice.get("debug_code"):
+        out["debug_code"] = str(notice.get("debug_code"))
+    return out
 
 
 @router.post("/auth/signup/request_phone_verification")

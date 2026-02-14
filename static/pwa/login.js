@@ -7,6 +7,7 @@
   let lastCheckedLoginId = "";
   let lastCheckedAvailable = false;
   let loginIdCheckTimer = 0;
+  let signupReadyMode = false;
   let signupPasswordPolicy = {
     min_length: 10,
     rules: [
@@ -33,6 +34,41 @@
   function nextPath() {
     const u = new URL(window.location.href);
     return normalizePath(u.searchParams.get("next")) || "/pwa/";
+  }
+
+  function signupReadyContextFromQuery() {
+    const u = new URL(window.location.href);
+    const flag = String(u.searchParams.get("signup_ready") || "").trim().toLowerCase();
+    const enabled = flag === "1" || flag === "true" || flag === "yes" || flag === "y";
+    if (!enabled) return null;
+    return {
+      phone: String(u.searchParams.get("phone") || "").trim(),
+      loginId: normalizeSignupLoginId(u.searchParams.get("login_id") || ""),
+      requestId: String(u.searchParams.get("request_id") || "").trim(),
+    };
+  }
+
+  function applySignupReadyContext() {
+    const ctx = signupReadyContextFromQuery();
+    if (!ctx) return;
+    signupReadyMode = true;
+    const card = $("#signupCard");
+    if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+    const sub = $("#signupCardSub");
+    if (sub) {
+      sub.textContent = "관리자 등록처리가 완료되었습니다. 문자 인증번호 확인 후 비밀번호를 설정하세요.";
+    }
+    if (ctx.phone && $("#suPhone")) $("#suPhone").value = ctx.phone;
+    if (ctx.loginId && $("#suLoginId")) {
+      $("#suLoginId").value = ctx.loginId;
+      scheduleSignupLoginIdCheck();
+    }
+    showSiteRegisterAssist(false);
+    const reqTag = ctx.requestId ? ` (요청 #${ctx.requestId})` : "";
+    setMsg($("#signupMsg"), `등록처리 완료${reqTag}. 문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.`);
+    showSignupResult("최고관리자가 등록처리를 완료했습니다.\n인증번호 확인 후 비밀번호를 설정하면 최종 가입이 완료됩니다.");
+    const reqBtn = $("#btnReqCode");
+    if (reqBtn) reqBtn.textContent = "인증번호 재요청";
   }
 
   function isResidentRoleText(role) {
@@ -334,6 +370,33 @@
 
   async function requestSignupCode() {
     const body = signupPayloadFromForm();
+    if (signupReadyMode) {
+      if (!body.phone) {
+        setMsg($("#signupMsg"), "휴대폰번호를 입력하세요.", true);
+        return;
+      }
+      resetSignupFinalizeState();
+      const data = await KAAuth.requestJson("/api/auth/signup/request_ready_verification", {
+        method: "POST",
+        noAuth: true,
+        body: JSON.stringify({ phone: body.phone }),
+        headers: {},
+      });
+      if (data && data.already_registered) {
+        const lines = [];
+        lines.push(data.message || "이미 등록된 사용자입니다.");
+        lines.push(`아이디: ${data.login_id || "-"}`);
+        showSignupResult(lines.join("\n"));
+        setMsg($("#signupMsg"), "처리 완료");
+        if (data.login_id) $("#loginId").value = String(data.login_id);
+        return;
+      }
+      let msg = data.message || "인증번호를 전송했습니다.";
+      if (data.debug_code) msg += ` (개발용 인증번호: ${data.debug_code})`;
+      setMsg($("#signupMsg"), msg);
+      showSignupResult("문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.");
+      return;
+    }
     if (!body.name || !body.phone || !body.login_id || !body.site_name || !body.role || !body.address || !body.office_phone || !body.office_fax) {
       setMsg($("#signupMsg"), "필수 항목을 모두 입력하세요.", true);
       return;
@@ -546,8 +609,23 @@
     const siteCodeInput = $("#srSiteCode");
     const siteName = String((siteNameInput && siteNameInput.value) || $("#suSiteName")?.value || "").trim();
     const siteCode = String((siteCodeInput && siteCodeInput.value) || "").trim().toUpperCase();
+    const signup = signupPayloadFromForm();
     if (!siteName) {
       setSiteRegMsg("단지명을 입력하세요.", true);
+      return;
+    }
+    if (!signup.name || !signup.phone || !signup.login_id || !signup.role || !signup.address || !signup.office_phone || !signup.office_fax) {
+      setSiteRegMsg("간편등록 예약 전 필수 가입정보(이름/휴대폰/아이디/분류/주소/관리소 연락처)를 입력하세요.", true);
+      return;
+    }
+    if (isResidentRoleText(signup.role) && !signup.unit_label) {
+      setSiteRegMsg("입주민은 동/호를 입력해야 합니다.", true);
+      return;
+    }
+    const formatError = validateSignupLoginIdFormat(signup.login_id);
+    if (formatError) {
+      setSiteRegMsg(formatError, true);
+      setLoginIdMsg(formatError, true);
       return;
     }
     if ($("#suSiteName")) $("#suSiteName").value = siteName;
@@ -557,12 +635,20 @@
     const payload = {
       site_name: siteName,
       site_code: siteCode,
-      requester_name: ($("#suName")?.value || "").trim(),
-      requester_phone: ($("#suPhone")?.value || "").trim(),
-      requester_login_id: signupLoginId(),
-      requester_role: ($("#suRole")?.value || "").trim(),
-      requester_unit_label: ($("#suUnitLabel")?.value || "").trim(),
+      requester_name: signup.name,
+      requester_phone: signup.phone,
+      requester_login_id: signup.login_id,
+      requester_role: signup.role,
+      requester_unit_label: signup.unit_label,
       requester_note: "login.html 간편등록 예약",
+      signup_name: signup.name,
+      signup_phone: signup.phone,
+      signup_login_id: signup.login_id,
+      signup_role: signup.role,
+      signup_unit_label: signup.unit_label,
+      signup_address: signup.address,
+      signup_office_phone: signup.office_phone,
+      signup_office_fax: signup.office_fax,
     };
     const data = await KAAuth.requestJson("/api/site_registry/request", {
       method: "POST",
@@ -574,7 +660,7 @@
     const idText = reqId > 0 ? `요청번호 #${reqId}` : "요청";
     showSiteRegisterAssist(true);
     setSiteRegMsg(`${idText} 접수 완료. 최고관리자는 사용자관리 > 단지코드 요청함에서 처리할 수 있습니다.`);
-    setMsg($("#signupMsg"), `${idText}이 접수되었습니다. 처리 후 인증번호 받기를 다시 진행하세요.`);
+    setMsg($("#signupMsg"), `${idText}이 접수되었습니다. 처리되면 문자 안내 링크에서 인증확인/비밀번호 설정을 진행하세요.`);
 
     if (bootstrapRequired) {
       setSiteRegMsg(`${idText} 접수 완료. 먼저 아래 '최초 관리자 설정'을 완료한 뒤 사용자관리에서 처리하세요.`);
@@ -591,6 +677,9 @@
     }
     if (isMissingSiteCodeMessage(msg)) {
       showMissingSiteCodeAssist();
+    }
+    if (signupReadyMode && msg.includes("등록처리 완료 내역을 찾을 수 없습니다")) {
+      showSignupResult("등록처리 상태를 찾지 못했습니다.\n가입정보를 다시 입력하고 인증번호 받기를 진행해 주세요.");
     }
   }
 
@@ -651,6 +740,7 @@
     applySignupPasswordPolicy(null);
     resetSignupFinalizeState();
     wire();
+    applySignupReadyContext();
     await loadBootstrapStatus();
     await checkAlreadyLoggedIn();
   }
