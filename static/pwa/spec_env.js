@@ -38,6 +38,11 @@
     return !!(user && user.is_admin);
   }
 
+  function isSuperAdmin(user) {
+    if (!user || !user.is_admin) return false;
+    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
+  }
+
   function setMsg(msg, isErr = false) {
     const el = $("#msg");
     if (!el) return;
@@ -154,7 +159,8 @@
   async function syncSiteIdentity(silent = true) {
     const site = getSiteName();
     const siteCode = getSiteCode();
-    if (!site && !siteCode) {
+    const siteId = getSiteId();
+    if (!site && !siteCode && siteId <= 0) {
       if (!silent) setMsg("site_name 또는 site_code를 입력하세요.", true);
       return null;
     }
@@ -365,6 +371,8 @@
   function renderPreview(data) {
     const schema = (data && data.schema) || {};
     const lines = [];
+    const sid = normalizeSiteId((data && data.site_id) || getSiteId());
+    lines.push(`site_id: ${sid > 0 ? sid : "-"}`);
     lines.push(`site_name: ${data.site_name || getSiteName()}`);
     lines.push(`site_code: ${data.site_code || getSiteCode() || "-"}`);
     lines.push(`tab_count: ${Object.keys(schema).length}`);
@@ -747,21 +755,24 @@
   async function reloadConfig() {
     const rawSite = getSiteName();
     const rawSiteCode = getSiteCode();
-    if (!rawSite && !rawSiteCode) {
+    const rawSiteId = getSiteId();
+    if (!rawSite && !rawSiteCode && rawSiteId <= 0) {
       setMsg("site_name 또는 site_code를 입력하세요.", true);
       return;
     }
     await syncSiteIdentity(true);
+    const siteId = getSiteId();
     const site = getSiteName();
     const siteCode = getSiteCode();
-    if (!site) {
-      setMsg("site_name을 확인하세요.", true);
+    if (!site && siteId <= 0) {
+      setMsg("site_name/site_id를 확인하세요.", true);
       return;
     }
-    localStorage.setItem(SITE_KEY, site);
+    if (site) localStorage.setItem(SITE_KEY, site);
     setSiteCode(siteCode);
     const qs = buildSiteQuery(site, siteCode);
     const data = await jfetch(`/api/site_env?${qs}`);
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setConfigToEditor(data.config || {});
@@ -774,15 +785,17 @@
   async function saveConfig() {
     const rawSite = getSiteName();
     const rawSiteCode = getSiteCode();
-    if (!rawSite && !rawSiteCode) {
+    const rawSiteId = getSiteId();
+    if (!rawSite && !rawSiteCode && rawSiteId <= 0) {
       setMsg("site_name 또는 site_code를 입력하세요.", true);
       return;
     }
     await syncSiteIdentity(true);
+    const siteId = getSiteId();
     const site = getSiteName();
     const siteCode = getSiteCode();
-    if (!site) {
-      setMsg("site_name을 확인하세요.", true);
+    if (!site && siteId <= 0) {
+      setMsg("site_name/site_id를 확인하세요.", true);
       return;
     }
     let cfg = {};
@@ -795,6 +808,7 @@
     const data = await jfetch("/api/site_env", {
       method: "PUT",
       body: JSON.stringify({
+        site_id: siteId || 0,
         site_name: site,
         site_code: siteCode || "",
         config: cfg,
@@ -802,6 +816,7 @@
         reason: "spec_env_save",
       }),
     });
+    if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setConfigToEditor(data.config || {});
@@ -815,21 +830,24 @@
   async function deleteConfig() {
     const rawSite = getSiteName();
     const rawSiteCode = getSiteCode();
-    if (!rawSite && !rawSiteCode) {
+    const rawSiteId = getSiteId();
+    if (!rawSite && !rawSiteCode && rawSiteId <= 0) {
       setMsg("site_name 또는 site_code를 입력하세요.", true);
       return;
     }
     await syncSiteIdentity(true);
+    const siteId = getSiteId();
     const site = getSiteName();
     const siteCode = getSiteCode();
-    if (!site) {
-      setMsg("site_name을 확인하세요.", true);
+    if (!site && siteId <= 0) {
+      setMsg("site_name/site_id를 확인하세요.", true);
       return;
     }
     const ok = confirm(`${site}${siteCode ? ` [${siteCode}]` : ""} 단지의 제원설정을 삭제할까요?`);
     if (!ok) return;
     const qs = buildSiteQuery(site, siteCode);
-    await jfetch(`/api/site_env?${qs}`, { method: "DELETE", headers: { "X-KA-MFA-VERIFIED": "1" } });
+    const del = await jfetch(`/api/site_env?${qs}`, { method: "DELETE", headers: { "X-KA-MFA-VERIFIED": "1" } });
+    if (del && Object.prototype.hasOwnProperty.call(del, "site_id")) setSiteId(del.site_id);
     const data = await jfetch(`/api/schema?${qs}`);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
@@ -843,15 +861,17 @@
   async function previewSchema() {
     const rawSite = getSiteName();
     const rawSiteCode = getSiteCode();
-    if (!rawSite && !rawSiteCode) {
+    const rawSiteId = getSiteId();
+    if (!rawSite && !rawSiteCode && rawSiteId <= 0) {
       setMsg("site_name 또는 site_code를 입력하세요.", true);
       return;
     }
     await syncSiteIdentity(true);
+    const siteId = getSiteId();
     const site = getSiteName();
     const siteCode = getSiteCode();
-    if (!site) {
-      setMsg("site_name을 확인하세요.", true);
+    if (!site && siteId <= 0) {
+      setMsg("site_name/site_id를 확인하세요.", true);
       return;
     }
     const qs = buildSiteQuery(site, siteCode);
@@ -930,11 +950,17 @@
     if (!siteInput || !codeInput) return;
     if (isAdmin(me)) {
       siteInput.readOnly = false;
-      codeInput.readOnly = false;
       siteInput.removeAttribute("aria-readonly");
-      codeInput.removeAttribute("aria-readonly");
       siteInput.title = "";
-      codeInput.title = "";
+      if (isSuperAdmin(me)) {
+        codeInput.readOnly = false;
+        codeInput.removeAttribute("aria-readonly");
+        codeInput.title = "";
+      } else {
+        codeInput.readOnly = true;
+        codeInput.setAttribute("aria-readonly", "true");
+        codeInput.title = "단지코드 생성/변경은 최고관리자만 가능합니다.";
+      }
       return;
     }
 

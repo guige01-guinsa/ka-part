@@ -843,17 +843,30 @@ def _resolve_spec_env_site_target(
     user: Dict[str, Any],
     requested_site_name: Any,
     requested_site_code: Any,
+    requested_site_id: Any = 0,
     *,
     require_any: bool = True,
     for_write: bool = False,
 ) -> Tuple[str, str]:
     raw_site_name = str(requested_site_name or "").strip()
     raw_site_code = str(requested_site_code or "").strip().upper()
+    raw_site_id = _clean_site_id(requested_site_id, required=False)
 
     if int(user.get("is_admin") or 0) == 1:
         is_super = _is_super_admin(user)
         clean_site_name = _clean_site_name(raw_site_name, required=True) if raw_site_name else ""
         clean_site_code = _clean_site_code(raw_site_code, required=False)
+
+        # site_id is the primary anchor for spec-env target selection.
+        if raw_site_id:
+            mapped_name = _clean_site_name(find_site_name_by_id(raw_site_id), required=False)
+            mapped_code = _clean_site_code(find_site_code_by_id(raw_site_id), required=False)
+            if mapped_name:
+                clean_site_name = mapped_name
+                # Ignore user-sent code when site_id is fixed.
+                clean_site_code = mapped_code or ""
+            elif mapped_code:
+                clean_site_code = mapped_code
 
         if not clean_site_name and not clean_site_code:
             if require_any:
@@ -873,6 +886,18 @@ def _resolve_spec_env_site_target(
             canonical_code = _clean_site_code(find_site_code_by_name(clean_site_name), required=False)
             if canonical_code:
                 clean_site_code = canonical_code
+        canonical = resolve_site_identity(
+            site_id=(raw_site_id if raw_site_id > 0 else None),
+            site_name=clean_site_name,
+            site_code=clean_site_code,
+            create_site_if_missing=False,
+        )
+        canonical_name = _clean_site_name(canonical.get("site_name"), required=False)
+        canonical_code = _clean_site_code(canonical.get("site_code"), required=False)
+        if canonical_name:
+            clean_site_name = canonical_name
+        if canonical_code:
+            clean_site_code = canonical_code
         if clean_site_name:
             allow_create = bool(for_write and is_super)
             try:
@@ -892,8 +917,13 @@ def _resolve_spec_env_site_target(
 
         return clean_site_name, clean_site_code
 
+    assigned_site_id = _clean_site_id(user.get("site_id"), required=False)
     clean_site_name = _resolve_allowed_site_name(user, raw_site_name, required=False)
+    if assigned_site_id and not clean_site_name:
+        clean_site_name = _clean_site_name(find_site_name_by_id(assigned_site_id), required=False)
     clean_site_code = _resolve_allowed_site_code(user, raw_site_code)
+    if assigned_site_id and not clean_site_code:
+        clean_site_code = _clean_site_code(find_site_code_by_id(assigned_site_id), required=False)
     if not clean_site_code:
         try:
             clean_site_code = _resolve_site_code_for_site(
@@ -1463,7 +1493,7 @@ def api_schema(request: Request, site_name: str = Query(default=""), site_code: 
     clean_site_name, resolved_site_code = _resolve_main_site_target(
         user, site_name, site_code, required=False
     )
-    schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
+    schema, env_cfg = _site_schema_and_env(resolved_site_name, resolved_site_code)
 
     # On first login for the first site registrant, show only the Home tab
     # until the site env is explicitly saved.
@@ -1514,10 +1544,15 @@ def api_base_schema(request: Request):
 
 
 @router.get("/site_env")
-def api_site_env(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
+def api_site_env(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+):
     user, _token = _require_site_env_manager(request)
     clean_site_name, clean_site_code = _resolve_spec_env_site_target(
-        user, site_name, site_code, require_any=True, for_write=False
+        user, site_name, site_code, site_id, require_any=True, for_write=False
     )
     verify = _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
 
@@ -1525,6 +1560,13 @@ def api_site_env(request: Request, site_name: str = Query(default=""), site_code
     resolved_site_name = str((row or {}).get("site_name") or "").strip() or clean_site_name
     resolved_site_code = _clean_site_code((row or {}).get("site_code"), required=False) or clean_site_code
     schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
+    resolved_identity = resolve_site_identity(
+        site_id=_clean_site_id(site_id, required=False),
+        site_name=resolved_site_name,
+        site_code=resolved_site_code,
+        create_site_if_missing=False,
+    )
+    resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
     if row is None and int(user.get("is_site_admin") or 0) == 1 and int(user.get("is_admin") or 0) != 1:
         env_cfg = _home_only_site_env_config()
         schema = build_effective_schema(
@@ -1533,6 +1575,7 @@ def api_site_env(request: Request, site_name: str = Query(default=""), site_code
         )
     return {
         "ok": True,
+        "site_id": resolved_site_id,
         "site_name": resolved_site_name,
         "site_code": resolved_site_code,
         "config": env_cfg,
@@ -1551,18 +1594,25 @@ def api_site_identity(
     user, _token = _require_auth(request)
     clean_site_name, clean_site_code = _resolve_site_identity_for_main(user, site_name, site_code, site_id)
     admin_scope = _admin_scope_from_user(user)
-    resolved_site_id = None
-    if clean_site_name:
-        try:
-            resolved_site_id = ensure_site(clean_site_name)
-        except Exception:
-            resolved_site_id = None
-    if resolved_site_id is None:
+    resolved = resolve_site_identity(
+        site_id=_clean_site_id(site_id, required=False),
+        site_name=clean_site_name,
+        site_code=clean_site_code,
+        create_site_if_missing=False,
+    )
+    canonical_name = _clean_site_name(resolved.get("site_name"), required=False)
+    canonical_code = _clean_site_code(resolved.get("site_code"), required=False)
+    if canonical_name:
+        clean_site_name = canonical_name
+    if canonical_code:
+        clean_site_code = canonical_code
+    resolved_site_id = _clean_site_id(resolved.get("site_id"), required=False)
+    if resolved_site_id <= 0:
         try:
             parsed = int(user.get("site_id") or 0)
-            resolved_site_id = parsed if parsed > 0 else None
+            resolved_site_id = parsed if parsed > 0 else 0
         except Exception:
-            resolved_site_id = None
+            resolved_site_id = 0
     return {
         "ok": True,
         "site_id": resolved_site_id,
@@ -1580,7 +1630,12 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     _assert_change_window("제원설정 변경")
     _assert_mfa_confirmed(request, payload, operation_label="제원설정 변경")
     clean_site_name, clean_site_code = _resolve_spec_env_site_target(
-        user, payload.get("site_name"), payload.get("site_code"), require_any=True, for_write=True
+        user,
+        payload.get("site_name"),
+        payload.get("site_code"),
+        payload.get("site_id"),
+        require_any=True,
+        for_write=True,
     )
     verify = _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
     raw_cfg = payload.get("config", payload.get("env", payload if isinstance(payload, dict) else {}))
@@ -1615,7 +1670,15 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
         )
         raise HTTPException(status_code=409, detail=str(e)) from e
     resolved_site_code = _clean_site_code(row.get("site_code"), required=False)
-    schema, _env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
+    resolved_site_name = _clean_site_name(row.get("site_name"), required=False) or clean_site_name
+    resolved_identity = resolve_site_identity(
+        site_id=_clean_site_id(payload.get("site_id"), required=False),
+        site_name=resolved_site_name,
+        site_code=resolved_site_code,
+        create_site_if_missing=False,
+    )
+    resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
+    schema, _env_cfg = _site_schema_and_env(resolved_site_name, resolved_site_code)
     _audit_security(
         user=user,
         event_type="site_env_update",
@@ -1632,7 +1695,8 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     )
     return {
         "ok": True,
-        "site_name": clean_site_name,
+        "site_id": resolved_site_id,
+        "site_name": resolved_site_name,
         "site_code": resolved_site_code,
         "config": cfg,
         "schema": schema,
@@ -1643,14 +1707,26 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
 
 
 @router.delete("/site_env")
-def api_site_env_delete(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
+def api_site_env_delete(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+):
     user, _token = _require_site_env_manager(request)
     _assert_change_window("제원설정 삭제")
     _assert_mfa_confirmed(request, operation_label="제원설정 삭제")
     clean_site_name, clean_site_code = _resolve_spec_env_site_target(
-        user, site_name, site_code, require_any=True, for_write=False
+        user, site_name, site_code, site_id, require_any=True, for_write=False
     )
     _verify_first_site_registrant_for_spec_env(user, clean_site_name, clean_site_code)
+    resolved_identity = resolve_site_identity(
+        site_id=_clean_site_id(site_id, required=False),
+        site_name=clean_site_name,
+        site_code=clean_site_code,
+        create_site_if_missing=False,
+    )
+    resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
     prechange_backup = _run_prechange_site_backup(
         user,
         site_code=clean_site_code,
@@ -1679,6 +1755,7 @@ def api_site_env_delete(request: Request, site_name: str = Query(default=""), si
     )
     return {
         "ok": ok,
+        "site_id": resolved_site_id,
         "site_name": clean_site_name,
         "site_code": clean_site_code,
         "prechange_backup": prechange_backup,
