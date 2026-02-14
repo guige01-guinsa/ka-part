@@ -134,6 +134,8 @@ SITE_REGISTRY_REQUEST_CHANGE_TYPE = "site_code_registration"
 DEFAULT_SITE_NAME = "미지정단지"
 PHONE_VERIFY_TTL_MINUTES = 5
 PHONE_VERIFY_MAX_ATTEMPTS = 5
+SIGNUP_FINALIZE_TOKEN_MAX_AGE_SEC = max(300, min(7200, int(os.getenv("KA_SIGNUP_FINALIZE_TOKEN_MAX_AGE_SEC", "900"))))
+SIGNUP_PASSWORD_MIN_LENGTH = max(8, min(64, int(os.getenv("KA_SIGNUP_PASSWORD_MIN_LENGTH", "10"))))
 PARKING_CONTEXT_MAX_AGE = int(os.getenv("PARKING_CONTEXT_MAX_AGE", "300"))
 PARKING_BASE_URL = (os.getenv("PARKING_BASE_URL") or "").strip()
 _embed_raw = os.getenv("ENABLE_PARKING_EMBED")
@@ -528,6 +530,109 @@ def _generate_temp_password(length: int = 10) -> str:
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
     n = max(8, int(length))
     return "".join(secrets.choice(alphabet) for _ in range(n))
+
+
+def _signup_finalize_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(PHONE_VERIFY_SECRET_VALUE, salt="signup-finalize-v1")
+
+
+def _issue_signup_finalize_token(*, verification_id: int, phone: str) -> str:
+    return _signup_finalize_serializer().dumps({"v": int(verification_id), "p": str(phone or "").strip()})
+
+
+def _parse_signup_finalize_token(token: Any) -> Dict[str, Any]:
+    raw = str(token or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="signup_token is required")
+    try:
+        data = _signup_finalize_serializer().loads(raw, max_age=SIGNUP_FINALIZE_TOKEN_MAX_AGE_SEC)
+    except Exception:
+        raise HTTPException(status_code=401, detail="invalid or expired signup token")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="invalid signup token payload")
+    try:
+        verification_id = int(data.get("v") or 0)
+    except Exception:
+        verification_id = 0
+    if verification_id <= 0:
+        raise HTTPException(status_code=400, detail="invalid signup token payload")
+    phone = _normalize_phone(data.get("p"), required=True, field_name="phone")
+    return {"verification_id": verification_id, "phone": phone}
+
+
+def _is_signup_login_id_available(login_id: str, *, phone: str = "") -> bool:
+    existing = get_staff_user_by_login(login_id)
+    if not existing:
+        return True
+    existing_phone_digits = _phone_digits(str(existing.get("phone") or ""))
+    request_phone_digits = _phone_digits(str(phone or ""))
+    if existing_phone_digits and request_phone_digits and existing_phone_digits == request_phone_digits:
+        return True
+    return False
+
+
+def _signup_password_policy_meta() -> Dict[str, Any]:
+    return {
+        "min_length": SIGNUP_PASSWORD_MIN_LENGTH,
+        "rules": [
+            f"{SIGNUP_PASSWORD_MIN_LENGTH}자 이상",
+            "영문 대/소문자, 숫자, 특수문자 중 3종 이상 포함",
+            "아이디/휴대폰번호 포함 금지",
+            "같은 문자 3회 연속 금지",
+        ],
+    }
+
+
+def _signup_password_violations(password: str, *, login_id: str = "", phone: str = "") -> List[str]:
+    pw = str(password or "")
+    clean_login = str(login_id or "").strip().lower()
+    digits = _phone_digits(phone)
+    violations: List[str] = []
+
+    if len(pw) < SIGNUP_PASSWORD_MIN_LENGTH:
+        violations.append(f"비밀번호는 {SIGNUP_PASSWORD_MIN_LENGTH}자 이상이어야 합니다.")
+    if len(pw) > 128:
+        violations.append("비밀번호는 128자 이하여야 합니다.")
+    if re.search(r"\s", pw):
+        violations.append("비밀번호에 공백을 포함할 수 없습니다.")
+
+    category_count = 0
+    if re.search(r"[A-Z]", pw):
+        category_count += 1
+    if re.search(r"[a-z]", pw):
+        category_count += 1
+    if re.search(r"[0-9]", pw):
+        category_count += 1
+    if re.search(r"[^A-Za-z0-9]", pw):
+        category_count += 1
+    if category_count < 3:
+        violations.append("영문 대/소문자, 숫자, 특수문자 중 3종 이상을 포함해야 합니다.")
+
+    if re.search(r"(.)\1\1", pw):
+        violations.append("같은 문자를 3회 이상 연속으로 사용할 수 없습니다.")
+
+    low = pw.lower()
+    if clean_login and len(clean_login) >= 3 and clean_login in low:
+        violations.append("아이디를 포함한 비밀번호는 사용할 수 없습니다.")
+    if digits:
+        sensitive_parts = [digits[-8:], digits[-4:], digits]
+        for part in sensitive_parts:
+            if len(part) >= 4 and part in pw:
+                violations.append("휴대폰번호를 포함한 비밀번호는 사용할 수 없습니다.")
+                break
+
+    if low in {"password", "qwer1234", "admin1234", "11111111", "12345678", "abcd1234"}:
+        violations.append("추측하기 쉬운 비밀번호는 사용할 수 없습니다.")
+
+    return violations
+
+
+def _assert_signup_password_policy(password: Any, *, login_id: str = "", phone: str = "") -> str:
+    pw = _clean_password(password, required=True)
+    violations = _signup_password_violations(pw, login_id=login_id, phone=phone)
+    if violations:
+        raise HTTPException(status_code=400, detail=violations[0])
+    return pw
 
 
 def _clean_bool(value: Any, default: bool = False) -> bool:
@@ -1671,6 +1776,7 @@ def _site_registry_request_public(item: Dict[str, Any]) -> Dict[str, Any]:
         "resolved_site_name": resolved_site_name,
         "resolved_site_code": resolved_site_code,
         "requester_name": str(payload.get("requester_name") or "").strip(),
+        "requester_login_id": str(payload.get("requester_login_id") or "").strip().lower(),
         "requester_phone": str(payload.get("requester_phone") or "").strip(),
         "requester_role": str(payload.get("requester_role") or "").strip(),
         "requester_unit_label": str(payload.get("requester_unit_label") or "").strip(),
@@ -1689,6 +1795,7 @@ def api_site_registry_request(request: Request, payload: Dict[str, Any] = Body(.
     site_name = _clean_site_name(payload.get("site_name"), required=True)
     requested_site_code = _clean_site_code(payload.get("site_code"), required=False)
     requester_name = _clean_optional_text(payload.get("requester_name", payload.get("name")), 40) or ""
+    requester_login_id = _clean_optional_text(payload.get("requester_login_id", payload.get("login_id")), 32) or ""
     requester_role = _clean_optional_text(payload.get("requester_role", payload.get("role")), 20) or ""
     requester_unit_label = _clean_optional_text(payload.get("requester_unit_label", payload.get("unit_label")), 20) or ""
     requester_note = _clean_optional_text(payload.get("requester_note", payload.get("note")), 200) or ""
@@ -1710,6 +1817,7 @@ def api_site_registry_request(request: Request, payload: Dict[str, Any] = Body(.
             "site_name": site_name,
             "requested_site_code": requested_site_code,
             "requester_name": requester_name,
+            "requester_login_id": requester_login_id.lower(),
             "requester_phone": requester_phone,
             "requester_role": requester_role,
             "requester_unit_label": requester_unit_label,
@@ -2660,10 +2768,26 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
     return resp
 
 
+@router.get("/auth/signup/check_login_id")
+def auth_signup_check_login_id(login_id: str = Query(...), phone: str = Query(default="")):
+    clean_login_id = _clean_login_id(login_id)
+    clean_phone = _normalize_phone(phone, required=False, field_name="phone") or ""
+    available = _is_signup_login_id_available(clean_login_id, phone=clean_phone)
+    return {
+        "ok": True,
+        "login_id": clean_login_id,
+        "available": bool(available),
+        "message": "사용 가능한 아이디입니다." if available else "이미 사용 중인 아이디입니다.",
+    }
+
+
 @router.post("/auth/signup/request_phone_verification")
 def auth_signup_request_phone_verification(request: Request, payload: Dict[str, Any] = Body(...)):
     name = _clean_name(payload.get("name"))
     phone = _normalize_phone(payload.get("phone"), required=True, field_name="phone")
+    desired_login_id = _clean_login_id(payload.get("login_id"))
+    if not _is_signup_login_id_available(desired_login_id, phone=phone):
+        raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다. 다른 아이디를 입력하세요.")
     site_code = _clean_site_code(payload.get("site_code"), required=False)
     site_name = _clean_required_text(payload.get("site_name"), 80, "site_name")
     raw_role = _clean_role(payload.get("role"))
@@ -2682,6 +2806,7 @@ def auth_signup_request_phone_verification(request: Request, payload: Dict[str, 
     profile = {
         "name": name,
         "phone": phone,
+        "desired_login_id": desired_login_id,
         "site_code": site_code,
         "site_name": site_name,
         "role": role,
@@ -2813,35 +2938,133 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         household_key=household_key,
         is_active=True,
     )
-    login_id = _generate_login_id_from_phone(phone)
-    temp_password = _generate_temp_password(10)
-    user = create_staff_user(
-        login_id=login_id,
-        name=name,
+    suggested_login_id = _clean_login_id(profile.get("desired_login_id") or _generate_login_id_from_phone(phone))
+    if not _is_signup_login_id_available(suggested_login_id, phone=phone):
+        suggested_login_id = _generate_login_id_from_phone(phone)
+    signup_token = _issue_signup_finalize_token(verification_id=int(row["id"]), phone=phone)
+    return {
+        "ok": True,
+        "already_registered": False,
+        "signup_token": signup_token,
+        "login_id_suggestion": suggested_login_id,
+        "password_policy": _signup_password_policy_meta(),
+        "message": "휴대폰 인증이 완료되었습니다. 비밀번호를 설정해 가입을 완료하세요.",
+    }
+
+
+@router.post("/auth/signup/complete")
+def auth_signup_complete(payload: Dict[str, Any] = Body(...)):
+    token_data = _parse_signup_finalize_token(payload.get("signup_token"))
+    phone = token_data["phone"]
+    verification_id = int(token_data["verification_id"])
+
+    row = get_latest_signup_phone_verification(phone)
+    if not row:
+        raise HTTPException(status_code=404, detail="verification request not found")
+    if int(row.get("id") or 0) != verification_id:
+        raise HTTPException(status_code=409, detail="verification token is stale; request a new code")
+    if row.get("consumed_at"):
+        raise HTTPException(status_code=409, detail="verification already used; request a new code")
+    if str(row.get("expires_at") or "") <= datetime.now().replace(microsecond=0).isoformat(sep=" "):
+        raise HTTPException(status_code=410, detail="verification expired; request a new code")
+
+    profile = {}
+    try:
+        profile = json.loads(str(row.get("payload_json") or "{}"))
+    except Exception:
+        profile = {}
+
+    name = _clean_name(profile.get("name"))
+    raw_role = _clean_role(profile.get("role"))
+    signup_level = _permission_level_from_role_text(raw_role)
+    if signup_level == "admin":
+        raise HTTPException(status_code=403, detail="최고/운영관리자 계정은 자가가입할 수 없습니다.")
+    role = _effective_role_for_permission_level(raw_role, signup_level)
+    unit_label, household_key = _extract_resident_household(profile, role=role)
+    site_code = _clean_site_code(profile.get("site_code"), required=False)
+    site_name = _clean_required_text(profile.get("site_name"), 80, "site_name")
+    address = _clean_required_text(profile.get("address"), 200, "address")
+    office_phone = _normalize_phone(profile.get("office_phone"), required=True, field_name="office_phone")
+    office_fax = _normalize_phone(profile.get("office_fax"), required=True, field_name="office_fax")
+
+    login_id = _clean_login_id(payload.get("login_id") or profile.get("desired_login_id") or _generate_login_id_from_phone(phone))
+    password = _assert_signup_password_policy(payload.get("password"), login_id=login_id, phone=phone)
+    if "password_confirm" in payload:
+        password_confirm = str(payload.get("password_confirm") or "")
+        if password_confirm != password:
+            raise HTTPException(status_code=400, detail="password confirmation does not match")
+
+    existing = get_staff_user_by_phone(phone)
+    if existing:
+        normalized_existing = normalize_staff_user_site_identity(int(existing.get("id") or 0))
+        if normalized_existing:
+            existing = normalized_existing
+        touch_signup_phone_verification_attempt(int(row["id"]), success=True, issued_login_id=str(existing.get("login_id") or ""))
+        return {
+            "ok": True,
+            "already_registered": True,
+            "login_id": existing.get("login_id"),
+            "temporary_password": None,
+            "user": _public_user(existing),
+            "message": "이미 등록된 휴대폰번호입니다. 기존 아이디를 안내합니다.",
+        }
+
+    if not _is_signup_login_id_available(login_id, phone=phone):
+        raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다. 다른 아이디를 입력하세요.")
+
+    try:
+        resolved_site_code = _resolve_site_code_for_site(
+            site_name,
+            site_code,
+            allow_create=SITE_CODE_AUTOCREATE_NON_ADMIN,
+            allow_remap=False,
+        )
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise HTTPException(
+                status_code=403,
+                detail="단지코드가 등록되지 않았습니다. 최고/운영관리자에게 등록을 요청하세요.",
+            ) from e
+        raise
+    _assert_resident_household_available(
         role=role,
-        phone=phone,
         site_code=resolved_site_code,
-        site_name=site_name,
-        address=address,
-        office_phone=office_phone,
-        office_fax=office_fax,
-        unit_label=unit_label,
         household_key=household_key,
-        note="자가가입(휴대폰 인증)",
-        password_hash=hash_password(temp_password),
-        is_admin=0,
-        is_site_admin=1 if signup_level == "site_admin" else 0,
-        is_active=1,
+        is_active=True,
     )
+    try:
+        user = create_staff_user(
+            login_id=login_id,
+            name=name,
+            role=role,
+            phone=phone,
+            site_code=resolved_site_code,
+            site_name=site_name,
+            address=address,
+            office_phone=office_phone,
+            office_fax=office_fax,
+            unit_label=unit_label,
+            household_key=household_key,
+            note="자가가입(휴대폰 인증)",
+            password_hash=hash_password(password),
+            is_admin=0,
+            is_site_admin=1 if signup_level == "site_admin" else 0,
+            is_active=1,
+        )
+    except Exception as e:
+        msg = str(e)
+        if "staff_users.login_id" in msg or "UNIQUE constraint failed" in msg:
+            raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다. 다른 아이디를 입력하세요.") from e
+        raise
     touch_signup_phone_verification_attempt(int(row["id"]), success=True, issued_login_id=login_id)
     return {
         "ok": True,
         "already_registered": False,
         "login_id": login_id,
-        "temporary_password": temp_password,
+        "temporary_password": None,
         "user": _public_user(user),
-        "must_change_password": True,
-        "message": "가입이 완료되었습니다. 발급된 아이디/임시비밀번호로 로그인 후 비밀번호를 변경하세요.",
+        "must_change_password": False,
+        "message": "가입이 완료되었습니다. 설정한 아이디/비밀번호로 로그인하세요.",
     }
 
 

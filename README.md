@@ -66,8 +66,10 @@ pwsh -File ops\stop_stack.ps1
   - `POST /api/auth/logout`
   - `GET /api/auth/me`
   - `POST /api/auth/change_password`
+  - `GET /api/auth/signup/check_login_id`
   - `POST /api/auth/signup/request_phone_verification`
   - `POST /api/auth/signup/verify_phone_and_issue_id`
+  - `POST /api/auth/signup/complete`
   - `POST /api/site_registry/request` (비로그인: 단지코드 등록 요청 접수)
   - `GET /api/site_registry/requests` (최고관리자: 요청 조회)
   - `POST /api/site_registry/requests/{request_id}/execute` (최고관리자: 요청 처리)

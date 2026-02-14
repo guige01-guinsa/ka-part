@@ -3,6 +3,19 @@
 
   const $ = (s) => document.querySelector(s);
   let bootstrapRequired = false;
+  let signupFinalizeToken = "";
+  let lastCheckedLoginId = "";
+  let lastCheckedAvailable = false;
+  let loginIdCheckTimer = 0;
+  let signupPasswordPolicy = {
+    min_length: 10,
+    rules: [
+      "10자 이상",
+      "영문 대/소문자, 숫자, 특수문자 중 3종 이상 포함",
+      "아이디/휴대폰번호 포함 금지",
+      "같은 문자 3회 연속 금지",
+    ],
+  };
 
   function normalizePath(raw) {
     const txt = String(raw || "").trim();
@@ -92,11 +105,25 @@
     setMsg($("#siteRegMsg"), msg, isErr);
   }
 
+  function setLoginIdMsg(msg, isErr = false) {
+    setMsg($("#suLoginIdMsg"), msg, isErr);
+  }
+
+  function setSignupCompleteMsg(msg, isErr = false) {
+    setMsg($("#signupCompleteMsg"), msg, isErr);
+  }
+
   function showSignupResult(text) {
     const el = $("#signupResult");
     if (!el) return;
     el.textContent = text || "";
     el.classList.toggle("hidden", !text);
+  }
+
+  function showSignupPasswordPanel(show) {
+    const el = $("#signupPasswordPanel");
+    if (!el) return;
+    el.classList.toggle("hidden", !show);
   }
 
   function showSiteRegisterAssist(show) {
@@ -134,10 +161,147 @@
     setSiteRegMsg("간편등록 예약을 접수하면 최고관리자가 사용자관리의 '단지코드 요청함'에서 처리할 수 있습니다.");
   }
 
+  function normalizeSignupLoginId(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function signupLoginId() {
+    const el = $("#suLoginId");
+    if (!el) return "";
+    const normalized = normalizeSignupLoginId(el.value || "");
+    if (el.value !== normalized) el.value = normalized;
+    return normalized;
+  }
+
+  function markLoginIdUnchecked() {
+    lastCheckedLoginId = "";
+    lastCheckedAvailable = false;
+  }
+
+  function phoneDigits(value) {
+    return String(value || "").replace(/\D/g, "");
+  }
+
+  function applySignupPasswordPolicy(policy) {
+    if (policy && typeof policy === "object") {
+      signupPasswordPolicy = {
+        min_length: Number(policy.min_length || signupPasswordPolicy.min_length || 10),
+        rules: Array.isArray(policy.rules) && policy.rules.length ? policy.rules : signupPasswordPolicy.rules,
+      };
+    }
+    const policyEl = $("#suPwPolicy");
+    if (!policyEl) return;
+    const rules = Array.isArray(signupPasswordPolicy.rules) ? signupPasswordPolicy.rules : [];
+    policyEl.textContent = rules.join(" · ");
+  }
+
+  function scorePasswordStrength(password, loginId, phone) {
+    const pw = String(password || "");
+    const lid = String(loginId || "").trim().toLowerCase();
+    const phoneNum = phoneDigits(phone);
+    let score = 0;
+
+    if (pw.length >= Number(signupPasswordPolicy.min_length || 10)) score += 2;
+    else if (pw.length >= 8) score += 1;
+
+    if (/[A-Z]/.test(pw)) score += 1;
+    if (/[a-z]/.test(pw)) score += 1;
+    if (/[0-9]/.test(pw)) score += 1;
+    if (/[^A-Za-z0-9]/.test(pw)) score += 1;
+    if (/\s/.test(pw)) score -= 2;
+    if (/(.)\1\1/.test(pw)) score -= 2;
+    if (lid && lid.length >= 3 && pw.toLowerCase().includes(lid)) score -= 2;
+    if (phoneNum) {
+      const tail = phoneNum.slice(-4);
+      const longTail = phoneNum.slice(-8);
+      if ((tail && pw.includes(tail)) || (longTail && pw.includes(longTail)) || pw.includes(phoneNum)) score -= 2;
+    }
+
+    if (score <= 2) return { label: "약함", color: "#ff9e9e" };
+    if (score <= 4) return { label: "보통", color: "#ffd37a" };
+    if (score <= 6) return { label: "좋음", color: "#a9d4ff" };
+    return { label: "강함", color: "#8de3b0" };
+  }
+
+  function refreshSignupPasswordStrength() {
+    const el = $("#suPwStrength");
+    if (!el) return;
+    const pw = ($("#suPassword")?.value || "").trim();
+    if (!pw) {
+      el.textContent = "강도: -";
+      el.style.color = "";
+      return;
+    }
+    const loginId = signupLoginId();
+    const phone = ($("#suPhone")?.value || "").trim();
+    const meta = scorePasswordStrength(pw, loginId, phone);
+    el.textContent = `강도: ${meta.label}`;
+    el.style.color = meta.color;
+  }
+
+  async function checkSignupLoginIdAvailability(opts = {}) {
+    const force = !!opts.force;
+    const silent = !!opts.silent;
+    const loginId = signupLoginId();
+    const phone = ($("#suPhone")?.value || "").trim();
+    const phoneNum = phoneDigits(phone);
+
+    if (!loginId) {
+      markLoginIdUnchecked();
+      if (!silent) setLoginIdMsg("아이디를 입력하세요.", true);
+      return false;
+    }
+    if (!force && lastCheckedLoginId === loginId && lastCheckedAvailable) {
+      if (!silent) setLoginIdMsg("사용 가능한 아이디입니다.");
+      return true;
+    }
+
+    const qs = new URLSearchParams();
+    qs.set("login_id", loginId);
+    if (phoneNum.length >= 9) qs.set("phone", phone);
+    const data = await KAAuth.requestJson(`/api/auth/signup/check_login_id?${qs.toString()}`, { noAuth: true });
+    const available = !!(data && data.available);
+    lastCheckedLoginId = loginId;
+    lastCheckedAvailable = available;
+    if (!silent) {
+      setLoginIdMsg(
+        String(data && data.message ? data.message : available ? "사용 가능한 아이디입니다." : "이미 사용 중인 아이디입니다."),
+        !available
+      );
+    }
+    return available;
+  }
+
+  function scheduleSignupLoginIdCheck() {
+    if (loginIdCheckTimer) {
+      window.clearTimeout(loginIdCheckTimer);
+      loginIdCheckTimer = 0;
+    }
+    markLoginIdUnchecked();
+    const loginId = signupLoginId();
+    if (!loginId) {
+      setLoginIdMsg("");
+      return;
+    }
+    loginIdCheckTimer = window.setTimeout(() => {
+      checkSignupLoginIdAvailability({ force: true }).catch((e) => setLoginIdMsg(e.message || String(e), true));
+    }, 320);
+  }
+
+  function resetSignupFinalizeState() {
+    signupFinalizeToken = "";
+    showSignupPasswordPanel(false);
+    setSignupCompleteMsg("");
+    if ($("#suPassword")) $("#suPassword").value = "";
+    if ($("#suPassword2")) $("#suPassword2").value = "";
+    refreshSignupPasswordStrength();
+  }
+
   function signupPayloadFromForm() {
     return {
       name: ($("#suName").value || "").trim(),
       phone: ($("#suPhone").value || "").trim(),
+      login_id: signupLoginId(),
       site_name: ($("#suSiteName").value || "").trim(),
       role: ($("#suRole").value || "").trim(),
       unit_label: ($("#suUnitLabel").value || "").trim(),
@@ -149,7 +313,7 @@
 
   async function requestSignupCode() {
     const body = signupPayloadFromForm();
-    if (!body.name || !body.phone || !body.site_name || !body.role || !body.address || !body.office_phone || !body.office_fax) {
+    if (!body.name || !body.phone || !body.login_id || !body.site_name || !body.role || !body.address || !body.office_phone || !body.office_fax) {
       setMsg($("#signupMsg"), "필수 항목을 모두 입력하세요.", true);
       return;
     }
@@ -161,6 +325,12 @@
       setMsg($("#signupMsg"), "입주민은 동/호를 입력해야 합니다.", true);
       return;
     }
+    const available = await checkSignupLoginIdAvailability({ force: true });
+    if (!available) {
+      setMsg($("#signupMsg"), "아이디 중복을 확인하고 다른 아이디를 입력하세요.", true);
+      return;
+    }
+    resetSignupFinalizeState();
     const data = await KAAuth.requestJson("/api/auth/signup/request_phone_verification", {
       method: "POST",
       noAuth: true,
@@ -186,17 +356,98 @@
       body: JSON.stringify({ phone, code }),
       headers: {},
     });
-    const lines = [];
-    lines.push(data.message || "아이디 발급이 완료되었습니다.");
-    lines.push(`아이디: ${data.login_id || "-"}`);
-    if (data.temporary_password) {
-      lines.push(`임시비밀번호: ${data.temporary_password}`);
-      lines.push("로그인 후 비밀번호를 변경하세요.");
+    if (data && data.already_registered) {
+      const lines = [];
+      lines.push(data.message || "이미 등록된 사용자입니다.");
+      lines.push(`아이디: ${data.login_id || "-"}`);
+      showSignupResult(lines.join("\n"));
+      resetSignupFinalizeState();
+      setMsg($("#signupMsg"), "처리 완료");
+      if (data.login_id) $("#loginId").value = String(data.login_id);
+      return;
     }
+
+    signupFinalizeToken = String((data && data.signup_token) || "").trim();
+    if (!signupFinalizeToken) {
+      throw new Error("인증은 완료되었지만 가입토큰 발급에 실패했습니다. 다시 시도하세요.");
+    }
+    if (data && data.login_id_suggestion) {
+      const suggested = normalizeSignupLoginId(data.login_id_suggestion);
+      if ($("#suLoginId")) $("#suLoginId").value = suggested;
+      markLoginIdUnchecked();
+      checkSignupLoginIdAvailability({ force: true, silent: true }).catch(() => {});
+    }
+    applySignupPasswordPolicy(data && data.password_policy ? data.password_policy : null);
+    showSignupPasswordPanel(true);
+    setSignupCompleteMsg("");
+    setMsg($("#signupMsg"), data.message || "휴대폰 인증이 완료되었습니다. 비밀번호를 설정하세요.");
+    const lines = [];
+    lines.push("휴대폰 인증이 완료되었습니다.");
+    lines.push("비밀번호를 설정하면 가입이 완료됩니다.");
     showSignupResult(lines.join("\n"));
-    setMsg($("#signupMsg"), "처리 완료");
+    refreshSignupPasswordStrength();
+  }
+
+  async function completeSignup() {
+    if (!signupFinalizeToken) {
+      setSignupCompleteMsg("먼저 휴대폰 인증을 완료하세요.", true);
+      return;
+    }
+    const loginId = signupLoginId();
+    const password = ($("#suPassword").value || "").trim();
+    const password2 = ($("#suPassword2").value || "").trim();
+
+    if (!loginId) {
+      setSignupCompleteMsg("아이디를 입력하세요.", true);
+      return;
+    }
+    const available = await checkSignupLoginIdAvailability({ force: true });
+    if (!available) {
+      setSignupCompleteMsg("이미 사용 중인 아이디입니다. 다른 아이디를 입력하세요.", true);
+      return;
+    }
+    if (!password || !password2) {
+      setSignupCompleteMsg("비밀번호와 비밀번호 확인을 입력하세요.", true);
+      return;
+    }
+    if (password !== password2) {
+      setSignupCompleteMsg("비밀번호 확인이 일치하지 않습니다.", true);
+      return;
+    }
+
+    const data = await KAAuth.requestJson("/api/auth/signup/complete", {
+      method: "POST",
+      noAuth: true,
+      body: JSON.stringify({
+        signup_token: signupFinalizeToken,
+        login_id: loginId,
+        password,
+        password_confirm: password2,
+      }),
+      headers: {},
+    });
+
+    const lines = [];
+    if (data && data.already_registered) {
+      lines.push(data.message || "이미 등록된 사용자입니다.");
+      lines.push(`아이디: ${data.login_id || "-"}`);
+      showSignupResult(lines.join("\n"));
+      setMsg($("#signupMsg"), "처리 완료");
+      setSignupCompleteMsg("");
+      resetSignupFinalizeState();
+      if (data.login_id) $("#loginId").value = String(data.login_id);
+      return;
+    }
+
+    lines.push(data.message || "가입이 완료되었습니다.");
+    lines.push(`아이디: ${data.login_id || loginId || "-"}`);
+    lines.push("설정한 비밀번호로 로그인하세요.");
+    showSignupResult(lines.join("\n"));
+    setMsg($("#signupMsg"), "가입 완료");
+    setSignupCompleteMsg("가입이 완료되었습니다.");
     if (data.login_id) $("#loginId").value = String(data.login_id);
-    if (data.temporary_password) $("#password").value = String(data.temporary_password);
+    $("#password").value = password;
+    resetSignupFinalizeState();
   }
 
   async function login() {
@@ -276,6 +527,7 @@
       site_code: siteCode,
       requester_name: ($("#suName")?.value || "").trim(),
       requester_phone: ($("#suPhone")?.value || "").trim(),
+      requester_login_id: signupLoginId(),
       requester_role: ($("#suRole")?.value || "").trim(),
       requester_unit_label: ($("#suUnitLabel")?.value || "").trim(),
       requester_note: "login.html 간편등록 예약",
@@ -302,6 +554,9 @@
   function handleSignupError(err) {
     const msg = err && err.message ? String(err.message) : String(err || "오류가 발생했습니다.");
     setMsg($("#signupMsg"), msg, true);
+    if (msg.includes("이미 사용 중인 아이디")) {
+      setLoginIdMsg(msg, true);
+    }
     if (isMissingSiteCodeMessage(msg)) {
       showMissingSiteCodeAssist();
     }
@@ -320,6 +575,19 @@
     $("#btnVerifySignup").addEventListener("click", () => {
       verifySignupAndIssueId().catch((e) => handleSignupError(e));
     });
+    $("#btnCompleteSignup")?.addEventListener("click", () => {
+      completeSignup().catch((e) => setSignupCompleteMsg(e.message || String(e), true));
+    });
+    $("#btnCheckLoginId")?.addEventListener("click", () => {
+      checkSignupLoginIdAvailability({ force: true }).catch((e) => setLoginIdMsg(e.message || String(e), true));
+    });
+    $("#suLoginId")?.addEventListener("input", () => {
+      scheduleSignupLoginIdCheck();
+    });
+    $("#suPhone")?.addEventListener("input", () => {
+      if (lastCheckedLoginId) scheduleSignupLoginIdCheck();
+      refreshSignupPasswordStrength();
+    });
     $("#btnPrepareSiteReg")?.addEventListener("click", () => {
       prepareSiteRegisterReservation().catch((e) => setSiteRegMsg(e.message || String(e), true));
     });
@@ -336,12 +604,20 @@
     $("#suCode").addEventListener("keydown", (e) => {
       if (e.key === "Enter") verifySignupAndIssueId().catch((err) => handleSignupError(err));
     });
+    $("#suPassword")?.addEventListener("input", () => {
+      refreshSignupPasswordStrength();
+    });
+    $("#suPassword2")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") completeSignup().catch((err) => setSignupCompleteMsg(err.message || String(err), true));
+    });
     $("#bsPassword2").addEventListener("keydown", (e) => {
       if (e.key === "Enter") bootstrap().catch((err) => setMsg($("#bootstrapMsg"), err.message || String(err), true));
     });
   }
 
   async function init() {
+    applySignupPasswordPolicy(null);
+    resetSignupFinalizeState();
     wire();
     await loadBootstrapStatus();
     await checkAlreadyLoggedIn();

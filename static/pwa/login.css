@@ -75,6 +75,21 @@ h2 {
   background: color-mix(in srgb, var(--bg-soft) 84%, black 16%);
 }
 
+.inline-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.inline-input input {
+  flex: 1;
+}
+
+.inline-input .btn {
+  white-space: nowrap;
+  padding: 8px 10px;
+}
+
 .grid2 {
   display: grid;
   gap: 10px;
@@ -105,7 +120,17 @@ h2 {
   font-size: 12px;
 }
 
+.inline-msg {
+  margin-top: 4px;
+}
+
 .msg.err { color: var(--error); }
+
+.line2 {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
 
 .result {
   margin-top: 8px;

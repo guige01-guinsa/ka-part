@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>로그인</title>
-  <link rel="stylesheet" href="/pwa/login.css?v=20260214b" />
+  <link rel="stylesheet" href="/pwa/login.css?v=20260214c" />
 </head>
 <body>
   <main class="wrap">
@@ -27,7 +27,7 @@
 
     <section id="signupCard" class="card">
       <h2>신규 사용자 가입</h2>
-      <p class="sub">필수 항목 입력 후 휴대폰 인증을 완료하면 아이디를 발급합니다.</p>
+      <p class="sub">희망 아이디 입력 후 휴대폰 인증과 비밀번호 설정을 완료하면 가입됩니다.</p>
       <div class="grid2">
         <label class="field">
           <span>이름</span>
@@ -36,6 +36,14 @@
         <label class="field">
           <span>휴대폰번호</span>
           <input id="suPhone" type="text" placeholder="예: 010-1234-5678" />
+        </label>
+        <label class="field">
+          <span>희망 아이디</span>
+          <div class="inline-input">
+            <input id="suLoginId" type="text" placeholder="영문/숫자 2~32자 (예: hong123)" />
+            <button id="btnCheckLoginId" class="btn" type="button">중복확인</button>
+          </div>
+          <div id="suLoginIdMsg" class="msg inline-msg"></div>
         </label>
         <label class="field">
           <span>단지명</span>
@@ -82,7 +90,26 @@
         </label>
       </div>
       <div class="actions">
-        <button id="btnVerifySignup" class="btn primary" type="button">인증확인 후 아이디 발급</button>
+        <button id="btnVerifySignup" class="btn primary" type="button">인증확인</button>
+      </div>
+      <div id="signupPasswordPanel" class="assist hidden">
+        <div class="assist-title">비밀번호 설정</div>
+        <p id="suPwPolicy" class="sub assist-sub">10자 이상, 문자 종류 조합, 아이디/휴대폰번호 미포함, 연속문자 금지</p>
+        <div class="grid2">
+          <label class="field">
+            <span>비밀번호</span>
+            <input id="suPassword" type="password" placeholder="정책을 만족하는 비밀번호" />
+          </label>
+          <label class="field">
+            <span>비밀번호 확인</span>
+            <input id="suPassword2" type="password" placeholder="비밀번호 재입력" />
+          </label>
+        </div>
+        <div id="suPwStrength" class="line2">강도: -</div>
+        <div class="actions">
+          <button id="btnCompleteSignup" class="btn primary" type="button">비밀번호 설정 후 가입완료</button>
+        </div>
+        <div id="signupCompleteMsg" class="msg"></div>
       </div>
       <div id="signupMsg" class="msg"></div>
       <div id="signupResult" class="result hidden"></div>
@@ -137,6 +164,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/login.js?v=20260214b"></script>
+  <script src="/pwa/login.js?v=20260214c"></script>
 </body>
 </html>
