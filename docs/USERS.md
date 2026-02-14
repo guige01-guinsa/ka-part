@@ -36,8 +36,11 @@
 ## 5) 신규가입(휴대폰 인증)
 - 로그인 화면(`/pwa/login.html`)에서 신규가입 가능
 - 필수 입력: `이름`, `휴대폰번호`, `단지명`, `직위`, `주소`, `관리소 전화번호`, `관리소 팩스번호`
-- 인증 완료 시 서버가 `아이디(login_id)`를 발급하고 임시비밀번호를 생성
-- 운영 환경에서는 `KA_SMS_WEBHOOK_URL` 설정 시 실제 문자 전송, 미설정 시 화면 안내용 코드(개발모드) 반환
+- 운영 환경의 문자 전송 설정
+  - `KA_SMS_PROVIDER=auto`(기본): 웹훅 우선, 미설정이면 솔라피, 둘 다 없으면 모의발송
+  - `KA_SMS_PROVIDER=webhook`: `KA_SMS_WEBHOOK_URL` 필수
+  - `KA_SMS_PROVIDER=solapi`: `KA_SOLAPI_API_KEY`, `KA_SOLAPI_API_SECRET`, `KA_SOLAPI_FROM` 필수
+  - `KA_SMS_PROVIDER=mock`: 실제 문자 없이 화면 안내용 코드 반환(개발/점검용)
 
 ## 6) 테이블
 - `staff_users`

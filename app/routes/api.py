@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -481,29 +483,24 @@ def _phone_digits(formatted_phone: str) -> str:
 
 def _phone_code_hash(phone: str, code: str) -> str:
     src = f"{PHONE_VERIFY_SECRET_VALUE}|{phone}|{code}"
-    import hashlib
-
     return hashlib.sha256(src.encode("utf-8")).hexdigest()
 
 
-def _send_sms_message(
-    phone: str,
-    message: str,
-    *,
-    debug_code: str = "",
-    mock_message: str = "",
-) -> Dict[str, Any]:
-    webhook = (os.getenv("KA_SMS_WEBHOOK_URL") or "").strip()
-    if not webhook:
-        fallback = mock_message or "KA_SMS_WEBHOOK_URL 미설정 상태입니다. 현재는 화면에 인증번호를 표시합니다."
-        out: Dict[str, Any] = {
-            "delivery": "mock",
-            "message": fallback,
-        }
-        if debug_code:
-            out["debug_code"] = str(debug_code)
-        return out
+def _mock_sms_response(*, debug_code: str = "", mock_message: str = "") -> Dict[str, Any]:
+    fallback = mock_message or (
+        "SMS 설정이 없습니다. 현재는 화면에 인증번호를 표시합니다. "
+        "(KA_SMS_WEBHOOK_URL 또는 KA_SOLAPI_API_KEY/KA_SOLAPI_API_SECRET/KA_SOLAPI_FROM 설정 필요)"
+    )
+    out: Dict[str, Any] = {
+        "delivery": "mock",
+        "message": fallback,
+    }
+    if debug_code:
+        out["debug_code"] = str(debug_code)
+    return out
 
+
+def _send_sms_via_webhook(webhook: str, phone: str, message: str) -> Dict[str, Any]:
     payload = json.dumps({"to": phone, "message": str(message or "")}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         webhook,
@@ -521,7 +518,123 @@ def _send_sms_message(
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"sms delivery failed: {e}") from e
-    return {"delivery": "sms"}
+    return {"delivery": "webhook"}
+
+
+def _build_solapi_authorization(*, api_key: str, api_secret: str) -> str:
+    date_header = datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+    salt = secrets.token_hex(16)
+    source = f"{date_header}{salt}"
+    signature = hmac.new(
+        api_secret.encode("utf-8"),
+        source.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return (
+        f"HMAC-SHA256 ApiKey={api_key}, "
+        f"Date={date_header}, "
+        f"salt={salt}, "
+        f"signature={signature}"
+    )
+
+
+def _send_sms_via_solapi(
+    *,
+    phone: str,
+    message: str,
+    api_key: str,
+    api_secret: str,
+    sender: str,
+) -> Dict[str, Any]:
+    to_digits = _phone_digits(phone)
+    from_digits = _phone_digits(sender)
+    if not to_digits or not from_digits:
+        raise HTTPException(status_code=500, detail="solapi phone configuration is invalid")
+
+    payload = json.dumps(
+        {
+            "messages": [
+                {
+                    "to": to_digits,
+                    "from": from_digits,
+                    "text": str(message or ""),
+                }
+            ]
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.solapi.com/messages/v4/send-many",
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": _build_solapi_authorization(api_key=api_key, api_secret=api_secret),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if int(getattr(resp, "status", 500)) >= 300:
+                raise HTTPException(status_code=502, detail="solapi sms delivery failed")
+    except urllib.error.HTTPError as e:
+        detail = "solapi sms delivery failed"
+        try:
+            body = e.read().decode("utf-8", "ignore").strip()
+            if body:
+                detail = f"{detail}: {body[:160]}"
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=detail) from e
+    except urllib.error.URLError as e:
+        raise HTTPException(status_code=502, detail=f"solapi sms delivery failed: {e.reason}") from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"solapi sms delivery failed: {e}") from e
+    return {"delivery": "solapi"}
+
+
+def _send_sms_message(
+    phone: str,
+    message: str,
+    *,
+    debug_code: str = "",
+    mock_message: str = "",
+) -> Dict[str, Any]:
+    provider = (os.getenv("KA_SMS_PROVIDER") or "auto").strip().lower()
+    if provider not in {"auto", "webhook", "solapi", "mock"}:
+        provider = "auto"
+    webhook = (os.getenv("KA_SMS_WEBHOOK_URL") or "").strip()
+    solapi_key = (os.getenv("KA_SOLAPI_API_KEY") or "").strip()
+    solapi_secret = (os.getenv("KA_SOLAPI_API_SECRET") or "").strip()
+    solapi_from = (os.getenv("KA_SOLAPI_FROM") or "").strip()
+
+    if provider == "mock":
+        return _mock_sms_response(debug_code=debug_code, mock_message=mock_message)
+
+    if provider in {"auto", "webhook"} and webhook:
+        return _send_sms_via_webhook(webhook, phone, message)
+    if provider == "webhook":
+        raise HTTPException(status_code=500, detail="KA_SMS_PROVIDER=webhook 이지만 KA_SMS_WEBHOOK_URL 미설정 상태입니다.")
+
+    if provider in {"auto", "solapi"} and solapi_key and solapi_secret and solapi_from:
+        return _send_sms_via_solapi(
+            phone=phone,
+            message=message,
+            api_key=solapi_key,
+            api_secret=solapi_secret,
+            sender=solapi_from,
+        )
+    if provider == "solapi":
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "KA_SMS_PROVIDER=solapi 이지만 KA_SOLAPI_API_KEY/KA_SOLAPI_API_SECRET/KA_SOLAPI_FROM "
+                "중 일부가 미설정 상태입니다."
+            ),
+        )
+
+    return _mock_sms_response(debug_code=debug_code, mock_message=mock_message)
 
 
 def _send_sms_verification(phone: str, code: str) -> Dict[str, Any]:
@@ -530,7 +643,10 @@ def _send_sms_verification(phone: str, code: str) -> Dict[str, Any]:
         phone,
         message,
         debug_code=code,
-        mock_message="KA_SMS_WEBHOOK_URL 미설정 상태입니다. 현재는 화면에 인증번호를 표시합니다.",
+        mock_message=(
+            "문자 연동 미설정 상태입니다. 현재는 화면에 인증번호를 표시합니다. "
+            "(KA_SMS_WEBHOOK_URL 또는 KA_SOLAPI_* 설정)"
+        ),
     )
 
 
@@ -563,7 +679,10 @@ def _send_sms_signup_ready(phone: str, code: str, *, setup_url: str) -> Dict[str
         phone,
         message,
         debug_code=code,
-        mock_message="KA_SMS_WEBHOOK_URL 미설정 상태입니다. 사용자관리 요청처리 결과에 인증번호를 표시합니다.",
+        mock_message=(
+            "문자 연동 미설정 상태입니다. 사용자관리 요청처리 결과에 인증번호를 표시합니다. "
+            "(KA_SMS_WEBHOOK_URL 또는 KA_SOLAPI_* 설정)"
+        ),
     )
 
 
