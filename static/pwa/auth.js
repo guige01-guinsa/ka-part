@@ -3,6 +3,15 @@
 
   const TOKEN_KEY = "ka_part_auth_token_v1";
   const USER_KEY = "ka_part_auth_user_v1";
+  const LOGOUT_BROADCAST_KEY = "ka_part_logout_event_v1";
+  const SENSITIVE_STORAGE_KEYS = [
+    "ka_current_site_name_v1",
+    "ka_current_site_code_v1",
+    "ka_current_site_id_v1",
+    "ka_home_draft_v2",
+    "ka_unit_selector_recent_v1",
+    "ka_unit_selector_favorites_v1",
+  ];
 
   function _safeStorage(kind) {
     try {
@@ -100,11 +109,30 @@
     }
   }
 
-  function clearSession() {
+  function clearSensitiveClientState() {
+    for (const key of SENSITIVE_STORAGE_KEYS) {
+      _removeStore(sessionStore, key);
+      _removeStore(localStore, key);
+    }
+  }
+
+  function _broadcastLogout() {
+    if (!localStore) return;
+    try {
+      localStore.setItem(LOGOUT_BROADCAST_KEY, String(Date.now()));
+      localStore.removeItem(LOGOUT_BROADCAST_KEY);
+    } catch (_e) {}
+  }
+
+  function clearSession(options = {}) {
+    const includeSensitive = !!(options && options.includeSensitive);
+    const broadcast = !!(options && options.broadcast);
     _removeStore(sessionStore, TOKEN_KEY);
     _removeStore(sessionStore, USER_KEY);
     _removeStore(localStore, TOKEN_KEY);
     _removeStore(localStore, USER_KEY);
+    if (includeSensitive) clearSensitiveClientState();
+    if (broadcast) _broadcastLogout();
   }
 
   function loginUrl(nextPath) {
@@ -112,8 +140,40 @@
     return `/pwa/login.html?next=${encodeURIComponent(next)}`;
   }
 
-  function redirectLogin(nextPath) {
-    window.location.href = loginUrl(nextPath);
+  function redirectLogin(nextPath, opts = {}) {
+    const target = loginUrl(nextPath);
+    const useReplace = !(opts && opts.replace === false);
+    if (useReplace) {
+      window.location.replace(target);
+      return;
+    }
+    window.location.href = target;
+  }
+
+  function _isLoginPage() {
+    const p = String(window.location.pathname || "").toLowerCase();
+    return p.endsWith("/pwa/login.html");
+  }
+
+  async function logout(nextPath = "", opts = {}) {
+    const includeSensitive = !(opts && opts.includeSensitive === false);
+    const broadcast = !(opts && opts.broadcast === false);
+    const redirect = !(opts && opts.redirect === false);
+    try {
+      const headers = {};
+      const token = getToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin", headers });
+    } catch (_e) {}
+
+    clearSession({ includeSensitive, broadcast });
+    try {
+      const creds = navigator.credentials;
+      if (creds && typeof creds.preventSilentAccess === "function") {
+        await creds.preventSilentAccess();
+      }
+    } catch (_e) {}
+    if (redirect) redirectLogin(nextPath);
   }
 
   function _errorMessage(body, fallback) {
@@ -169,13 +229,24 @@
     }
   }
 
+  if (window.addEventListener) {
+    window.addEventListener("storage", (event) => {
+      if (!event || event.key !== LOGOUT_BROADCAST_KEY) return;
+      clearSession({ includeSensitive: true, broadcast: false });
+      if (!_isLoginPage()) redirectLogin();
+    });
+  }
+
   window.KAAuth = {
     TOKEN_KEY,
     USER_KEY,
+    LOGOUT_BROADCAST_KEY,
     getToken,
     getUser,
     setSession,
     clearSession,
+    clearSensitiveClientState,
+    logout,
     loginUrl,
     redirectLogin,
     requestJson,

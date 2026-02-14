@@ -620,11 +620,7 @@
 
     if (willRotateSession || (data && data.password_changed)) {
       alert("비밀번호가 변경되어 다시 로그인합니다.");
-      try {
-        await jfetch("/api/auth/logout", { method: "POST" });
-      } catch (_e) {}
-      KAAuth.clearSession();
-      KAAuth.redirectLogin("/pwa/users.html");
+      await KAAuth.logout("/pwa/users.html");
     }
   }
 
@@ -712,11 +708,7 @@
 
     $("#btnLogout").addEventListener("click", () => {
       const run = async () => {
-        try {
-          await jfetch("/api/auth/logout", { method: "POST" });
-        } catch (_e) {}
-        KAAuth.clearSession();
-        KAAuth.redirectLogin("/pwa/users.html");
+        await KAAuth.logout("/pwa/users.html");
       };
       run().catch(() => {});
     });

@@ -30,6 +30,7 @@ from ..db import get_auth_user_by_token
 router = APIRouter()
 AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
 SECURITY_ROLE_KEYWORDS = ("보안", "경비")
+ALLOW_QUERY_ACCESS_TOKEN = (os.getenv("KA_ALLOW_QUERY_ACCESS_TOKEN") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class ComplaintCreatePayload(BaseModel):
@@ -101,9 +102,10 @@ def _extract_access_token(request: Request) -> str:
     cookie_token = (request.cookies.get(AUTH_COOKIE_NAME) or "").strip()
     if cookie_token:
         return cookie_token
-    token = (request.query_params.get("access_token") or "").strip()
-    if token:
-        return token
+    if ALLOW_QUERY_ACCESS_TOKEN:
+        token = (request.query_params.get("access_token") or "").strip()
+        if token:
+            return token
     raise HTTPException(status_code=401, detail="auth required")
 
 

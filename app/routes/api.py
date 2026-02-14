@@ -187,6 +187,7 @@ ALLOW_INSECURE_DEFAULTS = _env_enabled("ALLOW_INSECURE_DEFAULTS", False)
 AUTH_COOKIE_SECURE = _env_enabled("KA_AUTH_COOKIE_SECURE", True)
 AUTH_COOKIE_MAX_AGE = _safe_int_env("KA_AUTH_COOKIE_MAX_AGE", 43200, 300)
 SITE_CODE_AUTOCREATE_NON_ADMIN = _env_enabled("KA_SITE_CODE_AUTOCREATE_NON_ADMIN", False)
+ALLOW_QUERY_ACCESS_TOKEN = _env_enabled("KA_ALLOW_QUERY_ACCESS_TOKEN", False)
 
 
 def _require_secret_env(
@@ -1160,9 +1161,10 @@ def _extract_access_token(request: Request) -> str:
     cookie_token = (request.cookies.get(AUTH_COOKIE_NAME) or "").strip()
     if cookie_token:
         return cookie_token
-    token = (request.query_params.get("access_token") or "").strip()
-    if token:
-        return token
+    if ALLOW_QUERY_ACCESS_TOKEN:
+        token = (request.query_params.get("access_token") or "").strip()
+        if token:
+            return token
     raise HTTPException(status_code=401, detail="auth required")
 
 

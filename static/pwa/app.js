@@ -180,16 +180,11 @@
     const detail = String(message || "단지코드/단지명 매핑 충돌").trim();
     alert(`단지코드/단지명 충돌이 발생했습니다.\n${detail}\n보안을 위해 다시 로그인합니다.`);
     try {
-      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+      await window.KAAuth.logout("/pwa/");
     } catch (_e) {
-      // ignore
+      window.KAAuth.clearSession({ includeSensitive: true, broadcast: true });
+      window.KAAuth.redirectLogin("/pwa/");
     }
-    try {
-      window.KAAuth.clearSession();
-    } catch (_e) {
-      // ignore
-    }
-    window.KAAuth.redirectLogin("/pwa/");
   }
 
   function rewriteRequestUrlWithCurrentSiteIdentity(rawUrl) {
@@ -1324,11 +1319,7 @@
     });
     $("#btnLogout")?.addEventListener("click", () => {
       const run = async () => {
-        try {
-          await jfetch("/api/auth/logout", { method: "POST" });
-        } catch (_e) {}
-        window.KAAuth.clearSession();
-        window.KAAuth.redirectLogin("/pwa/");
+        await window.KAAuth.logout("/pwa/");
       };
       run().catch(() => {});
     });

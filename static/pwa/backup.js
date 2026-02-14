@@ -355,11 +355,7 @@
     });
     $("#btnLogout")?.addEventListener("click", () => {
       const run = async () => {
-        try {
-          await jfetch("/api/auth/logout", { method: "POST" });
-        } catch (_e) {}
-        KAAuth.clearSession();
-        KAAuth.redirectLogin("/pwa/backup.html");
+        await KAAuth.logout("/pwa/backup.html");
       };
       run().catch(() => {});
     });
