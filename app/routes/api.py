@@ -7,9 +7,12 @@ import json
 import os
 import re
 import secrets
+import threading
+import time
 import urllib.parse
 import urllib.error
 import urllib.request
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
 
@@ -210,6 +213,57 @@ def _client_ip(request: Request) -> str:
     if xri:
         return xri
     return request.client.host if request.client else ""
+
+
+_LOGIN_FAIL_LOCK = threading.Lock()
+_LOGIN_FAIL_STATE: Dict[str, deque[float]] = {}
+
+
+def _login_fail_key(request: Request, login_id: str) -> str:
+    ip = _client_ip(request) or "unknown"
+    clean_login = str(login_id or "").strip().lower() or "-"
+    return f"{ip}:{clean_login}"
+
+
+def _check_login_fail_rate(request: Request, login_id: str) -> None:
+    if not _env_enabled("KA_LOGIN_RATE_LIMIT_ENABLED", True):
+        return
+    window_sec = max(30, min(86400, _safe_int_env("KA_LOGIN_RATE_LIMIT_WINDOW_SEC", 600, 30)))
+    max_failures = max(3, min(100, _safe_int_env("KA_LOGIN_RATE_LIMIT_MAX_FAILURES", 10, 3)))
+    key = _login_fail_key(request, login_id)
+    now = time.time()
+    cutoff = now - float(window_sec)
+    with _LOGIN_FAIL_LOCK:
+        dq = _LOGIN_FAIL_STATE.get(key)
+        if not dq:
+            return
+        while dq and float(dq[0]) < cutoff:
+            dq.popleft()
+        if len(dq) >= max_failures:
+            raise HTTPException(status_code=429, detail="로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.")
+
+
+def _record_login_failure(request: Request, login_id: str) -> None:
+    if not _env_enabled("KA_LOGIN_RATE_LIMIT_ENABLED", True):
+        return
+    window_sec = max(30, min(86400, _safe_int_env("KA_LOGIN_RATE_LIMIT_WINDOW_SEC", 600, 30)))
+    key = _login_fail_key(request, login_id)
+    now = time.time()
+    cutoff = now - float(window_sec)
+    with _LOGIN_FAIL_LOCK:
+        dq = _LOGIN_FAIL_STATE.get(key)
+        if dq is None:
+            dq = deque()
+            _LOGIN_FAIL_STATE[key] = dq
+        dq.append(float(now))
+        while dq and float(dq[0]) < cutoff:
+            dq.popleft()
+
+
+def _clear_login_failures(request: Request, login_id: str) -> None:
+    key = _login_fail_key(request, login_id)
+    with _LOGIN_FAIL_LOCK:
+        _LOGIN_FAIL_STATE.pop(key, None)
 
 
 def _require_secret_env(
@@ -3596,17 +3650,22 @@ def auth_signup_complete(payload: Dict[str, Any] = Body(...)):
 def auth_login(request: Request, payload: Dict[str, Any] = Body(...)):
     login_id = _clean_login_id(payload.get("login_id"))
     password = _clean_password(payload.get("password"), required=True)
+    _check_login_fail_rate(request, login_id)
 
     user = get_staff_user_by_login(login_id)
     if not user or int(user.get("is_active") or 0) != 1:
+        _record_login_failure(request, login_id)
         raise HTTPException(status_code=401, detail="invalid credentials")
     user = _bind_user_site_identity(user)
     password_hash = user.get("password_hash")
     if not password_hash:
+        _record_login_failure(request, login_id)
         raise HTTPException(status_code=403, detail="password is not set for this account")
     if not verify_password(password, str(password_hash)):
+        _record_login_failure(request, login_id)
         raise HTTPException(status_code=401, detail="invalid credentials")
 
+    _clear_login_failures(request, login_id)
     mark_staff_user_login(int(user["id"]))
     cleanup_expired_sessions()
     session = create_auth_session(

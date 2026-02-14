@@ -33,22 +33,27 @@
 
 운영 환경에서 가입이 집중되는 경우(동시간 다수 가입)에는 IP 기준 상한을 완화하세요.
 
-## 4) 데이터 무결성/테넌트(단지) 범위
+## 4) 로그인 실패 Rate Limit(권장값)
+
+- `KA_LOGIN_RATE_LIMIT_ENABLED=1`
+- `KA_LOGIN_RATE_LIMIT_WINDOW_SEC=600`
+- `KA_LOGIN_RATE_LIMIT_MAX_FAILURES=10`
+
+## 5) 데이터 무결성/테넌트(단지) 범위
 
 - 민원/일지/백업 등 모든 저장/조회는 사용자 소속 단지 범위를 벗어나지 않도록 서버에서 강제합니다.
 - 민원 생성 시 non-admin 계정의 `site_code/site_name`은 서버가 소속값으로 강제합니다.
 
-## 5) 점검/모니터링
+## 6) 점검/모니터링
 
 - `GET /api/health` : 기본 상태 + 스키마 정렬 여부
 - `GET /api/schema_alignment` (관리자) : 스키마/인덱스 불일치 감지
 - `GET /api/security/audit_logs` (관리자) : 중요 변경/오류 추적
 - `GET /api/ops/diagnostics` (관리자) : 자동 운영 진단 상태
 
-## 6) SQLite 안정성(권장)
+## 7) SQLite 안정성(권장)
 
 동시 접근이 많을 때 `database is locked` 오류가 발생할 수 있습니다.
 
 - `KA_SQLITE_TIMEOUT_SEC=30`
 - `KA_SQLITE_BUSY_TIMEOUT_MS=30000`
-
