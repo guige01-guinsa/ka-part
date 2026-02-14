@@ -16,6 +16,7 @@
       "같은 문자 3회 연속 금지",
     ],
   };
+  const SIGNUP_LOGIN_ID_REGEX = /^[a-z0-9][a-z0-9_]{7,24}$/;
 
   function normalizePath(raw) {
     const txt = String(raw || "").trim();
@@ -165,6 +166,15 @@
     return String(value || "").trim().toLowerCase();
   }
 
+  function validateSignupLoginIdFormat(loginId) {
+    const value = normalizeSignupLoginId(loginId);
+    if (!value) return "아이디를 입력하세요.";
+    if (!/^[a-z0-9_]+$/.test(value)) return "아이디는 소문자/숫자/_만 사용할 수 있습니다.";
+    if (value.length < 8 || value.length > 25) return "아이디는 8~25자여야 합니다.";
+    if (!SIGNUP_LOGIN_ID_REGEX.test(value)) return "아이디 형식을 확인하세요.";
+    return "";
+  }
+
   function signupLoginId() {
     const el = $("#suLoginId");
     if (!el) return "";
@@ -251,6 +261,12 @@
       if (!silent) setLoginIdMsg("아이디를 입력하세요.", true);
       return false;
     }
+    const formatError = validateSignupLoginIdFormat(loginId);
+    if (formatError) {
+      markLoginIdUnchecked();
+      if (!silent) setLoginIdMsg(formatError, true);
+      return false;
+    }
     if (!force && lastCheckedLoginId === loginId && lastCheckedAvailable) {
       if (!silent) setLoginIdMsg("사용 가능한 아이디입니다.");
       return true;
@@ -281,6 +297,11 @@
     const loginId = signupLoginId();
     if (!loginId) {
       setLoginIdMsg("");
+      return;
+    }
+    const formatError = validateSignupLoginIdFormat(loginId);
+    if (formatError) {
+      setLoginIdMsg(formatError, true);
       return;
     }
     loginIdCheckTimer = window.setTimeout(() => {
@@ -323,6 +344,12 @@
     }
     if (isResidentRoleText(body.role) && !body.unit_label) {
       setMsg($("#signupMsg"), "입주민은 동/호를 입력해야 합니다.", true);
+      return;
+    }
+    const formatError = validateSignupLoginIdFormat(body.login_id);
+    if (formatError) {
+      setLoginIdMsg(formatError, true);
+      setMsg($("#signupMsg"), formatError, true);
       return;
     }
     const available = await checkSignupLoginIdAvailability({ force: true });
@@ -399,6 +426,11 @@
 
     if (!loginId) {
       setSignupCompleteMsg("아이디를 입력하세요.", true);
+      return;
+    }
+    const formatError = validateSignupLoginIdFormat(loginId);
+    if (formatError) {
+      setSignupCompleteMsg(formatError, true);
       return;
     }
     const available = await checkSignupLoginIdAvailability({ force: true });

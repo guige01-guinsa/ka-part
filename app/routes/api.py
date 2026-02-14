@@ -234,6 +234,13 @@ def _clean_login_id(value: Any) -> str:
     return login_id
 
 
+def _clean_signup_login_id(value: Any) -> str:
+    login_id = (str(value or "")).strip().lower()
+    if not re.match(r"^[a-z0-9][a-z0-9_]{7,24}$", login_id):
+        raise HTTPException(status_code=400, detail="아이디는 소문자/숫자/_만 사용하여 8~25자로 입력하세요.")
+    return login_id
+
+
 def _clean_name(value: Any) -> str:
     name = (str(value or "")).strip()
     if len(name) < 2 or len(name) > 40:
@@ -510,17 +517,17 @@ def _send_sms_verification(phone: str, code: str) -> Dict[str, Any]:
 
 def _generate_login_id_from_phone(phone: str) -> str:
     digits = _phone_digits(phone)
-    base = f"u{digits[-8:]}" if digits else "user"
-    base = re.sub(r"[^a-zA-Z0-9._-]", "", base).lower()
-    if len(base) < 2:
-        base = "user00"
-    base = base[:24]
+    base = f"u{digits[-8:]}" if digits else f"user{secrets.randbelow(10000):04d}"
+    base = re.sub(r"[^a-z0-9_]", "", base.lower())
+    if len(base) < 8:
+        base = (base + "user0000")[:8]
+    base = base[:25]
     candidate = base
     seq = 0
-    while get_staff_user_by_login(candidate):
+    while not _is_signup_login_id_available(candidate):
         seq += 1
-        suffix = f".{seq}"
-        candidate = f"{base[: max(2, 32 - len(suffix))]}{suffix}"
+        suffix = f"_{seq}"
+        candidate = f"{base[: max(1, 25 - len(suffix))]}{suffix}"
     return candidate
 
 
@@ -2768,7 +2775,7 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
 
 @router.get("/auth/signup/check_login_id")
 def auth_signup_check_login_id(login_id: str = Query(...), phone: str = Query(default="")):
-    clean_login_id = _clean_login_id(login_id)
+    clean_login_id = _clean_signup_login_id(login_id)
     clean_phone = _normalize_phone(phone, required=False, field_name="phone") or ""
     available = _is_signup_login_id_available(clean_login_id, phone=clean_phone)
     return {
@@ -2783,7 +2790,7 @@ def auth_signup_check_login_id(login_id: str = Query(...), phone: str = Query(de
 def auth_signup_request_phone_verification(request: Request, payload: Dict[str, Any] = Body(...)):
     name = _clean_name(payload.get("name"))
     phone = _normalize_phone(payload.get("phone"), required=True, field_name="phone")
-    desired_login_id = _clean_login_id(payload.get("login_id"))
+    desired_login_id = _clean_signup_login_id(payload.get("login_id"))
     if not _is_signup_login_id_available(desired_login_id, phone=phone):
         raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다. 다른 아이디를 입력하세요.")
     site_code = _clean_site_code(payload.get("site_code"), required=False)
@@ -2936,7 +2943,14 @@ def auth_signup_verify_phone_and_issue_id(payload: Dict[str, Any] = Body(...)):
         household_key=household_key,
         is_active=True,
     )
-    suggested_login_id = _clean_login_id(profile.get("desired_login_id") or _generate_login_id_from_phone(phone))
+    desired_login_id = str(profile.get("desired_login_id") or "").strip()
+    if desired_login_id:
+        try:
+            suggested_login_id = _clean_signup_login_id(desired_login_id)
+        except HTTPException:
+            suggested_login_id = _generate_login_id_from_phone(phone)
+    else:
+        suggested_login_id = _generate_login_id_from_phone(phone)
     if not _is_signup_login_id_available(suggested_login_id, phone=phone):
         suggested_login_id = _generate_login_id_from_phone(phone)
     signup_token = _issue_signup_finalize_token(verification_id=int(row["id"]), phone=phone)
@@ -2985,7 +2999,13 @@ def auth_signup_complete(payload: Dict[str, Any] = Body(...)):
     office_phone = _normalize_phone(profile.get("office_phone"), required=True, field_name="office_phone")
     office_fax = _normalize_phone(profile.get("office_fax"), required=True, field_name="office_fax")
 
-    login_id = _clean_login_id(payload.get("login_id") or profile.get("desired_login_id") or _generate_login_id_from_phone(phone))
+    raw_login_id = payload.get("login_id") or profile.get("desired_login_id") or _generate_login_id_from_phone(phone)
+    try:
+        login_id = _clean_signup_login_id(raw_login_id)
+    except HTTPException:
+        if payload.get("login_id"):
+            raise
+        login_id = _generate_login_id_from_phone(phone)
     password = _assert_signup_password_policy(payload.get("password"), login_id=login_id, phone=phone)
     if "password_confirm" in payload:
         password_confirm = str(payload.get("password_confirm") or "")
