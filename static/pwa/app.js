@@ -84,17 +84,18 @@
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
   const SITE_ID_KEY = "ka_current_site_id_v1";
-  const MOBILE_ACTIONS_COLLAPSED_KEY = "ka_mobile_actions_collapsed_v1";
   const DEFAULT_SITE_NAME = "미지정단지";
 
   let TABS = [];
   let rangeDates = [];
   let rangeIndex = -1;
+  let rangeQueryFrom = "";
+  let rangeQueryTo = "";
   let authUser = null;
   let maintenancePollTimer = null;
   let reloginByConflictInProgress = false;
   let siteIdentityRecoverInProgress = false;
-  let mobileActionsCollapsed = true;
+  let menuOpen = false;
 
   function hasAdminPermission(user) {
     return !!(user && user.is_admin);
@@ -248,71 +249,112 @@
     el.classList.add("idle");
   }
 
-  function isMobileActionViewport() {
+  function isNarrowViewport() {
     return window.matchMedia("(max-width: 760px)").matches;
   }
 
-  function readMobileActionsPreference() {
-    try {
-      const raw = String(localStorage.getItem(MOBILE_ACTIONS_COLLAPSED_KEY) || "").trim().toLowerCase();
-      if (raw === "false" || raw === "0" || raw === "off" || raw === "no") return false;
-      if (raw === "true" || raw === "1" || raw === "on" || raw === "yes") return true;
-    } catch (_e) {}
-    return true;
+  function updateContextLine() {
+    const el = $("#contextLine");
+    if (!el) return;
+    const siteName = String(getSiteNameRaw() || getSiteName() || "").trim();
+    const siteCode = String(getSiteCodeRaw() || getSiteCode() || "").trim().toUpperCase();
+    const siteText = [siteCode, siteName].filter(Boolean).join(" / ") || "-";
+    const displayDate = getDateStart() || "-";
+    const from = rangeQueryFrom || getDateStart();
+    const to = rangeQueryTo || getDateEnd();
+    const rangeText = from && to ? (from === to ? from : `${from}~${to}`) : (from || to || "-");
+    el.textContent = `단지: ${siteText} · 표시: ${displayDate} · 범위: ${rangeText}`;
   }
 
-  function writeMobileActionsPreference(collapsed) {
-    try {
-      localStorage.setItem(MOBILE_ACTIONS_COLLAPSED_KEY, collapsed ? "true" : "false");
-    } catch (_e) {}
-  }
-
-  function applyMobileActionsState({ persist = false } = {}) {
-    const topEl = document.querySelector(".top");
-    const wrapEl = $("#actionsWrap");
-    const toggleEl = $("#btnToggleActions");
-    if (!topEl || !wrapEl || !toggleEl) return;
-
-    if (!isMobileActionViewport()) {
-      topEl.classList.remove("mobile-actions-collapsed");
-      wrapEl.hidden = false;
-      toggleEl.setAttribute("aria-expanded", "true");
-      toggleEl.textContent = "버튼숨기기";
+  function relocateFiltersBlock() {
+    const block = $("#filtersBlock");
+    const homeMount = $("#filtersMountHome");
+    const drawerMount = $("#filtersMountDrawer");
+    if (!block || !homeMount || !drawerMount) return;
+    const target = isNarrowViewport() ? drawerMount : homeMount;
+    if (block.parentElement !== target) {
+      target.appendChild(block);
       syncStickyOffset();
-      return;
     }
+  }
 
-    const collapsed = !!mobileActionsCollapsed;
-    topEl.classList.toggle("mobile-actions-collapsed", collapsed);
-    wrapEl.hidden = collapsed;
-    toggleEl.setAttribute("aria-expanded", String(!collapsed));
-    toggleEl.textContent = collapsed ? "버튼열기" : "버튼숨기기";
-    if (persist) writeMobileActionsPreference(collapsed);
+  function applyMenuState({ focusSelector = "" } = {}) {
+    const btn = $("#btnMenu");
+    const overlay = $("#menuOverlay");
+    const drawer = $("#menuDrawer");
+    if (!btn || !overlay || !drawer) return;
+
+    if (menuOpen) {
+      overlay.classList.remove("hidden");
+      overlay.setAttribute("aria-hidden", "false");
+      drawer.hidden = false;
+      btn.setAttribute("aria-expanded", "true");
+      document.body.classList.add("menu-open");
+      relocateFiltersBlock();
+
+      try {
+        let focusEl = null;
+        if (focusSelector) {
+          const desired = document.querySelector(focusSelector);
+          if (desired && drawer.contains(desired)) focusEl = desired;
+        }
+        if (!focusEl) {
+          focusEl = drawer.querySelector("input, select, textarea, button, a[href]");
+        }
+        if (focusEl && typeof focusEl.focus === "function") focusEl.focus();
+      } catch (_e) {}
+    } else {
+      overlay.classList.add("hidden");
+      overlay.setAttribute("aria-hidden", "true");
+      drawer.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+      document.body.classList.remove("menu-open");
+    }
     syncStickyOffset();
   }
 
-  function wireMobileActionsToggle() {
-    const toggleEl = $("#btnToggleActions");
-    const wrapEl = $("#actionsWrap");
-    if (!toggleEl || !wrapEl) return;
+  function openMenu(opts = {}) {
+    menuOpen = true;
+    applyMenuState(opts);
+  }
 
-    mobileActionsCollapsed = readMobileActionsPreference();
-    applyMobileActionsState();
+  function closeMenu() {
+    menuOpen = false;
+    applyMenuState();
+  }
 
-    toggleEl.addEventListener("click", () => {
-      mobileActionsCollapsed = !mobileActionsCollapsed;
-      applyMobileActionsState({ persist: true });
+  function wireMenuDrawer() {
+    const btn = $("#btnMenu");
+    const overlay = $("#menuOverlay");
+    const drawer = $("#menuDrawer");
+    const closeBtn = $("#btnCloseMenu");
+    if (!btn || !overlay || !drawer) return;
+
+    btn.addEventListener("click", () => {
+      if (menuOpen) closeMenu();
+      else openMenu({ focusSelector: "#siteName" });
+    });
+    closeBtn?.addEventListener("click", () => closeMenu());
+    overlay.addEventListener("click", () => closeMenu());
+
+    drawer.addEventListener("click", (e) => {
+      const actionBtn = e.target.closest(".menu-grid button.btn");
+      if (!actionBtn) return;
+      requestAnimationFrame(() => closeMenu());
     });
 
-    wrapEl.addEventListener("click", (e) => {
-      const btn = e.target.closest("button.btn");
-      if (!btn) return;
-      if (!isMobileActionViewport()) return;
-      requestAnimationFrame(() => {
-        mobileActionsCollapsed = true;
-        applyMobileActionsState({ persist: true });
-      });
+    document.addEventListener("keydown", (e) => {
+      if (!menuOpen) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeMenu();
+      }
     });
+
+    $("#contextLine")?.addEventListener("click", () => openMenu({ focusSelector: "#dateStart" }));
+
+    relocateFiltersBlock();
+    updateContextLine();
   }
 
   function ymdToday() {
@@ -544,6 +586,7 @@
     const el = $("#siteName");
     if (el) el.value = clean;
     localStorage.setItem(SITE_NAME_KEY, clean);
+    updateContextLine();
     return clean;
   }
 
@@ -554,6 +597,7 @@
     if (clean) localStorage.setItem(SITE_CODE_KEY, clean);
     else localStorage.removeItem(SITE_CODE_KEY);
     syncHomeSiteIdentityDisplay(null, clean);
+    updateContextLine();
     return clean;
   }
 
@@ -656,6 +700,7 @@
     enforceSiteIdentityPolicy();
     enforceHomeSiteIdentityPolicy();
     updateAddressBarSiteQuery();
+    updateContextLine();
     return data || {};
   }
 
@@ -1043,6 +1088,9 @@
     const siteCode = getSiteCodeRaw() || getSiteCode();
     const df = getDateStart();
     const dt = getDateEnd();
+    rangeQueryFrom = df || "";
+    rangeQueryTo = dt || "";
+    updateContextLine();
     const qs = buildSiteQuery(site, siteCode);
     const url = `/api/list_range?${qs}&date_from=${encodeURIComponent(df)}&date_to=${encodeURIComponent(dt)}`;
     const data = await jfetch(url);
@@ -1060,6 +1108,7 @@
     const showDate = rangeDates[rangeIndex];
     const ds = $("#dateStart");
     if (ds) ds.value = showDate;
+    updateContextLine();
     await loadOne(site, showDate, siteCode);
     toast(`기간 ${df}~${dt} · ${rangeDates.length}건 · 표시 ${showDate}`);
   }
@@ -1082,6 +1131,7 @@
     const showDate = rangeDates[rangeIndex];
     const ds = $("#dateStart");
     if (ds) ds.value = showDate;
+    updateContextLine();
     await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
     toast(`표시 ${showDate} (${rangeIndex + 1}/${rangeDates.length})`);
   }
@@ -1099,6 +1149,7 @@
     const showDate = rangeDates[rangeIndex];
     const ds = $("#dateStart");
     if (ds) ds.value = showDate;
+    updateContextLine();
     await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
     toast(`표시 ${showDate} (${rangeIndex + 1}/${rangeDates.length})`);
   }
@@ -1211,9 +1262,13 @@
     if (de && !de.value) de.value = today;
 
     initAutoAdvance();
-    wireMobileActionsToggle();
+    wireMenuDrawer();
     syncStickyOffset();
-    window.addEventListener("resize", () => applyMobileActionsState());
+    window.addEventListener("resize", () => {
+      relocateFiltersBlock();
+      updateContextLine();
+      syncStickyOffset();
+    });
 
     $("#tabs")?.addEventListener("click", (e) => {
       const btn = e.target.closest(".tabbtn");
@@ -1223,6 +1278,8 @@
 
     const onSiteIdentityChange = async (source) => {
       const isAdmin = authUser && hasAdminPermission(authUser);
+      rangeQueryFrom = "";
+      rangeQueryTo = "";
       if (!isAdmin) {
         setSiteId(assignedSiteIdForUser());
         setSiteName(assignedSiteNameForUser());
@@ -1250,6 +1307,13 @@
     $("#siteCode")?.addEventListener("change", () => {
       onSiteIdentityChange("siteCode").catch((err) => alert("단지정보 동기화 오류: " + err.message));
     });
+    const resetRangeQuery = () => {
+      rangeQueryFrom = "";
+      rangeQueryTo = "";
+      updateContextLine();
+    };
+    $("#dateStart")?.addEventListener("change", resetRangeQuery);
+    $("#dateEnd")?.addEventListener("change", resetRangeQuery);
 
     document.getElementById("panel-home")?.addEventListener("input", (e) => {
       const t = e.target;

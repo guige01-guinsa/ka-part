@@ -14,6 +14,10 @@
   box-sizing: border-box;
 }
 
+.hidden { display: none !important; }
+
+body.menu-open { overflow: hidden; }
+
 body {
   margin: 0;
   color: var(--fg);
@@ -40,17 +44,9 @@ body {
 
 .userbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
-}
-
-.btn-actions-toggle {
-  display: none;
-}
-
-.actions-wrap {
   margin-bottom: 8px;
 }
 
@@ -64,11 +60,114 @@ body {
   background: color-mix(in srgb, var(--bg-soft) 74%, black 26%);
 }
 
-.actions {
+.quickbar {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-soft) 76%, black 24%);
+}
+
+.quick-left,
+.quick-right {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.context-line {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-soft) 70%, black 30%);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.btn.ghost {
+  background: transparent;
+  color: color-mix(in srgb, var(--fg) 86%, var(--muted));
+}
+
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.56);
+  backdrop-filter: blur(2px);
+}
+
+.menu-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 100;
+  width: min(420px, 92vw);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-left: 1px solid var(--line);
+  background:
+    radial-gradient(800px 380px at 20% -120px, rgba(45,125,255,.22), transparent 62%),
+    radial-gradient(640px 280px at 92% -100px, rgba(243,155,47,.14), transparent 62%),
+    color-mix(in srgb, var(--bg) 92%, black 8%);
+}
+
+.menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.menu-title {
+  font-size: 16px;
+  font-weight: 950;
+  letter-spacing: -0.02em;
+}
+
+.menu-section {
+  border: 1px solid color-mix(in srgb, var(--line) 88%, white 12%);
+  border-radius: 14px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--card) 92%, black 8%);
+}
+
+.menu-section-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  margin-bottom: 8px;
+}
+
+.menu-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.menu-drawer .filters {
+  grid-template-columns: 1fr;
+  padding: 0;
+  gap: 10px;
+}
+
+.menu-drawer .filters .hint {
+  grid-column: auto;
+  font-size: 11px;
+  opacity: 0.95;
 }
 
 .maintenance-banner {
@@ -334,24 +433,6 @@ body {
 }
 
 @media (max-width: 760px) {
-  .btn-actions-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .actions-wrap {
-    max-height: min(30vh, 260px);
-    overflow-y: auto;
-    overflow-x: hidden;
-    overscroll-behavior: contain;
-    padding-right: 2px;
-  }
-
-  .top.mobile-actions-collapsed .actions-wrap {
-    display: none;
-  }
-
   .filters {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -379,8 +460,20 @@ body {
     gap: 6px;
   }
 
+  .date-range {
+    grid-template-columns: 1fr;
+  }
+
   .title {
     font-size: 17px;
+  }
+
+  .quickbar {
+    padding: 7px;
+  }
+
+  .menu-grid {
+    grid-template-columns: 1fr;
   }
 
   .btn {
@@ -394,7 +487,7 @@ body {
 
   .filters .field input {
     padding: 7px 6px;
-    font-size: 12px;
+    font-size: 16px;
   }
 
   .panel:not(#panel-tr1):not(#panel-tr2):not(#panel-tr3):not(#panel-tr4):not(#panel-tr5):not(#panel-tr6):not(#panel-main_vcb):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="2"],
@@ -408,5 +501,12 @@ body {
 
   .field-row[data-count="5"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Prevent iOS input zoom and improve touch readability */
+  .input input,
+  .input select,
+  .input textarea {
+    font-size: 16px;
   }
 }
