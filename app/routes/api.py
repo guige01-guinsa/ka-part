@@ -3009,10 +3009,11 @@ def auth_signup_complete(payload: Dict[str, Any] = Body(...)):
             raise
         login_id = _generate_login_id_from_phone(phone)
     password = _assert_signup_password_policy(payload.get("password"), login_id=login_id, phone=phone)
-    if "password_confirm" in payload:
-        password_confirm = str(payload.get("password_confirm") or "")
-        if password_confirm != password:
-            raise HTTPException(status_code=400, detail="password confirmation does not match")
+    if "password_confirm" not in payload:
+        raise HTTPException(status_code=400, detail="password_confirm is required")
+    password_confirm = str(payload.get("password_confirm") or "")
+    if password_confirm != password:
+        raise HTTPException(status_code=400, detail="password confirmation does not match")
 
     existing = get_staff_user_by_phone(phone)
     if existing:
