@@ -38,9 +38,27 @@ SITE_CODE_PREFIX = _raw_site_prefix if re.fullmatch(r"[A-Z]{3}", _raw_site_prefi
 
 def _connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(DB_PATH))
+    timeout_sec = 30.0
+    try:
+        raw = str(os.getenv("KA_SQLITE_TIMEOUT_SEC") or "").strip()
+        if raw:
+            timeout_sec = float(raw)
+    except Exception:
+        timeout_sec = 30.0
+    timeout_sec = max(1.0, min(60.0, timeout_sec))
+    con = sqlite3.connect(str(DB_PATH), timeout=timeout_sec)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON;")
+    try:
+        busy_ms = 30000
+        raw_busy = str(os.getenv("KA_SQLITE_BUSY_TIMEOUT_MS") or "").strip()
+        if raw_busy:
+            busy_ms = int(raw_busy)
+        busy_ms = max(1000, min(60000, busy_ms))
+        con.execute(f"PRAGMA busy_timeout={busy_ms};")
+    except Exception:
+        # busy_timeout is best-effort; ignore if unsupported.
+        pass
     return con
 
 
@@ -3560,5 +3578,26 @@ def touch_signup_phone_verification_attempt(verification_id: int, *, success: bo
             )
         con.commit()
         return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def count_recent_signup_phone_verifications(*, phone: str = "", request_ip: str = "", minutes: int = 15) -> int:
+    window_min = max(1, min(1440, int(minutes or 0) or 15))
+    cutoff = (datetime.now() - timedelta(minutes=window_min)).replace(microsecond=0).isoformat(sep=" ")
+    clean_phone = str(phone or "").strip()
+    clean_ip = str(request_ip or "").strip()
+    con = _connect()
+    try:
+        sql = "SELECT COUNT(*) AS c FROM signup_phone_verifications WHERE purpose='signup' AND created_at >= ?"
+        params: List[Any] = [cutoff]
+        if clean_phone:
+            sql += " AND phone=?"
+            params.append(clean_phone)
+        if clean_ip:
+            sql += " AND request_ip=?"
+            params.append(clean_ip)
+        row = con.execute(sql, tuple(params)).fetchone()
+        return int((row["c"] if row else 0) or 0)
     finally:
         con.close()

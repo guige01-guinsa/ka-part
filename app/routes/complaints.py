@@ -166,11 +166,20 @@ def get_faqs(limit: int = Query(100, ge=1, le=300)):
 @router.post("/complaints")
 def post_complaint(payload: ComplaintCreatePayload, request: Request):
     user, _token = _require_auth(request)
+    is_admin = int(user.get("is_admin") or 0) == 1
+    site_code = payload.site_code or str(user.get("site_code") or "")
+    site_name = payload.site_name or str(user.get("site_name") or "")
+    if not is_admin:
+        # Keep complaint site identity aligned with the account scope.
+        site_code = str(user.get("site_code") or "")
+        site_name = str(user.get("site_name") or "")
+    if not is_admin and not str(site_code or "").strip():
+        raise HTTPException(status_code=403, detail="소속 단지코드가 지정되지 않았습니다. 관리자에게 문의하세요.")
     try:
         created = create_complaint(
             reporter_user_id=int(user["id"]),
-            site_code=payload.site_code or str(user.get("site_code") or ""),
-            site_name=payload.site_name or str(user.get("site_name") or ""),
+            site_code=site_code,
+            site_name=site_name,
             unit_label=payload.unit_label,
             category_id=payload.category_id,
             scope=payload.scope,
@@ -192,11 +201,19 @@ def post_complaint(payload: ComplaintCreatePayload, request: Request):
 @router.post("/emergencies")
 def post_emergency(payload: ComplaintCreatePayload, request: Request):
     user, _token = _require_auth(request)
+    is_admin = int(user.get("is_admin") or 0) == 1
+    site_code = payload.site_code or str(user.get("site_code") or "")
+    site_name = payload.site_name or str(user.get("site_name") or "")
+    if not is_admin:
+        site_code = str(user.get("site_code") or "")
+        site_name = str(user.get("site_name") or "")
+    if not is_admin and not str(site_code or "").strip():
+        raise HTTPException(status_code=403, detail="소속 단지코드가 지정되지 않았습니다. 관리자에게 문의하세요.")
     try:
         created = create_complaint(
             reporter_user_id=int(user["id"]),
-            site_code=payload.site_code or str(user.get("site_code") or ""),
-            site_name=payload.site_name or str(user.get("site_name") or ""),
+            site_code=site_code,
+            site_name=site_name,
             unit_label=payload.unit_label,
             category_id=payload.category_id,
             scope=payload.scope if payload.scope in SCOPE_VALUES else "EMERGENCY",

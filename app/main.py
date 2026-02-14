@@ -70,6 +70,29 @@ async def _maintenance_guard(request: Request, call_next):
                 )
     return await call_next(request)
 
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = str(os.getenv(name) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _is_https(request: Request) -> bool:
+    proto = str(request.headers.get("x-forwarded-proto") or request.url.scheme or "").strip().lower()
+    return proto == "https"
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    # Basic hardening headers. CSP is set per-page for the PWA HTML.
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if _env_truthy("KA_HSTS_ENABLED", True) and _is_https(request):
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return resp
+
 # PWA static
 app.mount("/pwa", StaticFiles(directory="static/pwa", html=True), name="pwa")
 

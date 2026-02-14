@@ -28,9 +28,26 @@ MAX_ATTACHMENT_URL_LENGTH = 500
 
 
 def _connect() -> sqlite3.Connection:
-    con = sqlite3.connect(str(DB_PATH))
+    timeout_sec = 30.0
+    try:
+        raw = str(os.getenv("KA_SQLITE_TIMEOUT_SEC") or "").strip()
+        if raw:
+            timeout_sec = float(raw)
+    except Exception:
+        timeout_sec = 30.0
+    timeout_sec = max(1.0, min(60.0, timeout_sec))
+    con = sqlite3.connect(str(DB_PATH), timeout=timeout_sec)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON;")
+    try:
+        busy_ms = 30000
+        raw_busy = str(os.getenv("KA_SQLITE_BUSY_TIMEOUT_MS") or "").strip()
+        if raw_busy:
+            busy_ms = int(raw_busy)
+        busy_ms = max(1000, min(60000, busy_ms))
+        con.execute(f"PRAGMA busy_timeout={busy_ms};")
+    except Exception:
+        pass
     return con
 
 

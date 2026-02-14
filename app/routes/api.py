@@ -37,6 +37,7 @@ from ..db import (
     count_active_resident_household_users,
     count_staff_admins,
     count_super_admins,
+    count_recent_signup_phone_verifications,
     create_signup_phone_verification,
     create_auth_session,
     create_privileged_change_request,
@@ -168,6 +169,7 @@ AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").st
 AUTH_COOKIE_SAMESITE = (os.getenv("KA_AUTH_COOKIE_SAMESITE") or "lax").strip().lower() or "lax"
 if AUTH_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     AUTH_COOKIE_SAMESITE = "lax"
+BOOTSTRAP_TOKEN = (os.getenv("KA_BOOTSTRAP_TOKEN") or "").strip()
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -191,6 +193,23 @@ AUTH_COOKIE_SECURE = _env_enabled("KA_AUTH_COOKIE_SECURE", True)
 AUTH_COOKIE_MAX_AGE = _safe_int_env("KA_AUTH_COOKIE_MAX_AGE", 43200, 300)
 SITE_CODE_AUTOCREATE_NON_ADMIN = _env_enabled("KA_SITE_CODE_AUTOCREATE_NON_ADMIN", False)
 ALLOW_QUERY_ACCESS_TOKEN = _env_enabled("KA_ALLOW_QUERY_ACCESS_TOKEN", False)
+if AUTH_COOKIE_SAMESITE == "none":
+    # Modern browsers require Secure when SameSite=None.
+    AUTH_COOKIE_SECURE = True
+
+
+def _client_ip(request: Request) -> str:
+    if not request:
+        return ""
+    xff = str(request.headers.get("x-forwarded-for") or "").strip()
+    if xff:
+        first = xff.split(",", 1)[0].strip()
+        if first:
+            return first
+    xri = str(request.headers.get("x-real-ip") or "").strip()
+    if xri:
+        return xri
+    return request.client.host if request.client else ""
 
 
 def _require_secret_env(
@@ -485,6 +504,21 @@ def _phone_digits(formatted_phone: str) -> str:
 def _phone_code_hash(phone: str, code: str) -> str:
     src = f"{PHONE_VERIFY_SECRET_VALUE}|{phone}|{code}"
     return hashlib.sha256(src.encode("utf-8")).hexdigest()
+
+
+def _assert_signup_sms_rate_limit(request: Request, phone: str) -> None:
+    if not _env_enabled("KA_SIGNUP_SMS_RATE_LIMIT_ENABLED", True):
+        return
+    window_min = _safe_int_env("KA_SIGNUP_SMS_RATE_LIMIT_WINDOW_MIN", 15, 1)
+    max_per_phone = _safe_int_env("KA_SIGNUP_SMS_RATE_LIMIT_MAX_PER_PHONE", 3, 1)
+    max_per_ip = _safe_int_env("KA_SIGNUP_SMS_RATE_LIMIT_MAX_PER_IP", 30, 1)
+
+    clean_phone = str(phone or "").strip()
+    ip = _client_ip(request)
+    if clean_phone and count_recent_signup_phone_verifications(phone=clean_phone, minutes=window_min) >= max_per_phone:
+        raise HTTPException(status_code=429, detail="인증번호 요청이 너무 많습니다. 잠시 후 다시 시도하세요.")
+    if ip and count_recent_signup_phone_verifications(request_ip=ip, minutes=window_min) >= max_per_ip:
+        raise HTTPException(status_code=429, detail="요청이 너무 많습니다. 잠시 후 다시 시도하세요.")
 
 
 def _mock_sms_response(*, debug_code: str = "", mock_message: str = "") -> Dict[str, Any]:
@@ -788,7 +822,7 @@ def _issue_site_registry_signup_ready_notice(
         code_hash=code_hash,
         payload=profile,
         expires_at=expires_at,
-        request_ip=(request.client.host if request.client else None),
+        request_ip=(_client_ip(request) or None),
     )
     setup_url = _signup_ready_setup_url(request=request, phone=phone, login_id=desired_login_id)
     delivery = _send_sms_signup_ready(phone, code, setup_url=setup_url)
@@ -2182,7 +2216,7 @@ def api_site_registry_request(request: Request, payload: Dict[str, Any] = Body(.
             "signup_address": signup_address,
             "signup_office_phone": signup_office_phone,
             "signup_office_fax": signup_office_fax,
-            "request_ip": (request.client.host if request.client else ""),
+            "request_ip": _client_ip(request),
         },
         requested_by_user_id=0,
         requested_by_login=requested_by_login,
@@ -3114,6 +3148,14 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
     if count_staff_admins(active_only=True) > 0:
         raise HTTPException(status_code=409, detail="bootstrap is already completed")
 
+    if BOOTSTRAP_TOKEN:
+        supplied = (
+            str(request.headers.get("X-KA-BOOTSTRAP-TOKEN") or "").strip()
+            or str(payload.get("bootstrap_token") or "").strip()
+        )
+        if not supplied or not hmac.compare_digest(supplied, BOOTSTRAP_TOKEN):
+            raise HTTPException(status_code=403, detail="bootstrap token is required")
+
     login_id = _clean_login_id(payload.get("login_id"))
     name = _clean_name(payload.get("name") or payload.get("login_id"))
     role = _effective_role_for_permission_level(
@@ -3163,7 +3205,7 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
         int(user["id"]),
         ttl_hours=12,
         user_agent=request.headers.get("user-agent"),
-        ip_address=(request.client.host if request.client else None),
+        ip_address=(_client_ip(request) or None),
     )
     body = {
         "ok": True,
@@ -3173,6 +3215,8 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
     }
     resp = JSONResponse(body)
     _set_auth_cookie(resp, session["token"])
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Pragma"] = "no-cache"
     return resp
 
 
@@ -3201,6 +3245,7 @@ def auth_signup_request_ready_verification(request: Request, payload: Dict[str, 
             "message": "이미 등록된 휴대폰번호입니다. 기존 아이디로 로그인하세요.",
         }
 
+    _assert_signup_sms_rate_limit(request, phone)
     req_item = _latest_executed_site_registry_request_for_phone(phone)
     if not req_item:
         raise HTTPException(status_code=404, detail="등록처리 완료 내역을 찾을 수 없습니다.")
@@ -3249,6 +3294,7 @@ def auth_signup_request_ready_verification(request: Request, payload: Dict[str, 
 def auth_signup_request_phone_verification(request: Request, payload: Dict[str, Any] = Body(...)):
     name = _clean_name(payload.get("name"))
     phone = _normalize_phone(payload.get("phone"), required=True, field_name="phone")
+    _assert_signup_sms_rate_limit(request, phone)
     desired_login_id = _clean_signup_login_id(payload.get("login_id"))
     if not _is_signup_login_id_available(desired_login_id, phone=phone):
         raise HTTPException(status_code=409, detail="이미 사용 중인 아이디입니다. 다른 아이디를 입력하세요.")
@@ -3286,7 +3332,7 @@ def auth_signup_request_phone_verification(request: Request, payload: Dict[str, 
         code_hash=code_hash,
         payload=profile,
         expires_at=expires_at,
-        request_ip=(request.client.host if request.client else None),
+        request_ip=(_client_ip(request) or None),
     )
     delivery = _send_sms_verification(phone, code)
     out = {
@@ -3567,7 +3613,7 @@ def auth_login(request: Request, payload: Dict[str, Any] = Body(...)):
         int(user["id"]),
         ttl_hours=12,
         user_agent=request.headers.get("user-agent"),
-        ip_address=(request.client.host if request.client else None),
+        ip_address=(_client_ip(request) or None),
     )
     fresh = get_staff_user(int(user["id"])) or user
     body = {
@@ -3579,6 +3625,8 @@ def auth_login(request: Request, payload: Dict[str, Any] = Body(...)):
     }
     resp = JSONResponse(body)
     _set_auth_cookie(resp, session["token"])
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Pragma"] = "no-cache"
     return resp
 
 
@@ -3621,7 +3669,7 @@ def auth_change_password(request: Request, payload: Dict[str, Any] = Body(...)):
         int(user["id"]),
         ttl_hours=12,
         user_agent=request.headers.get("user-agent"),
-        ip_address=(request.client.host if request.client else None),
+        ip_address=(_client_ip(request) or None),
     )
     fresh = get_staff_user(int(user["id"])) or db_user
     body = {
@@ -3633,6 +3681,8 @@ def auth_change_password(request: Request, payload: Dict[str, Any] = Body(...)):
     }
     resp = JSONResponse(body)
     _set_auth_cookie(resp, session["token"])
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Pragma"] = "no-cache"
     return resp
 
 
