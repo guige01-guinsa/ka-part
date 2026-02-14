@@ -1640,6 +1640,41 @@ def api_site_identity(
     }
 
 
+@router.post("/site_registry/register")
+def api_site_registry_register(request: Request, payload: Dict[str, Any] = Body(...)):
+    user, _token = _require_super_admin(request)
+    site_name = _clean_site_name(payload.get("site_name"), required=True)
+    requested_code = _clean_site_code(payload.get("site_code"), required=False)
+    site_code = _resolve_site_code_for_site(
+        site_name,
+        requested_code,
+        allow_create=True,
+        allow_remap=False,
+    )
+    resolved = resolve_site_identity(
+        site_id=0,
+        site_name=site_name,
+        site_code=site_code,
+        create_site_if_missing=False,
+    )
+    resolved_name = _clean_site_name(resolved.get("site_name"), required=False) or site_name
+    resolved_code = _clean_site_code(resolved.get("site_code"), required=False) or site_code
+    _audit_security(
+        request,
+        user,
+        event_type="site_registry_register",
+        target_site_code=resolved_code,
+        target_site_name=resolved_name,
+        detail={"requested_site_code": requested_code},
+    )
+    return {
+        "ok": True,
+        "site_name": resolved_name,
+        "site_code": resolved_code,
+        "message": "단지코드를 등록했습니다.",
+    }
+
+
 @router.put("/site_env")
 def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     user, _token = _require_site_env_manager(request)

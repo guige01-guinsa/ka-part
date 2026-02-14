@@ -68,6 +68,7 @@ pwsh -File ops\stop_stack.ps1
   - `POST /api/auth/change_password`
   - `POST /api/auth/signup/request_phone_verification`
   - `POST /api/auth/signup/verify_phone_and_issue_id`
+  - `POST /api/site_registry/register` (최고관리자: 단지코드 간편 등록)
 - 사용자
   - `GET /api/users`
   - `POST /api/users`
