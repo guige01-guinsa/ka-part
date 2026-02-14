@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>사용자 관리</title>
-  <link rel="stylesheet" href="/pwa/users.css?v=20260211a" />
+  <link rel="stylesheet" href="/pwa/users.css?v=20260214b" />
 </head>
 <body>
   <header class="top">
@@ -154,9 +154,47 @@
         </table>
       </div>
     </section>
+
+    <section class="card" id="siteRegistryReqCard" hidden>
+      <h2>단지코드 요청함 (최고관리자)</h2>
+      <div class="grid req-grid">
+        <label class="field">
+          <span>상태</span>
+          <select id="siteReqStatus">
+            <option value="pending">대기</option>
+            <option value="processed">처리완료</option>
+            <option value="all">전체</option>
+          </select>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnLoadSiteReq" class="btn primary" type="button">요청 조회</button>
+      </div>
+      <div id="siteReqMeta" class="line2">로딩 중...</div>
+      <div class="sheet-wrap">
+        <table class="sheet req-sheet" id="siteReqSheet">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>상태</th>
+              <th>요청일시</th>
+              <th>단지명</th>
+              <th>요청코드</th>
+              <th>요청자</th>
+              <th>연락처</th>
+              <th>분류/세대</th>
+              <th>처리결과</th>
+              <th>작업</th>
+            </tr>
+          </thead>
+          <tbody id="siteReqBody"></tbody>
+        </table>
+      </div>
+      <div id="siteReqMsg" class="msg"></div>
+    </section>
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/users.js?v=20260213i"></script>
+  <script src="/pwa/users.js?v=20260214b"></script>
 </body>
 </html>

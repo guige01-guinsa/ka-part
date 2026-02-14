@@ -130,6 +130,7 @@ ROLE_LABEL_BY_PERMISSION = {
     "resident": "입주민",
     "board_member": "입대의",
 }
+SITE_REGISTRY_REQUEST_CHANGE_TYPE = "site_code_registration"
 DEFAULT_SITE_NAME = "미지정단지"
 PHONE_VERIFY_TTL_MINUTES = 5
 PHONE_VERIFY_MAX_ATTEMPTS = 5
@@ -1640,6 +1641,234 @@ def api_site_identity(
     }
 
 
+def _site_registry_request_status_label(status: str) -> str:
+    clean = str(status or "").strip().lower()
+    if clean == "pending":
+        return "대기"
+    if clean == "approved":
+        return "승인"
+    if clean == "executed":
+        return "처리완료"
+    if clean:
+        return clean
+    return "-"
+
+
+def _site_registry_request_public(item: Dict[str, Any]) -> Dict[str, Any]:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    requested_site_code = str(payload.get("requested_site_code") or item.get("target_site_code") or "").strip().upper()
+    resolved_site_code = str(result.get("site_code") or "").strip().upper()
+    resolved_site_name = str(result.get("site_name") or "").strip()
+    site_name = str(payload.get("site_name") or item.get("target_site_name") or "").strip()
+    status = str(item.get("status") or "").strip().lower()
+    return {
+        "id": int(item.get("id") or 0),
+        "status": status,
+        "status_label": _site_registry_request_status_label(status),
+        "site_name": site_name,
+        "requested_site_code": requested_site_code,
+        "resolved_site_name": resolved_site_name,
+        "resolved_site_code": resolved_site_code,
+        "requester_name": str(payload.get("requester_name") or "").strip(),
+        "requester_phone": str(payload.get("requester_phone") or "").strip(),
+        "requester_role": str(payload.get("requester_role") or "").strip(),
+        "requester_unit_label": str(payload.get("requester_unit_label") or "").strip(),
+        "requester_note": str(payload.get("requester_note") or "").strip(),
+        "requested_by_login": str(item.get("requested_by_login") or "").strip(),
+        "processed_by_login": str(item.get("executed_by_login") or "").strip(),
+        "created_at": str(item.get("created_at") or "").strip(),
+        "approved_at": str(item.get("approved_at") or "").strip(),
+        "processed_at": str(item.get("executed_at") or "").strip(),
+        "expires_at": str(item.get("expires_at") or "").strip(),
+    }
+
+
+@router.post("/site_registry/request")
+def api_site_registry_request(request: Request, payload: Dict[str, Any] = Body(...)):
+    site_name = _clean_site_name(payload.get("site_name"), required=True)
+    requested_site_code = _clean_site_code(payload.get("site_code"), required=False)
+    requester_name = _clean_optional_text(payload.get("requester_name", payload.get("name")), 40) or ""
+    requester_role = _clean_optional_text(payload.get("requester_role", payload.get("role")), 20) or ""
+    requester_unit_label = _clean_optional_text(payload.get("requester_unit_label", payload.get("unit_label")), 20) or ""
+    requester_note = _clean_optional_text(payload.get("requester_note", payload.get("note")), 200) or ""
+    requester_phone = ""
+    try:
+        requester_phone = _normalize_phone(
+            payload.get("requester_phone", payload.get("phone")),
+            required=False,
+            field_name="requester_phone",
+        ) or ""
+    except HTTPException:
+        requester_phone = ""
+    phone_digits = _phone_digits(requester_phone)
+    requested_by_login = f"signup-{phone_digits[-4:]}" if phone_digits else "signup-request"
+
+    req = create_privileged_change_request(
+        change_type=SITE_REGISTRY_REQUEST_CHANGE_TYPE,
+        payload={
+            "site_name": site_name,
+            "requested_site_code": requested_site_code,
+            "requester_name": requester_name,
+            "requester_phone": requester_phone,
+            "requester_role": requester_role,
+            "requester_unit_label": requester_unit_label,
+            "requester_note": requester_note,
+            "request_ip": (request.client.host if request.client else ""),
+        },
+        requested_by_user_id=0,
+        requested_by_login=requested_by_login,
+        target_site_name=site_name,
+        target_site_code=requested_site_code,
+        reason="signup_site_code_missing",
+        expires_hours=24 * 30,
+    )
+    _audit_security(
+        user=None,
+        event_type="site_registry_request_create",
+        severity="INFO",
+        outcome="ok",
+        target_site_code=requested_site_code,
+        target_site_name=site_name,
+        request_id=int(req.get("id") or 0),
+        detail={"requester_role": requester_role, "requester_phone": requester_phone},
+    )
+    return {
+        "ok": True,
+        "request_id": int(req.get("id") or 0),
+        "status": str(req.get("status") or "pending"),
+        "status_label": _site_registry_request_status_label(req.get("status") or "pending"),
+        "site_name": site_name,
+        "requested_site_code": requested_site_code,
+        "message": "단지코드 등록요청이 접수되었습니다. 최고관리자가 요청함에서 처리할 수 있습니다.",
+    }
+
+
+@router.get("/site_registry/requests")
+def api_site_registry_requests(
+    request: Request,
+    status: str = Query(default="pending"),
+    limit: int = Query(default=100),
+):
+    _user, _token = _require_super_admin(request)
+    raw_status = str(status or "pending").strip().lower()
+    if raw_status in {"", "all"}:
+        status_filter = ""
+    elif raw_status in {"pending", "approved", "executed"}:
+        status_filter = raw_status
+    elif raw_status == "processed":
+        status_filter = "executed"
+    else:
+        raise HTTPException(status_code=400, detail="status must be one of: pending, approved, executed, processed, all")
+    clean_limit = max(1, min(int(limit), 500))
+    rows = list_privileged_change_requests(
+        change_type=SITE_REGISTRY_REQUEST_CHANGE_TYPE,
+        status=status_filter,
+        limit=clean_limit,
+    )
+    pending_rows = list_privileged_change_requests(
+        change_type=SITE_REGISTRY_REQUEST_CHANGE_TYPE,
+        status="pending",
+        limit=500,
+    )
+    return {
+        "ok": True,
+        "status": raw_status or "all",
+        "pending_count": len(pending_rows),
+        "items": [_site_registry_request_public(item) for item in rows],
+    }
+
+
+@router.post("/site_registry/requests/{request_id}/execute")
+def api_site_registry_request_execute(
+    request: Request,
+    request_id: int,
+    payload: Dict[str, Any] = Body(default={}),
+):
+    user, _token = _require_super_admin(request)
+    item = get_privileged_change_request(int(request_id))
+    if not item:
+        raise HTTPException(status_code=404, detail="요청을 찾을 수 없습니다.")
+    if str(item.get("change_type") or "").strip().lower() != SITE_REGISTRY_REQUEST_CHANGE_TYPE:
+        raise HTTPException(status_code=400, detail="지원하지 않는 요청 유형입니다.")
+
+    status = str(item.get("status") or "").strip().lower()
+    if status == "executed":
+        return {
+            "ok": True,
+            "already_processed": True,
+            "request": _site_registry_request_public(item),
+            "message": "이미 처리된 요청입니다.",
+        }
+    if status not in {"pending", "approved"}:
+        raise HTTPException(status_code=409, detail="요청 상태가 처리 불가능합니다.")
+
+    req_payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    site_name = _clean_site_name(
+        payload.get("site_name", req_payload.get("site_name") or item.get("target_site_name")),
+        required=True,
+    )
+    requested_site_code = _clean_site_code(
+        payload.get("site_code", req_payload.get("requested_site_code") or item.get("target_site_code")),
+        required=False,
+    )
+    process_note = _clean_optional_text(payload.get("process_note"), 200) or ""
+
+    if status == "pending":
+        try:
+            item = approve_privileged_change_request(
+                request_id=int(request_id),
+                approver_user_id=int(user.get("id") or 0),
+                approver_login=_clean_login_id(user.get("login_id") or "admin"),
+            )
+            status = str(item.get("status") or "").strip().lower()
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+
+    if status != "approved":
+        raise HTTPException(status_code=409, detail="요청이 승인 상태가 아닙니다.")
+
+    resolved_site_code = _resolve_site_code_for_site(
+        site_name,
+        requested_site_code,
+        allow_create=True,
+        allow_remap=False,
+    )
+    result = {
+        "site_name": site_name,
+        "site_code": resolved_site_code,
+        "requested_site_code": requested_site_code,
+        "process_note": process_note,
+    }
+    try:
+        executed = mark_privileged_change_request_executed(
+            request_id=int(request_id),
+            executed_by_user_id=int(user.get("id") or 0),
+            executed_by_login=_clean_login_id(user.get("login_id") or "admin"),
+            result=result,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    _audit_security(
+        user=user,
+        event_type="site_registry_request_execute",
+        severity="INFO",
+        outcome="ok",
+        target_site_code=resolved_site_code,
+        target_site_name=site_name,
+        request_id=int(request_id),
+        detail={"requested_site_code": requested_site_code, "process_note": process_note},
+    )
+    return {
+        "ok": True,
+        "site_name": site_name,
+        "site_code": resolved_site_code,
+        "request": _site_registry_request_public(executed),
+        "message": "요청을 처리하여 단지코드를 등록했습니다.",
+    }
+
+
 @router.post("/site_registry/register")
 def api_site_registry_register(request: Request, payload: Dict[str, Any] = Body(...)):
     user, _token = _require_super_admin(request)
@@ -1660,8 +1889,7 @@ def api_site_registry_register(request: Request, payload: Dict[str, Any] = Body(
     resolved_name = _clean_site_name(resolved.get("site_name"), required=False) or site_name
     resolved_code = _clean_site_code(resolved.get("site_code"), required=False) or site_code
     _audit_security(
-        request,
-        user,
+        user=user,
         event_type="site_registry_register",
         target_site_code=resolved_code,
         target_site_name=resolved_name,

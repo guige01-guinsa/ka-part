@@ -150,6 +150,10 @@ h2 { margin: 0 0 10px; font-size: 16px; }
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.req-grid {
+  grid-template-columns: minmax(160px, 260px);
+}
+
 .field input[readonly] {
   opacity: 0.78;
 }
@@ -166,6 +170,10 @@ h2 { margin: 0 0 10px; font-size: 16px; }
   min-width: 1300px;
   border-collapse: collapse;
   table-layout: fixed;
+}
+
+.req-sheet {
+  min-width: 980px;
 }
 
 .sheet th,

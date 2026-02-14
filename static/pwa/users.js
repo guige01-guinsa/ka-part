@@ -32,6 +32,7 @@
   let isSuperAdminView = false;
   let availableSites = [];
   let availableRegions = [];
+  let siteRegistryRequests = [];
 
   const filterState = {
     active_only: false,
@@ -56,6 +57,13 @@
 
   function setMsg(msg, isErr = false) {
     const el = $("#formMsg");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.classList.toggle("err", !!isErr);
+  }
+
+  function setSiteReqMsg(msg, isErr = false) {
+    const el = $("#siteReqMsg");
     if (!el) return;
     el.textContent = msg || "";
     el.classList.toggle("err", !!isErr);
@@ -113,6 +121,7 @@
     isAdminView = !!(me && me.is_admin);
     isSuperAdminView = isSuperAdmin(me);
     $("#userListCard").hidden = !isAdminView;
+    $("#siteRegistryReqCard").hidden = !isSuperAdminView;
     $("#selfHint").hidden = isAdminView;
     $("#permissionWrap").hidden = !isAdminView;
     $("#adminScopeWrap").hidden = !(isAdminView && isSuperAdminView);
@@ -286,6 +295,93 @@
       return;
     }
     body.innerHTML = users.map((u, idx) => rowHtml(u, idx)).join("");
+  }
+
+  function updateSiteReqMeta(pendingCount) {
+    const el = $("#siteReqMeta");
+    if (!el) return;
+    const pending = Number(pendingCount || 0);
+    const total = Array.isArray(siteRegistryRequests) ? siteRegistryRequests.length : 0;
+    el.textContent = `조회 ${total}건 / 대기 ${pending}건`;
+  }
+
+  function siteReqRowHtml(item) {
+    const status = String(item.status_label || item.status || "-");
+    const requester = String(item.requester_name || "-");
+    const phone = String(item.requester_phone || "-");
+    const role = String(item.requester_role || "-");
+    const unit = String(item.requester_unit_label || "-");
+    const resultCode = String(item.resolved_site_code || "-");
+    const resultName = String(item.resolved_site_name || "");
+    const resultText = resultName && resultName !== "-" ? `${resultName} (${resultCode})` : resultCode;
+    const canExecute = String(item.status || "").trim().toLowerCase() !== "executed";
+    return `
+      <tr data-id="${Number(item.id || 0)}">
+        <td class="cell-center">${Number(item.id || 0)}</td>
+        <td>${escapeHtml(status)}</td>
+        <td>${escapeHtml(item.created_at || "-")}</td>
+        <td>${escapeHtml(item.site_name || "-")}</td>
+        <td>${escapeHtml(item.requested_site_code || "-")}</td>
+        <td>${escapeHtml(requester)}</td>
+        <td>${escapeHtml(phone)}</td>
+        <td>${escapeHtml(`${role} / ${unit}`)}</td>
+        <td>${escapeHtml(resultText)}</td>
+        <td>
+          <div class="cell-actions">
+            <button class="btn primary" data-action="execute-site-req" data-id="${Number(item.id || 0)}" type="button" ${canExecute ? "" : "disabled"}>등록 처리</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  function renderSiteReqSheet() {
+    const body = $("#siteReqBody");
+    if (!body) return;
+    if (!Array.isArray(siteRegistryRequests) || !siteRegistryRequests.length) {
+      body.innerHTML = '<tr><td colspan="10" class="cell-center">요청이 없습니다.</td></tr>';
+      return;
+    }
+    body.innerHTML = siteRegistryRequests.map((item) => siteReqRowHtml(item)).join("");
+  }
+
+  async function loadSiteRegistryRequests() {
+    if (!isSuperAdminView) return;
+    const status = String($("#siteReqStatus")?.value || "pending").trim().toLowerCase();
+    const qs = new URLSearchParams();
+    qs.set("status", status || "pending");
+    qs.set("limit", "200");
+    const data = await jfetch(`/api/site_registry/requests?${qs.toString()}`);
+    siteRegistryRequests = Array.isArray(data.items) ? data.items : [];
+    updateSiteReqMeta(data.pending_count || 0);
+    renderSiteReqSheet();
+  }
+
+  async function executeSiteRegistryRequest(id) {
+    const req = siteRegistryRequests.find((x) => Number(x.id) === Number(id));
+    if (!req) return;
+    const siteName = String(req.site_name || "-");
+    const requestedCode = String(req.requested_site_code || "").trim().toUpperCase();
+    const ok = confirm(
+      requestedCode
+        ? `요청 #${id}를 처리하여 '${siteName}' 단지코드 '${requestedCode}'를 등록할까요?`
+        : `요청 #${id}를 처리하여 '${siteName}' 단지코드를 등록할까요?`
+    );
+    if (!ok) return;
+    const payload = {};
+    if (requestedCode) payload.site_code = requestedCode;
+    const data = await jfetch(`/api/site_registry/requests/${Number(id)}/execute`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const resolvedCode = String((data && data.site_code) || "").trim().toUpperCase();
+    setSiteReqMsg(
+      resolvedCode
+        ? `요청 #${id} 처리 완료: ${siteName} (${resolvedCode})`
+        : `요청 #${id} 처리 완료`,
+      false
+    );
+    await loadSiteRegistryRequests();
   }
 
   function uniqueSiteNames(sites) {
@@ -549,8 +645,13 @@
 
   function wire() {
     $("#btnReload").addEventListener("click", () => {
-      const run = isAdminView ? loadUsers() : loadSelfProfile();
-      run.catch((e) => setMsg(e.message, true));
+      if (!isAdminView) {
+        loadSelfProfile().catch((e) => setMsg(e.message, true));
+        return;
+      }
+      const jobs = [loadUsers()];
+      if (isSuperAdminView) jobs.push(loadSiteRegistryRequests());
+      Promise.all(jobs).catch((e) => setMsg(e.message, true));
     });
     $("#btnReset").addEventListener("click", () => {
       if (isAdminView) {
@@ -598,6 +699,15 @@
         collectFilterStateFromUI();
         loadUsers().catch((err) => setMsg(err.message, true));
       });
+
+      if (isSuperAdminView) {
+        $("#btnLoadSiteReq")?.addEventListener("click", () => {
+          loadSiteRegistryRequests().catch((e) => setSiteReqMsg(e.message || String(e), true));
+        });
+        $("#siteReqStatus")?.addEventListener("change", () => {
+          loadSiteRegistryRequests().catch((e) => setSiteReqMsg(e.message || String(e), true));
+        });
+      }
     }
 
     $("#btnLogout").addEventListener("click", () => {
@@ -623,6 +733,15 @@
           removeUser(id).catch((err) => setMsg(err.message, true));
         }
       });
+
+      if (isSuperAdminView) {
+        $("#siteReqBody")?.addEventListener("click", (e) => {
+          const btn = e.target.closest("button[data-action='execute-site-req']");
+          if (!btn) return;
+          const reqId = Number(btn.dataset.id);
+          executeSiteRegistryRequest(reqId).catch((err) => setSiteReqMsg(err.message || String(err), true));
+        });
+      }
     }
   }
 
@@ -634,6 +753,9 @@
       clearForm();
       updateFilterControls();
       await loadUsers();
+      if (isSuperAdminView) {
+        await loadSiteRegistryRequests();
+      }
     } else {
       await loadSelfProfile();
     }
