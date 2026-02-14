@@ -108,6 +108,13 @@ h2 {
   font-weight: 800;
 }
 
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .btn.primary {
   border-color: color-mix(in srgb, var(--primary) 70%, var(--line));
   background: color-mix(in srgb, var(--primary) 24%, var(--bg-soft));

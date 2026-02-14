@@ -769,6 +769,12 @@
     await checkAlreadyLoggedIn();
   }
 
+  try {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/pwa/sw.js?v=20260208a").catch(() => {});
+    }
+  } catch (_e) {}
+
   init().catch((e) => {
     setMsg($("#loginMsg"), e.message || String(e), true);
   });

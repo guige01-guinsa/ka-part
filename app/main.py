@@ -59,6 +59,12 @@ async def _maintenance_guard(request: Request, call_next):
                 path.startswith("/api/backup")
                 or path in {"/api/health", "/api/auth/me", "/api/auth/logout"}
             )
+            if (not allow) and request.method == "GET" and path in {
+                "/api/v1/notices",
+                "/api/v1/faqs",
+                "/api/v1/codes/complaint-categories",
+            }:
+                allow = True
             if not allow:
                 return JSONResponse(
                     {

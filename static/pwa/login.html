@@ -8,6 +8,8 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
+  <meta name="theme-color" content="#0f1825" />
+  <link rel="manifest" href="/pwa/manifest.webmanifest?v=2" />
   <link rel="stylesheet" href="/pwa/login.css?v=20260214c" />
 </head>
 <body>
@@ -27,6 +29,14 @@
         <button id="btnLogin" class="btn primary" type="button">로그인</button>
       </div>
       <div id="loginMsg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>로그인 없이 보기</h2>
+      <p class="sub">공지/FAQ 및 기본 안내는 로그인 없이 확인할 수 있습니다.</p>
+      <div class="actions">
+        <a class="btn" href="/pwa/public.html">공지/FAQ/안내</a>
+      </div>
     </section>
 
     <section id="signupCard" class="card">
