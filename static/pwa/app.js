@@ -113,7 +113,7 @@
     const accountType = String((user && user.account_type) || "").trim();
     if (accountType) return accountType;
     if (hasAdminPermission(user)) return isSuperAdmin(user) ? "최고관리자" : "운영관리자";
-    if (hasSiteAdminPermission(user)) return "단지관리자";
+    if (hasSiteAdminPermission(user)) return "단지대표자";
     return "사용자";
   }
 

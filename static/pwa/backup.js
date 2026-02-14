@@ -71,7 +71,7 @@
   function setMetaLine() {
     const el = $("#metaLine");
     if (!el || !me) return;
-    const level = isAdmin(me) ? "관리자" : "단지관리자";
+    const level = isAdmin(me) ? "관리자" : "단지대표자";
     const code = (me.site_code || "").trim().toUpperCase();
     const name = (me.site_name || "").trim();
     const siteText = code ? `${code}${name ? ` / ${name}` : ""}` : (name || "-");
@@ -378,7 +378,7 @@
   async function init() {
     me = await KAAuth.requireAuth();
     if (!canManageBackup(me)) {
-      alert("관리자/단지관리자만 접근할 수 있습니다.");
+      alert("관리자/단지대표자만 접근할 수 있습니다.");
       window.location.href = "/pwa/";
       return;
     }

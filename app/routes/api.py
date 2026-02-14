@@ -114,7 +114,7 @@ router = APIRouter()
 
 VALID_USER_ROLES = [
     "최고/운영관리자",
-    "단지관리자",
+    "단지대표자",
     "사용자",
     "보안/경비",
     "입주민",
@@ -129,9 +129,10 @@ ADMIN_SCOPE_LABELS = {
 RESIDENT_ROLE_SET = {"입주민", "주민", "세대주민"}
 BOARD_ROLE_SET = {"입대의", "입주자대표", "입주자대표회의"}
 SECURITY_ROLE_KEYWORDS = ("보안", "경비")
+SITE_ADMIN_ROLE_SET = {"단지대표자", "단지관리자"}  # accept legacy label for backward compatibility
 ROLE_LABEL_BY_PERMISSION = {
     "admin": "최고/운영관리자",
-    "site_admin": "단지관리자",
+    "site_admin": "단지대표자",
     "user": "사용자",
     "security_guard": "보안/경비",
     "resident": "입주민",
@@ -362,7 +363,7 @@ def _permission_level_from_role_text(value: Any, *, allow_admin_levels: bool = T
     role = _normalized_role_text(value)
     if allow_admin_levels and role in {"최고/운영관리자", "최고관리자", "운영관리자"}:
         return "admin"
-    if allow_admin_levels and role == "단지관리자":
+    if allow_admin_levels and role in SITE_ADMIN_ROLE_SET:
         return "site_admin"
     if _is_security_role(role):
         return "security_guard"
@@ -1105,7 +1106,7 @@ def _account_type_from_user(user: Dict[str, Any]) -> str:
     if level == "admin":
         return "최고/운영관리자"
     if level == "site_admin":
-        return "단지관리자"
+        return "단지대표자"
     if level == "security_guard":
         return "보안/경비"
     if level == "resident":
@@ -1905,6 +1906,7 @@ def parking_context(
 ):
     user, _token = _require_auth(request)
     permission_level = _parking_permission_level_from_user(user)
+    portal_permission_level = _permission_level_from_user(user)
     is_admin_user = int(user.get("is_admin") or 0) == 1
 
     # Non-admin accounts must always use their assigned site context.
@@ -1980,6 +1982,7 @@ def parking_context(
             "site_code": clean_site_code,
             "site_name": clean_site_name,
             "permission_level": permission_level,
+            "portal_permission_level": portal_permission_level,
             "login_id": _clean_login_id(user.get("login_id") or "ka-part-user"),
             "user_name": _clean_name(user.get("name") or user.get("login_id") or "사용자"),
         }
@@ -2983,7 +2986,7 @@ def api_backup_status(request: Request):
         "permission_level": _permission_level_from_user(user),
         "schedules": [
             {"key": "daily_full", "label": "전체 시스템 DB 자동백업", "when": f"매일 00:00 ({backup_timezone_name()})"},
-            {"key": "weekly_site", "label": "단지관리자 단지코드 자동백업", "when": f"매주 금요일 00:20 ({backup_timezone_name()})"},
+            {"key": "weekly_site", "label": "단지대표자 단지코드 자동백업", "when": f"매주 금요일 00:20 ({backup_timezone_name()})"},
         ],
     }
 
@@ -3754,7 +3757,7 @@ def api_user_roles(request: Request):
         "roles": VALID_USER_ROLES,
         "permission_levels": [
             {"key": "admin", "label": "최고/운영관리자"},
-            {"key": "site_admin", "label": "단지관리자"},
+            {"key": "site_admin", "label": "단지대표자"},
             {"key": "user", "label": "사용자"},
             {"key": "security_guard", "label": "보안/경비"},
             {"key": "resident", "label": "입주민"},

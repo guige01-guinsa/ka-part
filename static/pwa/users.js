@@ -6,7 +6,7 @@
   let roles = [];
   let permissionLevels = [
     { key: "admin", label: "최고/운영관리자" },
-    { key: "site_admin", label: "단지관리자" },
+    { key: "site_admin", label: "단지대표자" },
     { key: "user", label: "사용자" },
     { key: "security_guard", label: "보안/경비" },
     { key: "resident", label: "입주민" },
@@ -18,7 +18,7 @@
   ];
   const ROLE_BY_PERMISSION = {
     admin: "최고/운영관리자",
-    site_admin: "단지관리자",
+    site_admin: "단지대표자",
     user: "사용자",
     security_guard: "보안/경비",
     resident: "입주민",
@@ -112,7 +112,7 @@
     const txt = String(role || "").trim();
     if (!txt) return "user";
     if (txt === "최고/운영관리자" || txt === "최고관리자" || txt === "운영관리자") return "admin";
-    if (txt === "단지관리자") return "site_admin";
+    if (txt === "단지대표자" || txt === "단지관리자") return "site_admin";
     if (txt === "보안/경비" || txt.includes("보안") || txt.includes("경비")) return "security_guard";
     if (isResidentRole(txt)) return "resident";
     if (txt === "입대의" || txt === "입주자대표" || txt === "입주자대표회의") return "board_member";
@@ -260,7 +260,7 @@
     const adminCount = users.filter((u) => u.is_admin && u.is_active).length;
     const siteAdminCount = users.filter((u) => !u.is_admin && u.is_site_admin && u.is_active).length;
     const userCount = users.filter((u) => !u.is_admin && !u.is_site_admin && u.is_active).length;
-    el.textContent = `조회 ${count}명 (활성 ${active}명 / 관리자 ${adminCount}명 / 단지관리자 ${siteAdminCount}명 / 사용자 ${userCount}명 / 권장 ${recommendedCount}명)`;
+    el.textContent = `조회 ${count}명 (활성 ${active}명 / 관리자 ${adminCount}명 / 단지대표자 ${siteAdminCount}명 / 사용자 ${userCount}명 / 권장 ${recommendedCount}명)`;
     el.classList.toggle("warn", active > recommendedCount);
   }
 

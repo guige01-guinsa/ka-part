@@ -791,8 +791,8 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     con.execute(
         """
         UPDATE staff_users
-        SET role='단지관리자'
-        WHERE is_admin=0 AND is_site_admin=1 AND TRIM(COALESCE(role,''))<>'단지관리자';
+        SET role='단지대표자'
+        WHERE is_admin=0 AND is_site_admin=1 AND TRIM(COALESCE(role,''))<>'단지대표자';
         """
     )
     con.execute(

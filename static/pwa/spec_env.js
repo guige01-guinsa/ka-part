@@ -1230,7 +1230,7 @@
   async function init() {
     me = await KAAuth.requireAuth();
     if (!canManageSpecEnv(me)) {
-      alert("관리자/단지관리자만 접근할 수 있습니다.");
+      alert("관리자/단지대표자만 접근할 수 있습니다.");
       window.location.href = "/pwa/";
       return;
     }

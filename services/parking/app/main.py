@@ -395,7 +395,7 @@ def _require_manager_session(request: Request) -> dict[str, Any]:
     if not sess:
         raise HTTPException(status_code=401, detail="Login required")
     if not _is_manager_session(sess):
-        raise HTTPException(status_code=403, detail="관리자/단지관리자 권한이 필요합니다.")
+        raise HTTPException(status_code=403, detail="관리 권한이 필요합니다.")
     return sess
 
 
@@ -714,6 +714,9 @@ def sso_login(ctx: str):
         "display_name": str(payload.get("user_name") or "").strip(),
         "site_name": str(payload.get("site_name") or "").strip(),
     }
+    portal_level = str(payload.get("portal_permission_level") or "").strip().lower()
+    if portal_level:
+        extras["portal_permission_level"] = portal_level
     token = make_session(session_user, role, site_code=site_code, extras=extras)
     resp = RedirectResponse(url=app_url("/admin2"), status_code=302)
     resp.set_cookie("parking_session", token, httponly=True, secure=COOKIE_SECURE, samesite="lax", path=ROOT_PATH or "/")
@@ -1572,13 +1575,26 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       return data;
     }
 
+    function roleLabel(){
+      const r = String(boot.role || "").trim().toLowerCase();
+      if (r === "admin") return "관리자";
+      if (r === "viewer") return "일반사용자";
+      if (r === "guard") {
+        const portal = String(boot.portal_permission_level || "").trim().toLowerCase();
+        if (portal === "security_guard") return "보안/경비";
+        if (portal === "site_admin") return "단지대표자";
+        if (portal === "admin") return "관리자";
+        return "단지대표자";
+      }
+      return r || "-";
+    }
+
     function ctxLine(){
-      const roleMap = { admin: "관리자", guard: "단지관리자", viewer: "일반사용자" };
-      const role = roleMap[String(boot.role || "")] || String(boot.role || "-");
+      const role = roleLabel();
       const site = [boot.site_code || "-", boot.site_name || ""].filter(Boolean).join(" / ");
       $("ctxLine").textContent = `단지: ${site} · 사용자: ${boot.display_name || "-"} · 권한: ${role}`;
       $("permLine").textContent = isManager
-        ? "관리자/단지관리자 권한으로 차량 DB CRUD/엑셀가져오기를 사용할 수 있습니다."
+        ? "관리 권한으로 차량 DB CRUD/엑셀가져오기를 사용할 수 있습니다."
         : "현재 권한은 차량 DB CRUD/엑셀가져오기를 사용할 수 없습니다.";
       $("btnBack").setAttribute("href", boot.back_url || "/pwa/");
       $("btnScanner").setAttribute("href", boot.scanner_url || "./scanner");
@@ -2045,6 +2061,7 @@ def admin2(request: Request):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     role = str(s.get("r") or "").strip().lower()
+    portal_permission_level = str(s.get("portal_permission_level") or "").strip().lower()
     site_code = _session_site_code(s)
     site_name = str(s.get("site_name") or "").strip()
     display_name = str(s.get("display_name") or s.get("u") or "").strip() or "사용자"
@@ -2052,6 +2069,7 @@ def admin2(request: Request):
     context = {
         "role": role,
         "is_manager": _is_manager_session(s),
+        "portal_permission_level": portal_permission_level,
         "site_code": site_code,
         "site_name": site_name,
         "display_name": display_name,

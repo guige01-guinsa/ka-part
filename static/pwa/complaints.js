@@ -172,7 +172,7 @@
   function updateMetaLine() {
     const el = $("#metaLine");
     if (!el || !me) return;
-    const level = me.is_admin ? "관리자" : (me.is_site_admin ? "단지관리자" : "일반");
+    const level = me.is_admin ? "관리자" : (me.is_site_admin ? "단지대표자" : "일반");
     const siteCode = String(me.site_code || "").trim().toUpperCase();
     const siteName = String(me.site_name || "").trim();
     const site = siteCode ? `${siteCode}${siteName ? ` / ${siteName}` : ""}` : (siteName || "-");
