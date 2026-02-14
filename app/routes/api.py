@@ -385,15 +385,13 @@ def _clean_site_name(value: Any, *, required: bool = False) -> str:
 
 
 def _clean_site_code(value: Any, *, required: bool = False) -> str:
-    site_code = (str(value or "")).strip().upper()
+    site_code = re.sub(r"[\s-]+", "", str(value or "").strip()).upper()
     if not site_code:
         if required:
             raise HTTPException(status_code=400, detail="site_code is required")
         return ""
-    if len(site_code) > 32:
-        raise HTTPException(status_code=400, detail="site_code length must be <= 32")
-    if not re.match(r"^[A-Z0-9][A-Z0-9._-]{0,31}$", site_code):
-        raise HTTPException(status_code=400, detail="site_code must match ^[A-Z0-9][A-Z0-9._-]{0,31}$")
+    if not re.match(r"^[A-Z]{3}[0-9]{5}$", site_code):
+        raise HTTPException(status_code=400, detail="site_code must match ^[A-Z]{3}[0-9]{5}$")
     return site_code
 
 

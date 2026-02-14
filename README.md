@@ -97,6 +97,7 @@ pwsh -File ops\stop_stack.ps1
 
 ## 참고
 - 운영 DB: `data/ka.db`
+- 단지코드 포맷: `AAA00000` (영문 대문자 3자 + 숫자 5자, 입력 시 공백/하이픈 제거 후 대문자 정규화)
 - 스키마 확장과 자동 보정은 `app/db.py`의 `init_db()`/`ensure_domain_tables()`에서 처리합니다.
 - 관리자 제원 설정 화면: `/pwa/spec_env.html`
 

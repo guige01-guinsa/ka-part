@@ -30,6 +30,10 @@ SCHEMA_PATH = BASE_DIR / "sql" / "schema.sql"
 
 _TABLE_COL_CACHE: Dict[str, List[str]] = {}
 VALID_ADMIN_SCOPES = {"super_admin", "ops_admin"}
+_SITE_CODE_REMOVE_RE = re.compile(r"[\s-]+")
+_SITE_CODE_FULL_RE = re.compile(r"^[A-Z]{3}[0-9]{5}$")
+_raw_site_prefix = str(os.getenv("KA_SITE_CODE_PREFIX", "APT") or "APT").strip().upper()
+SITE_CODE_PREFIX = _raw_site_prefix if re.fullmatch(r"[A-Z]{3}", _raw_site_prefix) else "APT"
 
 
 def _connect() -> sqlite3.Connection:
@@ -97,10 +101,58 @@ def _to_text(v: Any) -> Optional[str]:
 
 
 def _clean_site_code_value(value: Any) -> str | None:
-    raw = str(value or "").strip().upper()
+    raw = str(value or "").strip()
     if not raw:
         return None
-    return raw
+    normalized = _SITE_CODE_REMOVE_RE.sub("", raw).upper()
+    if not normalized:
+        return None
+    if not _SITE_CODE_FULL_RE.fullmatch(normalized):
+        return None
+    return normalized
+
+
+def _normalize_site_code_columns(con: sqlite3.Connection) -> None:
+    tables = [
+        ("site_registry", "id", "site_code"),
+        ("site_env_configs", "id", "site_code"),
+        ("site_env_config_versions", "id", "site_code"),
+        ("staff_users", "id", "site_code"),
+        ("backup_history", "id", "site_code"),
+        ("security_audit_logs", "id", "target_site_code"),
+        ("privileged_change_requests", "id", "target_site_code"),
+    ]
+    for table, id_col, code_col in tables:
+        exists = con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (table,),
+        ).fetchone()
+        if not exists:
+            continue
+        cols = table_columns(con, table)
+        if id_col not in cols or code_col not in cols:
+            continue
+        rows = con.execute(
+            f"""
+            SELECT {id_col} AS row_id, {code_col} AS site_code
+            FROM {table}
+            WHERE {code_col} IS NOT NULL AND TRIM({code_col})<>''
+            """
+        ).fetchall()
+        for row in rows:
+            rid = int(row["row_id"] or 0)
+            if rid <= 0:
+                continue
+            raw = str(row["site_code"] or "").strip().upper()
+            if not raw:
+                continue
+            normalized = _clean_site_code_value(raw)
+            if not normalized or normalized == raw:
+                continue
+            con.execute(
+                f"UPDATE {table} SET {code_col}=? WHERE {id_col}=?",
+                (normalized, rid),
+            )
 
 
 def _require_site_name_value(site_name: Any) -> str:
@@ -1048,6 +1100,7 @@ def init_db() -> None:
         if SCHEMA_PATH.exists():
             con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         ensure_domain_tables(con)
+        _normalize_site_code_columns(con)
         migrate_legacy_tab_keys(con)
         migrate_legacy_entry_values(con)
         con.commit()
@@ -1079,7 +1132,7 @@ def _used_site_codes(con: sqlite3.Connection) -> set[str]:
     ]
     for sql in queries:
         for row in con.execute(sql).fetchall():
-            code = str(row["site_code"] or "").strip().upper()
+            code = _clean_site_code_value(row["site_code"]) or ""
             if code:
                 codes.add(code)
     return codes
@@ -1089,7 +1142,7 @@ def _next_site_code(con: sqlite3.Connection) -> str:
     used = _used_site_codes(con)
     max_seq = 0
     for code in used:
-        m = re.fullmatch(r"APT(\d{5})", code)
+        m = re.fullmatch(rf"{SITE_CODE_PREFIX}(\d{{5}})", code)
         if not m:
             continue
         try:
@@ -1098,7 +1151,7 @@ def _next_site_code(con: sqlite3.Connection) -> str:
             continue
     seq = max_seq + 1
     while True:
-        candidate = f"APT{seq:05d}"
+        candidate = f"{SITE_CODE_PREFIX}{seq:05d}"
         if candidate not in used:
             return candidate
         seq += 1
@@ -1143,7 +1196,7 @@ def resolve_or_create_site_code(
         resolved_code = ""
 
         if by_name:
-            resolved_code = str(by_name["site_code"] or "").strip().upper()
+            resolved_code = _clean_site_code_value(by_name["site_code"]) or ""
             existing_site_id = _clean_site_id_value(by_name["site_id"])
             existing_name = str(by_name["site_name"] or "").strip()
             update_cols: List[str] = []
@@ -1156,7 +1209,20 @@ def resolve_or_create_site_code(
                 update_cols.append("site_name=?")
                 update_params.append(clean_site_name)
 
-            if clean_preferred and clean_preferred != resolved_code:
+            if not resolved_code:
+                if clean_preferred:
+                    update_cols.append("site_code=?")
+                    update_params.append(clean_preferred)
+                    resolved_code = clean_preferred
+                elif allow_create:
+                    generated = _next_site_code(con)
+                    update_cols.append("site_code=?")
+                    update_params.append(generated)
+                    resolved_code = generated
+                else:
+                    raise ValueError("site_code mapping not found")
+
+            if clean_preferred and resolved_code and clean_preferred != resolved_code:
                 if not allow_remap:
                     raise ValueError("site_code is immutable for existing site_name; use approved migration")
                 if by_code and int(by_code["id"]) != int(by_name["id"]):
@@ -1192,7 +1258,7 @@ def resolve_or_create_site_code(
                     """,
                     (clean_site_name, clean_site_id, ts, int(by_code["id"])),
                 )
-            resolved_code = str(by_code["site_code"] or "").strip().upper()
+            resolved_code = _clean_site_code_value(by_code["site_code"]) or clean_preferred or ""
         else:
             if not allow_create:
                 raise ValueError("site_code mapping not found")
@@ -1264,9 +1330,14 @@ def resolve_or_create_site_code(
             """
             UPDATE staff_users
             SET site_code=?, updated_at=?
-            WHERE site_name=? AND (site_code IS NULL OR TRIM(site_code)='')
+            WHERE site_name=?
+              AND (
+                site_code IS NULL
+                OR TRIM(site_code)=''
+                OR REPLACE(REPLACE(UPPER(TRIM(site_code)), '-', ''), ' ', '')<>?
+              )
             """,
-            (resolved_code, ts, clean_site_name),
+            (resolved_code, ts, clean_site_name, resolved_code),
         )
         con.execute(
             """
@@ -1281,9 +1352,14 @@ def resolve_or_create_site_code(
             """
             UPDATE site_env_configs
             SET site_code=?, updated_at=?
-            WHERE site_name=? AND (site_code IS NULL OR TRIM(site_code)='')
+            WHERE site_name=?
+              AND (
+                site_code IS NULL
+                OR TRIM(site_code)=''
+                OR REPLACE(REPLACE(UPPER(TRIM(site_code)), '-', ''), ' ', '')<>?
+              )
             """,
-            (resolved_code, ts, clean_site_name),
+            (resolved_code, ts, clean_site_name, resolved_code),
         )
         con.commit()
         return resolved_code
