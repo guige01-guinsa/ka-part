@@ -18,6 +18,10 @@ from .backup_manager import (
     start_backup_scheduler,
     stop_backup_scheduler,
 )
+from .ops_diagnostics import (
+    start_ops_diagnostics_scheduler,
+    stop_ops_diagnostics_scheduler,
+)
 from .routes.api import router as api_router
 from .routes.complaints import router as complaints_router
 
@@ -33,10 +37,12 @@ def _startup():
     init_db()
     init_complaints_db()
     start_backup_scheduler()
+    start_ops_diagnostics_scheduler()
 
 
 @app.on_event("shutdown")
 def _shutdown():
+    stop_ops_diagnostics_scheduler()
     stop_backup_scheduler()
 
 app.include_router(api_router, prefix="/api")

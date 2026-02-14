@@ -28,6 +28,7 @@
   let templates = [];
   let baseSchema = {};
   let activeSchema = {};
+  let handlingSiteCodeConflict = false;
   const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnGoMain"];
 
   function canManageSpecEnv(user) {
@@ -43,11 +44,33 @@
     return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
   }
 
+  function canManageSiteCodeMigration(user) {
+    return isSuperAdmin(user);
+  }
+
   function setMsg(msg, isErr = false) {
     const el = $("#msg");
     if (!el) return;
     el.textContent = msg || "";
     el.classList.toggle("err", !!isErr);
+  }
+
+  function setMigrationMsg(msg, isErr = false) {
+    const el = $("#migMsg");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.classList.toggle("err", !!isErr);
+  }
+
+  function showMigrationCard(scrollIntoView = false) {
+    const card = $("#migrationCard");
+    if (!card) return false;
+    const allowed = canManageSiteCodeMigration(me);
+    card.hidden = !allowed;
+    if (allowed && scrollIntoView) {
+      card.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    return allowed;
   }
 
   function clearActionSuccess(exceptButtonId = "") {
@@ -385,8 +408,205 @@
     $("#preview").textContent = lines.join("\n");
   }
 
+  function isSiteCodeConflictMessage(message) {
+    const msg = String(message || "").trim();
+    if (!msg) return false;
+    return (
+      msg.includes("site_code is immutable for existing site_name") ||
+      msg.includes("site_code is immutable for existing site_env") ||
+      msg.includes("site_code already mapped to another site_name") ||
+      msg.includes("site_name currently mapped to another site_code") ||
+      msg.includes("단지코드/단지명 충돌")
+    );
+  }
+
+  function migrationStatusBadge(status) {
+    const raw = String(status || "").trim().toLowerCase();
+    if (raw === "pending") return { cls: "pending", text: "대기" };
+    if (raw === "approved") return { cls: "approved", text: "승인됨" };
+    if (raw === "executed") return { cls: "executed", text: "실행됨" };
+    return { cls: "", text: raw || "-" };
+  }
+
+  function renderMigrationList(items) {
+    const wrap = $("#migList");
+    if (!wrap) return;
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      wrap.textContent = "등록된 마이그레이션 요청이 없습니다.";
+      return;
+    }
+    wrap.innerHTML = list
+      .map((item) => {
+        const id = Number(item.id || 0) || 0;
+        const statusRaw = String(item.status || "").trim().toLowerCase();
+        const status = migrationStatusBadge(statusRaw);
+        const payload = item && typeof item.payload === "object" ? item.payload : {};
+        const siteName = String(payload.site_name || item.target_site_name || "").trim();
+        const oldCode = String(payload.old_site_code || item.target_site_code || "").trim().toUpperCase();
+        const newCode = String(payload.new_site_code || "").trim().toUpperCase();
+        const reason = String(payload.reason || item.reason || "").trim();
+        const createdAt = String(item.created_at || "").trim();
+        const approvedAt = String(item.approved_at || "").trim();
+        const executedAt = String(item.executed_at || "").trim();
+        const approveBtn =
+          statusRaw === "pending"
+            ? `<button class="btn" type="button" data-mig-act="approve" data-id="${id}">승인</button>`
+            : "";
+        const executeBtn =
+          statusRaw === "approved"
+            ? `<button class="btn primary" type="button" data-mig-act="execute" data-id="${id}">실행</button>`
+            : "";
+        return `
+          <div class="mig-item">
+            <div class="mig-head">
+              <strong>#${id}</strong>
+              <span class="mig-status ${status.cls}">${status.text}</span>
+              <span>${escapeHtml(siteName || "-")} [${escapeHtml(oldCode || "-")} -> ${escapeHtml(newCode || "-")}]</span>
+            </div>
+            <div class="hint">사유: ${escapeHtml(reason || "-")}</div>
+            <div class="hint">요청: ${escapeHtml(createdAt || "-")} / 승인: ${escapeHtml(approvedAt || "-")} / 실행: ${escapeHtml(executedAt || "-")}</div>
+            <div class="row">${approveBtn}${executeBtn}</div>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  async function prefillMigrationContext() {
+    if (!canManageSiteCodeMigration(me)) return null;
+    const siteNameEl = $("#migSiteName");
+    const oldCodeEl = $("#migOldCode");
+    const newCodeEl = $("#migNewCode");
+    const reasonEl = $("#migReason");
+    if (!siteNameEl || !oldCodeEl || !newCodeEl || !reasonEl) return null;
+
+    const qs = new URLSearchParams();
+    const siteId = getSiteId();
+    const siteName = getSiteName();
+    if (siteId > 0) qs.set("site_id", String(siteId));
+    if (siteName) qs.set("site_name", siteName);
+
+    let resolved = null;
+    if (qs.toString()) {
+      try {
+        resolved = await KAAuth.requestJson(`/api/site_identity?${qs.toString()}`);
+      } catch (_e) {
+        resolved = null;
+      }
+    }
+    const resolvedName = String((resolved && resolved.site_name) || siteName || "").trim();
+    const resolvedCode = String((resolved && resolved.site_code) || getSiteCode() || "").trim().toUpperCase();
+    siteNameEl.value = resolvedName;
+    oldCodeEl.value = resolvedCode;
+    if (!newCodeEl.value || newCodeEl.value.toUpperCase() === resolvedCode) {
+      const current = String(getSiteCode() || "").trim().toUpperCase();
+      newCodeEl.value = current && current !== resolvedCode ? current : "";
+    }
+    if (!reasonEl.value.trim()) {
+      reasonEl.value = "단지코드 충돌 복구";
+    }
+    return { site_name: resolvedName, old_site_code: resolvedCode, new_site_code: newCodeEl.value.trim().toUpperCase() };
+  }
+
+  async function loadMigrationRequests() {
+    if (!canManageSiteCodeMigration(me)) return [];
+    const data = await jfetch("/api/site_code/migration/requests?limit=100");
+    const items = Array.isArray(data.items) ? data.items : [];
+    renderMigrationList(items);
+    return items;
+  }
+
+  async function createMigrationRequest() {
+    if (!canManageSiteCodeMigration(me)) {
+      throw new Error("최고관리자만 마이그레이션 요청을 만들 수 있습니다.");
+    }
+    await prefillMigrationContext();
+    const siteName = String($("#migSiteName")?.value || "").trim();
+    const oldCode = String($("#migOldCode")?.value || "").trim().toUpperCase();
+    const newCode = String($("#migNewCode")?.value || "").trim().toUpperCase();
+    const reason = String($("#migReason")?.value || "").trim();
+    const expiresRaw = Number($("#migExpiresHours")?.value || 24);
+    const expiresHours = Number.isFinite(expiresRaw) ? Math.max(1, Math.min(72, Math.trunc(expiresRaw))) : 24;
+    if (!siteName || !oldCode || !newCode) {
+      throw new Error("site_name / 기존 site_code / 변경 site_code를 모두 입력하세요.");
+    }
+    if (oldCode === newCode) {
+      throw new Error("변경 site_code는 기존 값과 달라야 합니다.");
+    }
+    if (reason.length < 4) {
+      throw new Error("변경 사유를 4자 이상 입력하세요.");
+    }
+    const data = await jfetch("/api/site_code/migration/request", {
+      method: "POST",
+      body: JSON.stringify({
+        site_name: siteName,
+        old_site_code: oldCode,
+        new_site_code: newCode,
+        reason,
+        expires_hours: expiresHours,
+        mfa_confirmed: true,
+      }),
+    });
+    const req = data && data.request ? data.request : null;
+    setMigrationMsg(`요청 생성 완료: #${Number((req && req.id) || 0) || "-"} (${oldCode} -> ${newCode})`);
+    await loadMigrationRequests().catch(() => {});
+    return req;
+  }
+
+  async function approveMigrationRequest(requestId) {
+    const rid = Number(requestId || 0);
+    if (rid <= 0) throw new Error("request_id가 올바르지 않습니다.");
+    await jfetch("/api/site_code/migration/approve", {
+      method: "POST",
+      body: JSON.stringify({ request_id: rid, mfa_confirmed: true }),
+    });
+    setMigrationMsg(`요청 #${rid} 승인 완료`);
+    await loadMigrationRequests().catch(() => {});
+  }
+
+  async function executeMigrationRequest(requestId) {
+    const rid = Number(requestId || 0);
+    if (rid <= 0) throw new Error("request_id가 올바르지 않습니다.");
+    await jfetch("/api/site_code/migration/execute", {
+      method: "POST",
+      body: JSON.stringify({ request_id: rid, mfa_confirmed: true }),
+    });
+    setMigrationMsg(`요청 #${rid} 실행 완료`);
+    await syncSiteIdentity(true).catch(() => {});
+    await loadMigrationRequests().catch(() => {});
+    await reloadConfig().catch(() => {});
+  }
+
+  async function openMigrationFlowFromConflict(detail) {
+    const msg = String(detail || "").trim();
+    if (!canManageSiteCodeMigration(me)) {
+      setMsg(`단지코드 충돌: ${msg}. 최고관리자에게 단지코드 마이그레이션 요청이 필요합니다.`, true);
+      return;
+    }
+    if (!showMigrationCard(true)) return;
+    await prefillMigrationContext().catch(() => {});
+    setMigrationMsg(`충돌 감지: ${msg}`, true);
+    await loadMigrationRequests().catch(() => {});
+  }
+
   async function jfetch(url, opts = {}) {
-    return KAAuth.requestJson(url, opts);
+    try {
+      return await KAAuth.requestJson(url, opts);
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err || "");
+      if (!handlingSiteCodeConflict && isSiteCodeConflictMessage(msg)) {
+        handlingSiteCodeConflict = true;
+        try {
+          await openMigrationFlowFromConflict(msg);
+        } catch (_e) {
+          // ignore
+        } finally {
+          handlingSiteCodeConflict = false;
+        }
+      }
+      throw err;
+    }
   }
 
   async function loadBaseSchema() {
@@ -911,11 +1131,13 @@
       setSiteName(getSiteName());
       setSiteId(0);
       syncSiteIdentity(true).catch(() => {});
+      prefillMigrationContext().catch(() => {});
     });
     $("#siteCode")?.addEventListener("change", () => {
       setSiteCode(getSiteCode());
       setSiteId(0);
       syncSiteIdentity(true).catch(() => {});
+      prefillMigrationContext().catch(() => {});
     });
     $("#btnTplAllOn").addEventListener("click", () => {
       setTemplateSelectionAll(true);
@@ -929,6 +1151,29 @@
       if (e.target.closest("input.tpl-tab")) syncTemplateFieldDisables();
     });
 
+    $("#btnMigRequest")?.addEventListener("click", () =>
+      createMigrationRequest().catch((e) => setMigrationMsg(e.message || String(e), true))
+    );
+    $("#btnMigRefresh")?.addEventListener("click", () =>
+      loadMigrationRequests()
+        .then(() => setMigrationMsg("요청 목록을 새로고침했습니다."))
+        .catch((e) => setMigrationMsg(e.message || String(e), true))
+    );
+    $("#migList")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-mig-act][data-id]");
+      if (!btn) return;
+      const action = String(btn.dataset.migAct || "").trim().toLowerCase();
+      const requestId = Number(btn.dataset.id || 0);
+      if (requestId <= 0) return;
+      if (action === "approve") {
+        approveMigrationRequest(requestId).catch((err) => setMigrationMsg(err.message || String(err), true));
+        return;
+      }
+      if (action === "execute") {
+        executeMigrationRequest(requestId).catch((err) => setMigrationMsg(err.message || String(err), true));
+      }
+    });
+
     $("#siteList").addEventListener("click", (e) => {
       const btn = e.target.closest("button.site-item[data-site]");
       if (!btn) return;
@@ -940,6 +1185,7 @@
       setSiteName(site);
       setSiteCode(code);
       reloadConfig().catch((err) => setMsg(err.message || String(err), true));
+      prefillMigrationContext().catch(() => {});
     });
   }
 
@@ -948,6 +1194,7 @@
     const siteInput = $("#siteName");
     const codeInput = $("#siteCode");
     if (!siteInput || !codeInput) return;
+    showMigrationCard(false);
     if (isAdmin(me)) {
       siteInput.readOnly = false;
       siteInput.removeAttribute("aria-readonly");
@@ -1001,6 +1248,10 @@
     enforceSitePolicy();
 
     wire();
+    if (canManageSiteCodeMigration(me)) {
+      await prefillMigrationContext().catch(() => {});
+      await loadMigrationRequests().catch(() => {});
+    }
     await loadBaseSchema();
     await loadTemplates();
     await loadSiteList().catch(() => {});

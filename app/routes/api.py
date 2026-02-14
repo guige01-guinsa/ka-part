@@ -26,6 +26,10 @@ from ..backup_manager import (
     restore_backup_zip,
     run_manual_backup,
 )
+from ..ops_diagnostics import (
+    get_ops_diagnostics_status,
+    run_ops_diagnostics,
+)
 from ..db import (
     cleanup_expired_sessions,
     count_active_resident_household_users,
@@ -1493,7 +1497,7 @@ def api_schema(request: Request, site_name: str = Query(default=""), site_code: 
     clean_site_name, resolved_site_code = _resolve_main_site_target(
         user, site_name, site_code, required=False
     )
-    schema, env_cfg = _site_schema_and_env(resolved_site_name, resolved_site_code)
+    schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
 
     # On first login for the first site registrant, show only the Home tab
     # until the site env is explicitly saved.
@@ -1513,6 +1517,18 @@ def api_schema(request: Request, site_name: str = Query(default=""), site_code: 
 def api_schema_alignment(request: Request):
     _require_admin(request)
     return schema_alignment_report()
+
+
+@router.get("/ops/diagnostics")
+def api_ops_diagnostics(request: Request):
+    _require_admin(request)
+    return {"ok": True, "diagnostics": get_ops_diagnostics_status()}
+
+
+@router.post("/ops/diagnostics/run")
+def api_ops_diagnostics_run(request: Request):
+    _require_admin(request)
+    return {"ok": True, "diagnostics": run_ops_diagnostics()}
 
 
 @router.get("/site_env_template")
@@ -1559,7 +1575,7 @@ def api_site_env(
     row = get_site_env_record(clean_site_name, site_code=clean_site_code or None)
     resolved_site_name = str((row or {}).get("site_name") or "").strip() or clean_site_name
     resolved_site_code = _clean_site_code((row or {}).get("site_code"), required=False) or clean_site_code
-    schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
+    schema, env_cfg = _site_schema_and_env(resolved_site_name, resolved_site_code)
     resolved_identity = resolve_site_identity(
         site_id=_clean_site_id(site_id, required=False),
         site_name=resolved_site_name,

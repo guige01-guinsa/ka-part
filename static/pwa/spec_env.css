@@ -275,3 +275,48 @@ pre {
   font-size: 13px;
   color: var(--muted);
 }
+
+.mig-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-soft) 74%, black 26%);
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.mig-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.mig-head strong {
+  font-size: 13px;
+}
+
+.mig-status {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mig-status.pending {
+  border-color: color-mix(in srgb, #ffb347 78%, var(--line));
+  color: #ffd49b;
+}
+
+.mig-status.approved {
+  border-color: color-mix(in srgb, #4aa3ff 78%, var(--line));
+  color: #a8d4ff;
+}
+
+.mig-status.executed {
+  border-color: color-mix(in srgb, #23d17c 80%, var(--line));
+  color: #b8ffd7;
+}

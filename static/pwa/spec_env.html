@@ -70,6 +70,39 @@
       <div id="msg" class="msg"></div>
     </section>
 
+    <section id="migrationCard" class="card" hidden>
+      <h2>단지코드 충돌 복구</h2>
+      <div class="hint">최고관리자 전용: 충돌 발생 시 단지코드 마이그레이션 요청/승인/실행을 이 화면에서 진행할 수 있습니다.</div>
+      <div class="row">
+        <label class="field grow">
+          <span>site_name</span>
+          <input id="migSiteName" type="text" readonly />
+        </label>
+        <label class="field grow">
+          <span>기존 site_code</span>
+          <input id="migOldCode" type="text" readonly />
+        </label>
+        <label class="field grow">
+          <span>변경 site_code</span>
+          <input id="migNewCode" type="text" maxlength="32" placeholder="예: APT00002" />
+        </label>
+      </div>
+      <div class="row">
+        <label class="field grow">
+          <span>변경 사유</span>
+          <input id="migReason" type="text" maxlength="120" placeholder="예: 단지코드 표준화 및 충돌 복구" />
+        </label>
+        <label class="field">
+          <span>요청 만료(시간)</span>
+          <input id="migExpiresHours" type="number" min="1" max="72" value="24" />
+        </label>
+        <button id="btnMigRequest" class="btn danger" type="button">요청 생성</button>
+        <button id="btnMigRefresh" class="btn" type="button">요청 새로고침</button>
+      </div>
+      <div id="migMsg" class="msg"></div>
+      <div id="migList" class="list"></div>
+    </section>
+
     <section class="card">
       <h2>적용 미리보기</h2>
       <pre id="preview"></pre>
@@ -82,6 +115,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260207i"></script>
-  <script src="/pwa/spec_env.js?v=20260214b"></script>
+  <script src="/pwa/spec_env.js?v=20260214c"></script>
 </body>
 </html>
