@@ -498,16 +498,27 @@ async def upload_complaint_attachments(
     saved: List[Tuple[str, str, int]] = []
     saved_paths: List[Path] = []
 
+    def _cleanup_saved_files() -> None:
+        for p in list(saved_paths):
+            try:
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                pass
+        saved_paths.clear()
+
     for upload in uploads:
         ct = str(upload.content_type or "").strip().lower()
         suffix = Path(str(upload.filename or "")).suffix.lower()
         is_image = (ct.startswith("image/") and (ct in _ALLOWED_IMAGE_MIME)) or (suffix in _ALLOWED_IMAGE_EXTS)
         if not is_image:
+            _cleanup_saved_files()
             raise HTTPException(status_code=400, detail="이미지 파일(jpg/png/webp/gif/heic)만 업로드할 수 있습니다.")
         ext = _guess_image_ext(upload)
         name = f"{uuid.uuid4().hex}{ext}"
         dest = (complaint_dir / name).resolve()
         if not dest.is_relative_to(complaint_dir):
+            _cleanup_saved_files()
             raise HTTPException(status_code=400, detail="파일 경로가 올바르지 않습니다.")
         try:
             size = await _save_upload_file(upload, dest, max_bytes=COMPLAINT_UPLOAD_MAX_FILE_BYTES)
@@ -517,6 +528,7 @@ async def upload_complaint_attachments(
                     dest.unlink()
             except Exception:
                 pass
+            _cleanup_saved_files()
             raise
         total_bytes += int(size)
         if total_bytes > max(1, COMPLAINT_UPLOAD_MAX_TOTAL_BYTES):
@@ -524,6 +536,7 @@ async def upload_complaint_attachments(
                 dest.unlink()
             except Exception:
                 pass
+            _cleanup_saved_files()
             raise HTTPException(
                 status_code=413,
                 detail=f"사진 업로드 총 용량은 최대 {COMPLAINT_UPLOAD_MAX_TOTAL_BYTES // (1024 * 1024)}MB까지 가능합니다.",
