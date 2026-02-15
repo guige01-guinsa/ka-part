@@ -811,6 +811,10 @@
 
   async function init() {
     me = await KAAuth.requireAuth();
+    if (!me || !me.is_admin) {
+      window.location.replace("/pwa/profile.html");
+      return;
+    }
     await loadRoles();
     applyMode();
     if (isAdminView) {
@@ -820,8 +824,6 @@
       if (isSuperAdminView) {
         await loadSiteRegistryRequests();
       }
-    } else {
-      await loadSelfProfile();
     }
     wire();
   }

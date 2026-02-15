@@ -1333,6 +1333,9 @@
     $("#btnPdf")?.addEventListener("click", () => {
       doPdf().catch((err) => alert("PDF 오류: " + err.message));
     });
+    $("#btnProfile")?.addEventListener("click", () => {
+      window.location.href = "/pwa/profile.html";
+    });
     $("#btnUsers")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();

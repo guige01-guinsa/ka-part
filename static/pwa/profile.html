@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>내 정보</title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
+  />
+  <link rel="stylesheet" href="/pwa/profile.css?v=20260215a" />
+</head>
+<body>
+  <header class="top">
+    <div class="title">내 정보</div>
+    <div class="actions">
+      <a id="btnBack" class="btn" href="/pwa/">돌아가기</a>
+      <button id="btnReload" class="btn" type="button">새로고침</button>
+      <button id="btnLogout" class="btn" type="button">로그아웃</button>
+    </div>
+    <div id="metaLine" class="meta">로딩 중...</div>
+    <div id="msg" class="msg"></div>
+  </header>
+
+  <main class="main">
+    <section class="card">
+      <h2>기본 정보</h2>
+      <div class="grid two">
+        <label class="field">
+          <span>ID</span>
+          <input id="loginId" type="text" readonly />
+        </label>
+        <label class="field">
+          <span>권한</span>
+          <input id="permissionLevel" type="text" readonly />
+        </label>
+        <label class="field grow">
+          <span>단지</span>
+          <input id="siteDisplay" type="text" readonly />
+        </label>
+        <label class="field">
+          <span>동/호(선택)</span>
+          <input id="unitLabel" type="text" maxlength="80" placeholder="예: 101-1203" />
+        </label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>개인정보</h2>
+      <div class="grid two">
+        <label class="field">
+          <span>이름</span>
+          <input id="name" type="text" maxlength="40" placeholder="예: 홍길동" />
+        </label>
+        <label class="field">
+          <span>휴대폰(선택)</span>
+          <input id="phone" type="tel" maxlength="20" placeholder="예: 010-1234-5678" />
+        </label>
+        <label class="field grow">
+          <span>주소(선택)</span>
+          <input id="address" type="text" maxlength="200" placeholder="예: 서울시 ..." />
+        </label>
+        <label class="field">
+          <span>사무실 전화(선택)</span>
+          <input id="officePhone" type="tel" maxlength="20" placeholder="예: 02-123-4567" />
+        </label>
+        <label class="field">
+          <span>팩스(선택)</span>
+          <input id="officeFax" type="tel" maxlength="20" placeholder="예: 02-123-4567" />
+        </label>
+        <label class="field grow">
+          <span>메모(선택)</span>
+          <input id="note" type="text" maxlength="200" placeholder="예: 연락 가능 시간" />
+        </label>
+      </div>
+
+      <div class="grid">
+        <label class="field">
+          <span>현재 비밀번호(저장 시 필수)</span>
+          <input id="currentPassword" type="password" autocomplete="current-password" placeholder="현재 비밀번호" />
+        </label>
+      </div>
+
+      <div class="actions">
+        <button id="btnSave" class="btn primary" type="button">저장</button>
+        <button id="btnReset" class="btn" type="button">되돌리기</button>
+      </div>
+      <div class="hint">개인정보 수정은 본인 확인(현재 비밀번호) 후 저장됩니다.</div>
+    </section>
+
+    <section class="card">
+      <h2>비밀번호 변경</h2>
+      <div class="grid two">
+        <label class="field">
+          <span>현재 비밀번호</span>
+          <input id="oldPassword" type="password" autocomplete="current-password" placeholder="현재 비밀번호" />
+        </label>
+        <label class="field">
+          <span>새 비밀번호</span>
+          <input id="newPassword" type="password" autocomplete="new-password" placeholder="8~128자" />
+        </label>
+        <label class="field grow">
+          <span>새 비밀번호 확인</span>
+          <input id="newPassword2" type="password" autocomplete="new-password" placeholder="새 비밀번호 재입력" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnChangePassword" class="btn primary" type="button">비밀번호 변경</button>
+      </div>
+      <div class="hint">비밀번호는 8~128자 입니다.</div>
+    </section>
+
+    <section class="card danger-card">
+      <h2>탈퇴(삭제)</h2>
+      <div class="detail muted">
+        탈퇴하면 계정은 비활성화되며, 개인정보는 시스템 안정성을 해치지 않는 범위에서 삭제(비식별화)됩니다.
+        민원/점검 기록의 무결성을 위해 과거 기록은 익명 형태로 유지될 수 있습니다.
+      </div>
+      <div class="grid">
+        <label class="field">
+          <span>현재 비밀번호</span>
+          <input id="withdrawPassword" type="password" autocomplete="current-password" placeholder="현재 비밀번호" />
+        </label>
+        <label class="field">
+          <span>확인 문구</span>
+          <input id="withdrawConfirm" type="text" maxlength="10" placeholder="탈퇴" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnWithdraw" class="btn danger" type="button">탈퇴하기</button>
+      </div>
+      <div class="hint">확인 문구에 '탈퇴'를 입력해야 진행됩니다.</div>
+    </section>
+  </main>
+
+  <script src="/pwa/auth.js?v=20260207i"></script>
+  <script src="/pwa/profile.js?v=20260215a"></script>
+</body>
+</html>
+

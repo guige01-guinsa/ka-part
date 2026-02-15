@@ -3234,6 +3234,111 @@ def update_staff_user(
         con.close()
 
 
+def update_staff_user_profile_fields(
+    user_id: int,
+    *,
+    name: str,
+    phone: Optional[str] = None,
+    address: Optional[str] = None,
+    office_phone: Optional[str] = None,
+    office_fax: Optional[str] = None,
+    unit_label: Optional[str] = None,
+    household_key: Optional[str] = None,
+    note: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Update only user-owned profile fields without mutating site identity or permission flags."""
+    con = _connect()
+    try:
+        ts = now_iso()
+        clean_unit_label = str(unit_label or "").strip() or None
+        clean_household_key = str(household_key or "").strip().upper() or None
+        if clean_unit_label and not clean_household_key:
+            clean_household_key = clean_unit_label.upper()
+        if clean_household_key and not clean_unit_label:
+            clean_unit_label = clean_household_key
+
+        cur = con.execute(
+            """
+            UPDATE staff_users
+            SET name=?,
+                phone=?,
+                address=?,
+                office_phone=?,
+                office_fax=?,
+                unit_label=?,
+                household_key=?,
+                note=?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (
+                name,
+                phone,
+                address,
+                office_phone,
+                office_fax,
+                clean_unit_label,
+                clean_household_key,
+                note,
+                ts,
+                int(user_id),
+            ),
+        )
+        con.commit()
+        if cur.rowcount == 0:
+            return None
+        row = con.execute(
+            """
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, site_id, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            FROM staff_users
+            WHERE id=?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
+def withdraw_staff_user(user_id: int) -> Optional[Dict[str, Any]]:
+    """Deactivate account and scrub personal fields (FK-safe) to satisfy withdrawal requests."""
+    con = _connect()
+    try:
+        ts = now_iso()
+        cur = con.execute(
+            """
+            UPDATE staff_users
+            SET name=?,
+                phone=NULL,
+                address=NULL,
+                office_phone=NULL,
+                office_fax=NULL,
+                unit_label=NULL,
+                household_key=NULL,
+                note=NULL,
+                password_hash=NULL,
+                is_active=0,
+                updated_at=?
+            WHERE id=?
+            """,
+            ("탈퇴회원", ts, int(user_id)),
+        )
+        con.commit()
+        if cur.rowcount == 0:
+            return None
+        row = con.execute(
+            """
+            SELECT id, login_id, name, role, phone, note, site_code, site_name, site_id, address, office_phone, office_fax, unit_label, household_key, is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            FROM staff_users
+            WHERE id=?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        con.close()
+
+
 def delete_staff_user(user_id: int) -> bool:
     con = _connect()
     try:

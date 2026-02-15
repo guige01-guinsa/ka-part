@@ -90,9 +90,11 @@ from ..db import (
     touch_signup_phone_verification_attempt,
     upsert_site_env_config,
     update_staff_user,
+    update_staff_user_profile_fields,
     upsert_entry,
     upsert_tab_domain_data,
     verify_password,
+    withdraw_staff_user,
     write_security_audit_log,
 )
 from ..schema_defs import (
@@ -1598,12 +1600,25 @@ def _enforce_api_module_scope(user: Dict[str, Any], request_path: str) -> None:
         _permission_level_from_user(user),
     )
     if _is_security_role(role):
-        allowed_paths = {"/api/auth/me", "/api/auth/logout", "/api/auth/change_password", "/api/parking/context"}
+        allowed_paths = {
+            "/api/auth/me",
+            "/api/auth/logout",
+            "/api/auth/change_password",
+            "/api/users/me",
+            "/api/users/me/withdraw",
+            "/api/parking/context",
+        }
         if path in allowed_paths:
             return
         raise HTTPException(status_code=403, detail="보안/경비 계정은 주차관리 모듈만 사용할 수 있습니다.")
     if _is_complaints_only_role(role):
-        allowed_paths = {"/api/auth/me", "/api/auth/logout", "/api/auth/change_password"}
+        allowed_paths = {
+            "/api/auth/me",
+            "/api/auth/logout",
+            "/api/auth/change_password",
+            "/api/users/me",
+            "/api/users/me/withdraw",
+        }
         if path in allowed_paths:
             return
         raise HTTPException(status_code=403, detail="입대의/입주민 계정은 민원 모듈만 사용할 수 있습니다.")
@@ -3793,16 +3808,28 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
     if not current:
         raise HTTPException(status_code=404, detail="user not found")
 
+    if "password" in payload:
+        raise HTTPException(status_code=400, detail="비밀번호 변경은 '비밀번호 변경' 기능(/api/auth/change_password)을 사용하세요.")
+
     restricted_keys = {
         "login_id",
         "role",
         "site_code",
         "site_name",
+        "site_id",
         "is_admin",
         "is_site_admin",
         "admin_scope",
+        "admin_scope_label",
         "permission_level",
         "is_active",
+        "allowed_modules",
+        "default_landing_path",
+        "account_type",
+        "created_at",
+        "updated_at",
+        "last_login_at",
+        "household_key",
     }
     blocked = sorted([str(k) for k in payload.keys() if str(k) in restricted_keys])
     if blocked:
@@ -3811,16 +3838,21 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
             detail=f"해당 항목은 관리자만 수정할 수 있습니다: {', '.join(blocked)}",
         )
 
+    current_password = _clean_password(payload.get("current_password"), required=True)
     login_id = _clean_login_id(current.get("login_id"))
+    db_user = get_staff_user_by_login(login_id)
+    if not db_user or not db_user.get("password_hash"):
+        raise HTTPException(status_code=404, detail="user not found")
+    if not verify_password(str(current_password), str(db_user.get("password_hash"))):
+        raise HTTPException(status_code=401, detail="current password is incorrect")
+
     name = _clean_name(payload.get("name", current.get("name")))
-    role = _clean_role(payload.get("role", current.get("role")))
+    role = _clean_role(current.get("role"))
     phone = _normalize_phone(
         payload["phone"] if "phone" in payload else current.get("phone"),
         required=False,
         field_name="phone",
     )
-    site_code = _clean_site_code(current.get("site_code"), required=False)
-    site_name = _clean_optional_text(current.get("site_name"), 80)
     address = _clean_optional_text(payload["address"] if "address" in payload else current.get("address"), 200)
     office_phone = _normalize_phone(
         payload["office_phone"] if "office_phone" in payload else current.get("office_phone"),
@@ -3838,9 +3870,10 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
         role=role,
         current_unit_label=current.get("unit_label"),
     )
-    is_admin = 1 if bool(current.get("is_admin")) else 0
-    is_site_admin = 1 if bool(current.get("is_site_admin")) else 0
-    admin_scope = _admin_scope_from_user(current)
+    if not _is_resident_role(role) and "unit_label" not in payload:
+        unit_label = str(current.get("unit_label") or "").strip() or None
+        household_key = str(current.get("household_key") or "").strip().upper() or None
+    site_code = _clean_site_code(current.get("site_code"), required=False)
     is_active = 1 if bool(current.get("is_active")) else 0
     _assert_resident_household_available(
         role=role,
@@ -3851,24 +3884,16 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
     )
 
     try:
-        user = update_staff_user(
+        user = update_staff_user_profile_fields(
             user_id,
-            login_id=login_id,
             name=name,
-            role=role,
             phone=phone,
-            site_code=site_code,
-            site_name=site_name,
             address=address,
             office_phone=office_phone,
             office_fax=office_fax,
             unit_label=unit_label,
             household_key=household_key,
             note=note,
-            is_admin=is_admin,
-            is_site_admin=is_site_admin,
-            admin_scope=admin_scope,
-            is_active=is_active,
         )
     except Exception as e:
         if "UNIQUE constraint failed" in str(e):
@@ -3877,15 +3902,50 @@ def api_users_me_patch(request: Request, payload: Dict[str, Any] = Body(...)):
     if not user:
         raise HTTPException(status_code=404, detail="user not found")
 
-    password_changed = False
-    new_password = _clean_password(payload.get("password"), required=False) if "password" in payload else None
-    if new_password:
-        set_staff_user_password(user_id, new_password)
-        revoke_all_user_sessions(user_id)
-        password_changed = True
-
     fresh = get_staff_user(user_id) or user
-    return {"ok": True, "user": _public_user(fresh), "password_changed": password_changed}
+    return {"ok": True, "user": _public_user(fresh)}
+
+
+@router.post("/users/me/withdraw")
+def api_users_me_withdraw(request: Request, payload: Dict[str, Any] = Body(...)):
+    actor, _token = _require_auth(request)
+    user_id = int(actor.get("id") or 0)
+    current = get_staff_user(user_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    password = _clean_password(payload.get("password"), required=True)
+    confirm = str(payload.get("confirm") or "").strip()
+    if confirm != "탈퇴":
+        raise HTTPException(status_code=400, detail="확인 문구(confirm)는 '탈퇴' 이어야 합니다.")
+
+    login_id = _clean_login_id(current.get("login_id"))
+    db_user = get_staff_user_by_login(login_id)
+    if not db_user or not db_user.get("password_hash"):
+        raise HTTPException(status_code=404, detail="user not found")
+    if not verify_password(str(password), str(db_user.get("password_hash"))):
+        raise HTTPException(status_code=401, detail="password is incorrect")
+
+    if bool(current.get("is_admin")) and bool(current.get("is_active")) and count_staff_admins(active_only=True) <= 1:
+        raise HTTPException(status_code=400, detail="at least one active admin is required")
+    if (
+        bool(current.get("is_admin"))
+        and _admin_scope_from_user(current) == "super_admin"
+        and bool(current.get("is_active"))
+        and count_super_admins(active_only=True) <= 1
+    ):
+        raise HTTPException(status_code=400, detail="at least one active super admin is required")
+
+    withdrawn = withdraw_staff_user(user_id)
+    revoke_all_user_sessions(user_id)
+    if not withdrawn:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    resp = JSONResponse({"ok": True})
+    _clear_auth_cookie(resp)
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 @router.get("/users")

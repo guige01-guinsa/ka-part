@@ -529,6 +529,9 @@
     $("#scopeSelect")?.addEventListener("change", () => fillCategories());
     $("#siteCode")?.addEventListener("change", () => unitSelector && unitSelector.refresh && unitSelector.refresh());
     $("#siteName")?.addEventListener("change", () => unitSelector && unitSelector.refresh && unitSelector.refresh());
+    $("#btnProfile")?.addEventListener("click", () => {
+      window.location.href = "/pwa/profile.html";
+    });
     $("#btnReload")?.addEventListener("click", () => {
       init().catch((err) => setMsg(err.message || String(err), true));
     });
