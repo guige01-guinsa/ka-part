@@ -226,12 +226,15 @@
       if (!key) continue;
       if (!raw || typeof raw !== "object") continue;
       const item = {};
-      const lc = intOr(raw.line_count, 0);
-      const mf = intOr(raw.max_floor, 0);
-      const bf = intOr(raw.basement_floors, 0);
-      if (lc) item.line_count = cleanInt(lc, 0, 1, 6, "라인수");
-      if (mf) item.max_floor = cleanInt(mf, 0, 1, 60, "최고층");
-      if (bf || bf === 0) item.basement_floors = cleanInt(bf, 0, 0, 20, "지하층수");
+      if (Object.prototype.hasOwnProperty.call(raw, "line_count")) {
+        item.line_count = cleanInt(intOr(raw.line_count, 0), 0, 1, 6, "라인수");
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, "max_floor")) {
+        item.max_floor = cleanInt(intOr(raw.max_floor, 0), 0, 1, 60, "최고층");
+      }
+      if (Object.prototype.hasOwnProperty.call(raw, "basement_floors")) {
+        item.basement_floors = cleanInt(intOr(raw.basement_floors, 0), 0, 0, 20, "지하층수");
+      }
 
       const lm = raw.line_max_floors && typeof raw.line_max_floors === "object" ? raw.line_max_floors : {};
       const lineOut = {};
