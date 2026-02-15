@@ -1333,8 +1333,9 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
   <style>
     :root { --bg:#0a1a23; --panel:#112735; --line:#27465a; --text:#e9f2f7; --muted:#8fb0c2; --ok:#16a34a; --warn:#b45309; --bad:#dc2626; --btn:#1d4ed8; }
     * { box-sizing:border-box; }
+    html, body { max-width:100%; overflow-x:hidden; }
     body { margin:0; font-family:"Noto Sans KR",system-ui,sans-serif; color:var(--text); background:radial-gradient(circle at top, #173a4e, #0a1a23 58%); }
-    .wrap { max-width:1100px; margin:0 auto; padding:16px; padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); display:grid; gap:12px; }
+    .wrap { width:100%; max-width:1100px; margin:0 auto; padding:16px; padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); display:grid; gap:12px; }
     .card { background:rgba(17,39,53,.94); border:1px solid var(--line); border-radius:14px; padding:14px; }
     .head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
     .title { margin:0; font-size:24px; }
@@ -1353,7 +1354,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
     th, td { border:1px solid var(--line); padding:7px 8px; text-align:left; vertical-align:top; }
     th { background:#0f2431; color:#cae2ef; }
-    .table-scroll { border:1px solid var(--line); border-radius:10px; overflow-x:auto; overflow-y:visible; margin-top:8px; }
+    .table-scroll { border:1px solid var(--line); border-radius:10px; overflow-x:auto; overflow-y:visible; margin-top:8px; max-width:100%; }
     .table-scroll table { margin-top:0; border-collapse:separate; border-spacing:0; min-width:920px; }
     .table-scroll th, .table-scroll td { border-right:0; border-bottom:0; }
     .table-scroll tr > *:last-child { border-right:1px solid var(--line); }
@@ -1394,6 +1395,22 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       .title { font-size:20px; }
       .row.actions { display:grid; grid-template-columns:1fr 1fr; }
       .row.actions .btn { width:100%; }
+      .table-scroll { -webkit-overflow-scrolling: touch; }
+      .table-scroll table { min-width:0; }
+      #violationsTableWrap table { min-width:0; }
+      table { font-size:12px; }
+
+      /* 모바일에서는 중요한 컬럼만 남겨 가로 잘림/가로스크롤을 최소화 */
+      /* 차량: 차량번호/상태/동호수/적용종료일 중심 */
+      #tbVehicles th:nth-child(4), #tbVehicles td:nth-child(4),
+      #tbVehicles th:nth-child(5), #tbVehicles td:nth-child(5),
+      #tbVehicles th:nth-child(7), #tbVehicles td:nth-child(7),
+      #tbVehicles th:nth-child(8), #tbVehicles td:nth-child(8) { display:none; }
+
+      /* 위반: 발생시각/차량번호/판정/사진 중심 */
+      #tbViolations th:nth-child(4), #tbViolations td:nth-child(4),
+      #tbViolations th:nth-child(5), #tbViolations td:nth-child(5),
+      #tbViolations th:nth-child(6), #tbViolations td:nth-child(6) { display:none; }
     }
   </style>
 </head>
