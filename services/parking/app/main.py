@@ -1338,8 +1338,9 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     .wrap { width:100%; max-width:1100px; margin:0 auto; padding:16px; padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); display:grid; gap:12px; }
     .card { background:rgba(17,39,53,.94); border:1px solid var(--line); border-radius:14px; padding:14px; }
     .head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
-    .title { margin:0; font-size:24px; }
+    .title { margin:0; font-size:22px; }
     .sub { color:var(--muted); font-size:13px; }
+    h2 { margin:0; font-size:19px; }
     .nav { display:flex; gap:8px; flex-wrap:wrap; }
     .btn { border:1px solid var(--line); background:var(--btn); color:#fff; border-radius:10px; padding:9px 12px; font-weight:700; cursor:pointer; text-decoration:none; }
     .btn.ghost { background:transparent; color:var(--text); }
@@ -1392,7 +1393,8 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       input, select { font-size:16px; }
       .nav { width:100%; display:grid; grid-template-columns:1fr 1fr; }
       .nav .btn { width:100%; text-align:center; }
-      .title { font-size:20px; }
+      .title { font-size:18px; }
+      h2 { font-size:16px; }
       .row.actions { display:grid; grid-template-columns:1fr 1fr; }
       .row.actions .btn { width:100%; }
       .table-scroll { -webkit-overflow-scrolling: touch; }
@@ -2247,7 +2249,8 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     .app { max-width: 920px; margin: 0 auto; padding: 16px; padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); display: grid; gap: 12px; }
     .panel { background: rgba(16,37,51,.92); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
     .head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap: wrap; }
-    .title { margin: 0; font-size: 22px; }
+    .title { margin: 0; font-size: 20px; }
+    h2 { margin: 0; font-size: 18px; }
     .ctx { color: var(--muted); font-size: 13px; }
     .row { display:flex; gap:8px; margin-top: 8px; flex-wrap: wrap; }
     .btn { border:1px solid var(--line); background: var(--btn); color:white; border-radius:10px; padding:10px 12px; font-weight:700; cursor:pointer; text-decoration:none; display:inline-block; }
@@ -2266,6 +2269,8 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     .item { border:1px solid var(--line); border-radius:10px; padding:8px 10px; background:#0a1f2b; }
     .item .meta { color:var(--muted); font-size:12px; margin-top:4px; }
     @media (max-width: 900px) {
+      .title { font-size: 18px; }
+      h2 { font-size: 16px; }
       input { font-size: 16px; }
     }
   </style>
