@@ -2420,6 +2420,7 @@ def upsert_site_apartment_profile(
         dynamic_upsert(
             con,
             "site_apartment_profiles",
+            ["site_id"],
             {
                 "site_id": int(resolved_site_id),
                 "site_code": clean_site_code,
@@ -2434,7 +2435,6 @@ def upsert_site_apartment_profile(
                 "created_at": ts,
                 "updated_at": ts,
             },
-            key_cols=["site_id"],
             ts=ts,
             touch_updated_at=True,
         )
