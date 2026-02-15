@@ -913,6 +913,37 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(con, "site_registry", "site_id INTEGER")
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS site_apartment_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER,
+          site_code TEXT,
+          site_name TEXT,
+          households_total INTEGER NOT NULL DEFAULT 0,
+          building_start INTEGER NOT NULL DEFAULT 101,
+          building_count INTEGER NOT NULL DEFAULT 0,
+          default_line_count INTEGER NOT NULL DEFAULT 6,
+          default_max_floor INTEGER NOT NULL DEFAULT 60,
+          default_basement_floors INTEGER NOT NULL DEFAULT 0,
+          building_overrides_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    _ensure_column(con, "site_apartment_profiles", "site_id INTEGER")
+    _ensure_column(con, "site_apartment_profiles", "site_code TEXT")
+    _ensure_column(con, "site_apartment_profiles", "site_name TEXT")
+    _ensure_column(con, "site_apartment_profiles", "households_total INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(con, "site_apartment_profiles", "building_start INTEGER NOT NULL DEFAULT 101")
+    _ensure_column(con, "site_apartment_profiles", "building_count INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(con, "site_apartment_profiles", "default_line_count INTEGER NOT NULL DEFAULT 6")
+    _ensure_column(con, "site_apartment_profiles", "default_max_floor INTEGER NOT NULL DEFAULT 60")
+    _ensure_column(con, "site_apartment_profiles", "default_basement_floors INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(con, "site_apartment_profiles", "building_overrides_json TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(con, "site_apartment_profiles", "created_at TEXT NOT NULL")
+    _ensure_column(con, "site_apartment_profiles", "updated_at TEXT NOT NULL")
     _backfill_site_identity_columns(con)
     con.execute(
         """
@@ -930,6 +961,18 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_site_env_configs_site
         ON site_env_configs(site_name);
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_site_apartment_profiles_site_id
+        ON site_apartment_profiles(site_id);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_site_apartment_profiles_code
+        ON site_apartment_profiles(site_code);
         """
     )
     con.execute(
@@ -2115,6 +2158,327 @@ def list_site_env_configs() -> List[Dict[str, Any]]:
                 item["config"] = {}
             out.append(item)
         return out
+    finally:
+        con.close()
+
+
+_APT_BUILDING_KEY_RE = re.compile(r"^[0-9]{1,4}$")
+_APT_LINE_KEY_RE = re.compile(r"^[0-9]{1,2}$")
+
+
+def apartment_profile_defaults() -> Dict[str, Any]:
+    # Defaults align with the current unit-selector UX assumptions.
+    return {
+        "households_total": 0,
+        "building_start": 101,
+        "building_count": 20,
+        "default_line_count": 6,
+        "default_max_floor": 60,
+        "default_basement_floors": 0,
+        "building_overrides": {},
+    }
+
+
+def _clean_apartment_int(
+    value: Any,
+    *,
+    field: str,
+    default: int,
+    min_value: int,
+    max_value: int,
+) -> int:
+    if value is None or str(value).strip() == "":
+        return int(default)
+    try:
+        num = int(value)
+    except Exception as e:
+        raise ValueError(f"{field} must be an integer") from e
+    if num < int(min_value) or num > int(max_value):
+        raise ValueError(f"{field} must be between {min_value} and {max_value}")
+    return int(num)
+
+
+def _normalize_line_key(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("line key is empty")
+    if not _APT_LINE_KEY_RE.fullmatch(raw):
+        raise ValueError("line key must be numeric")
+    try:
+        n = int(raw)
+    except Exception as e:
+        raise ValueError("line key must be numeric") from e
+    if n < 1 or n > 6:
+        raise ValueError("line key must be 1..6")
+    return f"{n:02d}"
+
+
+def normalize_apartment_building_overrides(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for b_key, raw_item in value.items():
+        building = str(b_key or "").strip()
+        if not building:
+            continue
+        if not _APT_BUILDING_KEY_RE.fullmatch(building):
+            raise ValueError("building key must be 1..4 digits")
+        if not isinstance(raw_item, dict):
+            continue
+
+        item: Dict[str, Any] = {}
+        if "line_count" in raw_item:
+            item["line_count"] = _clean_apartment_int(
+                raw_item.get("line_count"),
+                field="line_count",
+                default=0,
+                min_value=1,
+                max_value=6,
+            )
+        if "max_floor" in raw_item:
+            item["max_floor"] = _clean_apartment_int(
+                raw_item.get("max_floor"),
+                field="max_floor",
+                default=0,
+                min_value=1,
+                max_value=60,
+            )
+        if "basement_floors" in raw_item:
+            item["basement_floors"] = _clean_apartment_int(
+                raw_item.get("basement_floors"),
+                field="basement_floors",
+                default=0,
+                min_value=0,
+                max_value=20,
+            )
+
+        line_max = raw_item.get("line_max_floors")
+        if isinstance(line_max, dict) and line_max:
+            line_out: Dict[str, int] = {}
+            for lk, lv in line_max.items():
+                line_key = _normalize_line_key(lk)
+                line_out[line_key] = _clean_apartment_int(
+                    lv,
+                    field=f"line_max_floors.{line_key}",
+                    default=0,
+                    min_value=1,
+                    max_value=60,
+                )
+            if line_out:
+                item["line_max_floors"] = line_out
+
+        if item:
+            out[building] = item
+    return out
+
+
+def normalize_site_apartment_profile(payload: Dict[str, Any] | None) -> Dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    defaults = apartment_profile_defaults()
+    out: Dict[str, Any] = {}
+    out["households_total"] = _clean_apartment_int(
+        data.get("households_total", defaults["households_total"]),
+        field="households_total",
+        default=int(defaults["households_total"]),
+        min_value=0,
+        max_value=200000,
+    )
+    out["building_start"] = _clean_apartment_int(
+        data.get("building_start", defaults["building_start"]),
+        field="building_start",
+        default=int(defaults["building_start"]),
+        min_value=1,
+        max_value=9999,
+    )
+    out["building_count"] = _clean_apartment_int(
+        data.get("building_count", defaults["building_count"]),
+        field="building_count",
+        default=int(defaults["building_count"]),
+        min_value=0,
+        max_value=500,
+    )
+    out["default_line_count"] = _clean_apartment_int(
+        data.get("default_line_count", defaults["default_line_count"]),
+        field="default_line_count",
+        default=int(defaults["default_line_count"]),
+        min_value=1,
+        max_value=6,
+    )
+    out["default_max_floor"] = _clean_apartment_int(
+        data.get("default_max_floor", defaults["default_max_floor"]),
+        field="default_max_floor",
+        default=int(defaults["default_max_floor"]),
+        min_value=1,
+        max_value=60,
+    )
+    out["default_basement_floors"] = _clean_apartment_int(
+        data.get("default_basement_floors", defaults["default_basement_floors"]),
+        field="default_basement_floors",
+        default=int(defaults["default_basement_floors"]),
+        min_value=0,
+        max_value=20,
+    )
+    out["building_overrides"] = normalize_apartment_building_overrides(
+        data.get("building_overrides", data.get("buildings") or {})
+    )
+    return out
+
+
+def get_site_apartment_profile_record(
+    *,
+    site_id: Any = 0,
+    site_name: str = "",
+    site_code: str | None = None,
+) -> Dict[str, Any] | None:
+    con = _connect()
+    try:
+        clean_site_id = _clean_site_id_value(site_id)
+        clean_site_name = str(site_name or "").strip()
+        clean_site_code = _clean_site_code_value(site_code)
+
+        row = None
+        if clean_site_id:
+            row = con.execute(
+                """
+                SELECT site_id, site_code, site_name,
+                       households_total, building_start, building_count,
+                       default_line_count, default_max_floor, default_basement_floors,
+                       building_overrides_json, created_at, updated_at
+                FROM site_apartment_profiles
+                WHERE site_id=?
+                LIMIT 1
+                """,
+                (clean_site_id,),
+            ).fetchone()
+        if row is None and clean_site_code:
+            row = con.execute(
+                """
+                SELECT site_id, site_code, site_name,
+                       households_total, building_start, building_count,
+                       default_line_count, default_max_floor, default_basement_floors,
+                       building_overrides_json, created_at, updated_at
+                FROM site_apartment_profiles
+                WHERE site_code=?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (clean_site_code,),
+            ).fetchone()
+        if row is None and clean_site_name:
+            row = con.execute(
+                """
+                SELECT site_id, site_code, site_name,
+                       households_total, building_start, building_count,
+                       default_line_count, default_max_floor, default_basement_floors,
+                       building_overrides_json, created_at, updated_at
+                FROM site_apartment_profiles
+                WHERE site_name=?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (clean_site_name,),
+            ).fetchone()
+        if not row:
+            return None
+        out = dict(row)
+        out["building_overrides"] = _parse_json_object(out.get("building_overrides_json"))
+        return out
+    finally:
+        con.close()
+
+
+def upsert_site_apartment_profile(
+    *,
+    site_name: str,
+    site_code: str | None = None,
+    site_id: Any = None,
+    profile: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    clean_site_name = str(site_name or "").strip()
+    clean_site_code = _clean_site_code_value(site_code)
+    norm = normalize_site_apartment_profile(profile)
+
+    con = _connect()
+    try:
+        ts = now_iso()
+        resolved_site_id = _resolve_site_id_from_identity_in_tx(
+            con,
+            site_id=site_id,
+            site_name=clean_site_name,
+            site_code=clean_site_code,
+            create_if_missing=bool(clean_site_name),
+            ts=ts,
+        )
+        if not resolved_site_id:
+            raise ValueError("site_id is required")
+        building_overrides_json = json.dumps(
+            norm.get("building_overrides") or {},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        dynamic_upsert(
+            con,
+            "site_apartment_profiles",
+            {
+                "site_id": int(resolved_site_id),
+                "site_code": clean_site_code,
+                "site_name": clean_site_name or None,
+                "households_total": int(norm["households_total"]),
+                "building_start": int(norm["building_start"]),
+                "building_count": int(norm["building_count"]),
+                "default_line_count": int(norm["default_line_count"]),
+                "default_max_floor": int(norm["default_max_floor"]),
+                "default_basement_floors": int(norm["default_basement_floors"]),
+                "building_overrides_json": building_overrides_json,
+                "created_at": ts,
+                "updated_at": ts,
+            },
+            key_cols=["site_id"],
+            ts=ts,
+            touch_updated_at=True,
+        )
+        row = con.execute(
+            """
+            SELECT site_id, site_code, site_name,
+                   households_total, building_start, building_count,
+                   default_line_count, default_max_floor, default_basement_floors,
+                   building_overrides_json, created_at, updated_at
+            FROM site_apartment_profiles
+            WHERE site_id=?
+            LIMIT 1
+            """,
+            (int(resolved_site_id),),
+        ).fetchone()
+        out = dict(row) if row else {}
+        out["building_overrides"] = _parse_json_object(out.get("building_overrides_json"))
+        con.commit()
+        return out
+    finally:
+        con.close()
+
+
+def delete_site_apartment_profile(
+    *,
+    site_id: Any = 0,
+    site_name: str = "",
+    site_code: str | None = None,
+) -> bool:
+    con = _connect()
+    try:
+        clean_site_id = _clean_site_id_value(site_id)
+        clean_site_name = str(site_name or "").strip()
+        clean_site_code = _clean_site_code_value(site_code)
+        if clean_site_id:
+            cur = con.execute("DELETE FROM site_apartment_profiles WHERE site_id=?", (clean_site_id,))
+        elif clean_site_code:
+            cur = con.execute("DELETE FROM site_apartment_profiles WHERE site_code=?", (clean_site_code,))
+        elif clean_site_name:
+            cur = con.execute("DELETE FROM site_apartment_profiles WHERE site_name=?", (clean_site_name,))
+        else:
+            return False
+        con.commit()
+        return int(cur.rowcount or 0) > 0
     finally:
         con.close()
 

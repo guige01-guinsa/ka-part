@@ -488,6 +488,8 @@
     if (btnUsers && !hasAdminPermission(authUser)) btnUsers.style.display = "none";
     const btnSpec = $("#btnSpecEnv");
     if (btnSpec && !hasSiteAdminPermission(authUser)) btnSpec.style.display = "none";
+    const btnApt = $("#btnApartmentInfo");
+    if (btnApt && !hasSiteAdminPermission(authUser)) btnApt.style.display = "none";
     const btnBackup = $("#btnBackup");
     if (btnBackup && !hasSiteAdminPermission(authUser)) btnBackup.style.display = "none";
     setSiteId(normalizeSiteId(authUser && authUser.site_id));
@@ -1347,6 +1349,12 @@
       const siteCode = getSiteCode();
       const qs = buildSiteQuery(site, siteCode);
       window.location.href = qs ? `/pwa/spec_env.html?${qs}` : "/pwa/spec_env.html";
+    });
+    $("#btnApartmentInfo")?.addEventListener("click", () => {
+      const site = getSiteName();
+      const siteCode = getSiteCode();
+      const qs = buildSiteQuery(site, siteCode);
+      window.location.href = qs ? `/pwa/apartment_info.html?${qs}` : "/pwa/apartment_info.html";
     });
     $("#btnComplaints")?.addEventListener("click", () => {
       const site = getSiteName();

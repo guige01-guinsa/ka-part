@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>아파트 정보 설정</title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
+  />
+  <link rel="stylesheet" href="/pwa/apartment_info.css?v=20260215b" />
+</head>
+<body>
+  <header class="top">
+    <div class="title">아파트 정보 설정</div>
+    <div class="actions">
+      <a id="btnGoMain" class="btn" href="/pwa/">메인으로</a>
+      <button id="btnReload" class="btn" type="button">불러오기</button>
+      <button id="btnSave" class="btn primary" type="button">저장</button>
+      <button id="btnDelete" class="btn danger" type="button">설정삭제</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="card">
+      <h2>설정 대상 단지</h2>
+      <div class="row">
+        <label class="field grow">
+          <span>site_name</span>
+          <input id="siteName" type="text" placeholder="예: OO아파트" />
+        </label>
+        <label class="field grow">
+          <span>site_code</span>
+          <input id="siteCode" type="text" maxlength="32" placeholder="예: APT00001" />
+        </label>
+      </div>
+      <div class="hint">단지 선택은 site_id/site_name/site_code 기준으로 자동 정규화됩니다. 단지대표자는 소속 단지만 설정할 수 있습니다.</div>
+    </section>
+
+    <section class="card">
+      <h2>기본 정보</h2>
+      <div class="grid2">
+        <label class="field">
+          <span>세대수</span>
+          <input id="householdsTotal" type="number" min="0" max="200000" placeholder="예: 1200" />
+        </label>
+        <label class="field">
+          <span>동 시작번호</span>
+          <input id="buildingStart" type="number" min="1" max="9999" placeholder="예: 101" />
+        </label>
+        <label class="field">
+          <span>동 수</span>
+          <input id="buildingCount" type="number" min="0" max="500" placeholder="예: 10" />
+        </label>
+      </div>
+      <div id="buildingsPreview" class="hint"></div>
+    </section>
+
+    <section class="card">
+      <h2>기본 구조(동별 미설정 시)</h2>
+      <div class="grid2">
+        <label class="field">
+          <span>라인수(기본)</span>
+          <select id="defaultLineCount">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6" selected>6</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>최고층(기본)</span>
+          <input id="defaultMaxFloor" type="number" min="1" max="60" placeholder="예: 60" />
+        </label>
+        <label class="field">
+          <span>지하층수(기본)</span>
+          <input id="defaultBasementFloors" type="number" min="0" max="20" placeholder="예: 2" />
+        </label>
+      </div>
+      <div id="defaultsPreview" class="hint"></div>
+    </section>
+
+    <section class="card">
+      <h2>동별 설정(선택)</h2>
+      <div class="row">
+        <button id="btnAddBuilding" class="btn" type="button">동 추가</button>
+        <button id="btnClearOverrides" class="btn danger" type="button">동별설정 전체삭제</button>
+      </div>
+      <div id="overrideList" class="list"></div>
+      <div class="hint">동별 설정은 기본 구조보다 우선 적용됩니다. 라인별 최고층은 입력한 라인만 적용됩니다.</div>
+    </section>
+
+    <section class="card">
+      <h2>저장 미리보기(JSON)</h2>
+      <pre id="jsonPreview"></pre>
+      <div id="msg" class="msg"></div>
+    </section>
+  </main>
+
+  <script src="/pwa/auth.js?v=20260207i"></script>
+  <script src="/pwa/apartment_info.js?v=20260215b"></script>
+</body>
+</html>

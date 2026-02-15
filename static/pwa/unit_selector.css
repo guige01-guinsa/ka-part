@@ -183,6 +183,13 @@
   background: color-mix(in srgb, var(--primary) 28%, var(--card));
 }
 
+.unit-selector .grid-cell:disabled,
+.unit-selector .grid-cell.disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
 .unit-selector .help {
   font-size: 11px;
   color: var(--muted);

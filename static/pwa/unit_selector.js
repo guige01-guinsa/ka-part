@@ -12,6 +12,9 @@
   const DEFAULT_BUILDINGS = Array.from({ length: 20 }, (_x, i) => String(101 + i));
   const DEFAULT_LINES = ["01", "02", "03", "04", "05", "06"];
   const DEFAULT_FLOORS = Array.from({ length: 60 }, (_x, i) => i + 1);
+  const PROFILE_ENDPOINT = "/api/v1/apartment_profile";
+  const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
+  const PROFILE_CACHE = new Map(); // siteKey -> { ts:number, data:any }
 
   const esc = (v) =>
     String(v || "")
@@ -22,6 +25,45 @@
       .replaceAll("'", "&#39;");
 
   const byId = (root, id) => root.querySelector(`#${id}`);
+
+  function clampInt(value, fallback, minValue, maxValue) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    const i = Math.trunc(n);
+    if (i < minValue) return minValue;
+    if (i > maxValue) return maxValue;
+    return i;
+  }
+
+  function buildBuildings(buildingStart, buildingCount) {
+    const start = clampInt(buildingStart, 101, 1, 9999);
+    const count = clampInt(buildingCount, 0, 0, 500);
+    const out = [];
+    for (let i = 0; i < count; i += 1) out.push(String(start + i));
+    return out;
+  }
+
+  function buildLines(lineCount) {
+    const n = clampInt(lineCount, 6, 1, 6);
+    const out = [];
+    for (let i = 1; i <= n; i += 1) out.push(String(i).padStart(2, "0"));
+    return out;
+  }
+
+  function floorsUpTo(maxFloor) {
+    const n = clampInt(maxFloor, 60, 1, 60);
+    return Array.from({ length: n }, (_x, i) => i + 1);
+  }
+
+  function normalizeLineLabel(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const m = raw.match(/^(\d{1,2})$/);
+    if (!m) return raw;
+    const n = clampInt(m[1], 0, 0, 99);
+    if (n <= 0) return "";
+    return String(n).padStart(2, "0");
+  }
 
   function floorLineToHo(floor, line) {
     const f = Number(floor);
@@ -108,8 +150,9 @@
       activePanel: MODE_STRUCTURE,
       selected: String(input.value || "").trim(),
       buildings: [...(Array.isArray(opts.buildings) && opts.buildings.length ? opts.buildings : DEFAULT_BUILDINGS)],
-      lines: [...(Array.isArray(opts.lines) && opts.lines.length ? opts.lines : DEFAULT_LINES)],
-      floors: [...(Array.isArray(opts.floors) && opts.floors.length ? opts.floors : DEFAULT_FLOORS)],
+      profile: null,
+      profile_site_key: "",
+      profile_revision: 0,
       searchText: "",
     };
 
@@ -117,6 +160,143 @@
       const sc = String(siteCodeInput && siteCodeInput.value ? siteCodeInput.value : "").trim().toUpperCase();
       const sn = String(siteNameInput && siteNameInput.value ? siteNameInput.value : "").trim();
       return sc || sn || "GLOBAL";
+    }
+
+    const buildingCfgCache = new Map(); // building -> cfg
+
+    function activeProfile() {
+      const p = state.profile;
+      return p && typeof p === "object" ? p : null;
+    }
+
+    function profileValueInt(p, key, fallback, minV, maxV) {
+      if (!p || typeof p !== "object") return fallback;
+      return clampInt(p[key], fallback, minV, maxV);
+    }
+
+    function buildingOverride(building) {
+      const p = activeProfile();
+      const map = p && p.building_overrides && typeof p.building_overrides === "object" ? p.building_overrides : null;
+      const key = String(building || "").trim();
+      if (!map || !key) return null;
+      const item = map[key];
+      return item && typeof item === "object" ? item : null;
+    }
+
+    function lineCountForBuilding(building) {
+      const p = activeProfile();
+      const base = profileValueInt(p, "default_line_count", DEFAULT_LINES.length, 1, 6);
+      const ov = buildingOverride(building);
+      if (ov && Object.prototype.hasOwnProperty.call(ov, "line_count")) {
+        return clampInt(ov.line_count, base, 1, 6);
+      }
+      return base;
+    }
+
+    function maxFloorForBuildingDefault(building) {
+      const p = activeProfile();
+      const base = profileValueInt(p, "default_max_floor", DEFAULT_FLOORS.length, 1, 60);
+      const ov = buildingOverride(building);
+      if (ov && Object.prototype.hasOwnProperty.call(ov, "max_floor")) {
+        return clampInt(ov.max_floor, base, 1, 60);
+      }
+      return base;
+    }
+
+    function maxFloorForLine(building, lineLabel) {
+      const base = maxFloorForBuildingDefault(building);
+      const ov = buildingOverride(building);
+      if (!ov) return base;
+      const lineKey = normalizeLineLabel(lineLabel);
+      const map = ov.line_max_floors && typeof ov.line_max_floors === "object" ? ov.line_max_floors : null;
+      if (!map || !lineKey) return base;
+      if (!Object.prototype.hasOwnProperty.call(map, lineKey)) return base;
+      return clampInt(map[lineKey], base, 1, 60);
+    }
+
+    function buildingConfig(building) {
+      const key = String(building || "").trim();
+      const cached = buildingCfgCache.get(key);
+      if (cached) return cached;
+      const lines = buildLines(lineCountForBuilding(key));
+      const maxFloorByLine = {};
+      let maxAll = 1;
+      for (const l of lines) {
+        const mf = maxFloorForLine(key, l);
+        maxFloorByLine[l] = mf;
+        if (mf > maxAll) maxAll = mf;
+      }
+      const cfg = {
+        lines,
+        maxFloorAll: maxAll,
+        maxFloorByLine,
+        floors: floorsUpTo(maxAll),
+      };
+      buildingCfgCache.set(key, cfg);
+      return cfg;
+    }
+
+    function setProfile(profileData) {
+      const p = profileData && typeof profileData === "object" ? profileData : null;
+      state.profile = p;
+      state.profile_site_key = siteKey();
+      state.profile_revision += 1;
+      buildingCfgCache.clear();
+    }
+
+    function derivedBuildingsFromProfile(profileData) {
+      const p = profileData && typeof profileData === "object" ? profileData : null;
+      if (!p) return [...DEFAULT_BUILDINGS];
+      const base = buildBuildings(p.building_start, p.building_count);
+      const overrides = p.building_overrides && typeof p.building_overrides === "object" ? p.building_overrides : null;
+      const overrideKeys = overrides ? Object.keys(overrides).map((x) => String(x || "").trim()).filter(Boolean) : [];
+      const rows = base.length ? base : (overrideKeys.length ? overrideKeys : [...DEFAULT_BUILDINGS]);
+      const merged = Array.from(new Set([...rows, ...overrideKeys]));
+      merged.sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+      return merged;
+    }
+
+    function refreshPanels() {
+      mergeBuildingsFromHistory();
+      renderModeTabs();
+      renderStructurePanel();
+      renderSearchPanel();
+      renderGridPanel();
+    }
+
+    async function fetchApartmentProfile(force = false) {
+      const key = siteKey();
+      if (!key || key === "GLOBAL") return null;
+      const now = Date.now();
+      const cached = PROFILE_CACHE.get(key);
+      if (!force && cached && typeof cached === "object" && (now - (cached.ts || 0)) < PROFILE_CACHE_TTL_MS) {
+        return cached.data || null;
+      }
+      if (!window.KAAuth || typeof window.KAAuth.requestJson !== "function") return null;
+      const sc = String(siteCodeInput && siteCodeInput.value ? siteCodeInput.value : "").trim().toUpperCase();
+      const sn = String(siteNameInput && siteNameInput.value ? siteNameInput.value : "").trim();
+      const qs = new URLSearchParams();
+      if (sc) qs.set("site_code", sc);
+      if (sn) qs.set("site_name", sn);
+      const url = qs.toString() ? `${PROFILE_ENDPOINT}?${qs.toString()}` : PROFILE_ENDPOINT;
+      try {
+        const data = await window.KAAuth.requestJson(url);
+        if (!data || data.ok !== true) return null;
+        PROFILE_CACHE.set(key, { ts: now, data });
+        return data;
+      } catch (_e) {
+        return null;
+      }
+    }
+
+    async function ensureApartmentProfileLoaded(force = false) {
+      const key = siteKey();
+      if (!force && state.profile && state.profile_site_key === key) return;
+      const data = await fetchApartmentProfile(force);
+      if (!data) return;
+      setProfile(data);
+      state.buildings = derivedBuildingsFromProfile(data);
+      refreshPanels();
     }
 
     function readRecent() {
@@ -169,15 +349,19 @@
       state.buildings.sort((a, b) => Number(a) - Number(b));
     }
 
-    function allUnitCandidates() {
+    function allUnitCandidates(limit = 12000) {
       const list = [];
-      state.buildings.forEach((b) => {
-        state.floors.forEach((f) => {
-          state.lines.forEach((l) => {
+      for (const b of state.buildings) {
+        const cfg = buildingConfig(b);
+        for (const f of cfg.floors) {
+          for (const l of cfg.lines) {
+            const mf = cfg.maxFloorByLine[l] || cfg.maxFloorAll;
+            if (f > mf) continue;
             list.push(`${b}-${floorLineToHo(f, l)}`);
-          });
-        });
-      });
+            if (list.length >= limit) return list;
+          }
+        }
+      }
       return list;
     }
 
@@ -245,18 +429,19 @@
       renderHeader();
     }
 
-    function buildStructureHoOptions(building, lineOpt) {
+    function buildStructureHoOptions(building, lineOptRaw) {
+      const b = String(building || "").trim();
+      const lineOpt = normalizeLineLabel(lineOptRaw);
+      const cfg = buildingConfig(b);
+      const useLines = lineOpt ? [lineOpt] : cfg.lines;
       const items = [];
-      state.floors.forEach((f) => {
-        if (lineOpt) {
-          const ho = floorLineToHo(f, lineOpt);
-          items.push({ value: `${building}-${ho}`, label: `${String(f).padStart(2, "0")}층 ${lineOpt}라인 (${ho})` });
-        } else {
-          state.lines.forEach((l) => {
-            const ho = floorLineToHo(f, l);
-            items.push({ value: `${building}-${ho}`, label: `${String(f).padStart(2, "0")}층 ${l}라인 (${ho})` });
-          });
-        }
+      cfg.floors.forEach((f) => {
+        useLines.forEach((l) => {
+          const mf = cfg.maxFloorByLine[l] || cfg.maxFloorAll;
+          if (f > mf) return;
+          const ho = floorLineToHo(f, l);
+          items.push({ value: `${b}-${ho}`, label: `${String(f).padStart(2, "0")}층 ${l}라인 (${ho})` });
+        });
       });
       return items;
     }
@@ -267,14 +452,27 @@
       const hSel = byId(mount, "usStructureHo");
       if (!bSel || !lSel || !hSel) return;
 
+      const prevLine = String(lSel.value || "").trim();
       const selectedBuilding = currentBuildingFromSelected();
       bSel.innerHTML = state.buildings.map((b) => `<option value="${esc(b)}">${esc(b)}동</option>`).join("");
       if (state.buildings.includes(selectedBuilding)) bSel.value = selectedBuilding;
 
+      const b = String(bSel.value || selectedBuilding);
+      const cfg = buildingConfig(b);
+      const inferredLine = (() => {
+        const n = normalizeUnitText(state.selected);
+        const ho = String(n.ho || "");
+        if (ho.length < 2) return "";
+        return ho.slice(-2);
+      })();
+      const preferredLine = normalizeLineLabel(prevLine || inferredLine);
       lSel.innerHTML =
-        `<option value="">라인 미선택(전체)</option>` + state.lines.map((l) => `<option value="${esc(l)}">${esc(l)}라인</option>`).join("");
+        `<option value="">라인 미선택(전체)</option>` + cfg.lines.map((l) => `<option value="${esc(l)}">${esc(l)}라인</option>`).join("");
+      if (preferredLine && cfg.lines.includes(preferredLine)) {
+        lSel.value = preferredLine;
+      }
       const lineOpt = String(lSel.value || "").trim();
-      const options = buildStructureHoOptions(String(bSel.value || selectedBuilding), lineOpt);
+      const options = buildStructureHoOptions(b, lineOpt);
       hSel.innerHTML = `<option value="">호 선택</option>` + options.map((x) => `<option value="${esc(x.value)}">${esc(x.label)}</option>`).join("");
 
       if (state.selected && options.some((x) => x.value === state.selected)) {
@@ -352,19 +550,29 @@
     function renderGridPanel() {
       const bSel = byId(mount, "usGridBuilding");
       const table = byId(mount, "usGridTable");
+      const info = byId(mount, "usGridInfo");
       if (!bSel || !table) return;
       const selectedBuilding = currentBuildingFromSelected();
       bSel.innerHTML = state.buildings.map((b) => `<option value="${esc(b)}">${esc(b)}동</option>`).join("");
       if (state.buildings.includes(selectedBuilding)) bSel.value = selectedBuilding;
       const b = String(bSel.value || selectedBuilding);
+      const cfg = buildingConfig(b);
+      if (info) {
+        const lineHint = cfg.lines.length ? `${cfg.lines[0]}~${cfg.lines[cfg.lines.length - 1]}라인(가로)` : "라인없음";
+        info.value = `1~${cfg.maxFloorAll}층(세로) x ${lineHint}`;
+      }
 
-      const header = `<tr><th>층/라인</th>${state.lines.map((l) => `<th>${esc(l)}</th>`).join("")}</tr>`;
-      const body = state.floors
+      const header = `<tr><th>층/라인</th>${cfg.lines.map((l) => `<th>${esc(l)}</th>`).join("")}</tr>`;
+      const body = cfg.floors
         .slice()
         .reverse()
         .map((f) => {
-          const cells = state.lines
+          const cells = cfg.lines
             .map((l) => {
+              const mf = cfg.maxFloorByLine[l] || cfg.maxFloorAll;
+              if (f > mf) {
+                return `<td><button type="button" class="grid-cell disabled" disabled aria-disabled="true"></button></td>`;
+              }
               const ho = floorLineToHo(f, l);
               const value = `${b}-${ho}`;
               const active = state.selected === value;
@@ -436,7 +644,7 @@
               </label>
               <label>
                 <span>그리드 정보</span>
-                <input type="text" value="1~60층(세로) x 01~06라인(가로)" readonly />
+                <input id="usGridInfo" type="text" value="" readonly />
               </label>
             </div>
             <div class="grid-wrap">
@@ -549,6 +757,11 @@
     } else {
       renderHeader();
     }
+
+    // Load per-site apartment profile (if available) to drive building/line/floor candidates.
+    ensureApartmentProfileLoaded(false).catch(() => {});
+    siteCodeInput?.addEventListener("change", () => ensureApartmentProfileLoaded(true).catch(() => {}));
+    siteNameInput?.addEventListener("change", () => ensureApartmentProfileLoaded(true).catch(() => {}));
 
     return {
       getValue() {

@@ -25,7 +25,12 @@ from ..complaints_db import (
     update_notice,
     update_work_order,
 )
-from ..db import get_auth_user_by_token
+from ..db import (
+    apartment_profile_defaults,
+    get_auth_user_by_token,
+    get_site_apartment_profile_record,
+    resolve_site_identity,
+)
 
 router = APIRouter()
 AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
@@ -161,6 +166,74 @@ def get_notices(limit: int = Query(50, ge=1, le=200)):
 @router.get("/faqs")
 def get_faqs(limit: int = Query(100, ge=1, le=300)):
     return {"ok": True, "items": list_public_faqs(limit=limit)}
+
+
+@router.get("/apartment_profile")
+def get_apartment_profile(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+):
+    user, _token = _require_auth(request)
+    is_admin = int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1
+
+    target_site_name = str(site_name or "").strip()
+    target_site_code = str(site_code or "").strip().upper()
+    target_site_id = int(site_id or 0)
+
+    if not is_admin:
+        target_site_name = str(user.get("site_name") or "").strip()
+        target_site_code = str(user.get("site_code") or "").strip().upper()
+        try:
+            target_site_id = int(user.get("site_id") or 0)
+        except Exception:
+            target_site_id = 0
+
+    resolved = resolve_site_identity(
+        site_id=(target_site_id if target_site_id > 0 else None),
+        site_name=target_site_name,
+        site_code=target_site_code,
+        create_site_if_missing=False,
+    )
+    resolved_site_id = int(resolved.get("site_id") or 0)
+    resolved_site_name = str(resolved.get("site_name") or target_site_name or "").strip()
+    resolved_site_code = str(resolved.get("site_code") or target_site_code or "").strip().upper()
+
+    row = get_site_apartment_profile_record(
+        site_id=(resolved_site_id if resolved_site_id > 0 else 0),
+        site_name=resolved_site_name,
+        site_code=(resolved_site_code or None),
+    )
+    if not row:
+        defaults = apartment_profile_defaults()
+        return {
+            "ok": True,
+            "exists": False,
+            "site_id": resolved_site_id,
+            "site_name": resolved_site_name,
+            "site_code": resolved_site_code,
+            **defaults,
+            "created_at": None,
+            "updated_at": None,
+        }
+
+    return {
+        "ok": True,
+        "exists": True,
+        "site_id": int(row.get("site_id") or resolved_site_id or 0),
+        "site_name": resolved_site_name,
+        "site_code": resolved_site_code,
+        "households_total": int(row.get("households_total") or 0),
+        "building_start": int(row.get("building_start") or 101),
+        "building_count": int(row.get("building_count") or 0),
+        "default_line_count": int(row.get("default_line_count") or 6),
+        "default_max_floor": int(row.get("default_max_floor") or 60),
+        "default_basement_floors": int(row.get("default_basement_floors") or 0),
+        "building_overrides": row.get("building_overrides") if isinstance(row.get("building_overrides"), dict) else {},
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
 
 
 @router.post("/complaints")

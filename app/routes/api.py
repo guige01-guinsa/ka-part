@@ -36,6 +36,7 @@ from ..ops_diagnostics import (
     run_ops_diagnostics,
 )
 from ..db import (
+    apartment_profile_defaults,
     cleanup_expired_sessions,
     count_active_resident_household_users,
     count_staff_admins,
@@ -59,6 +60,7 @@ from ..db import (
     find_site_name_by_code,
     get_site_env_config,
     get_site_env_record,
+    get_site_apartment_profile_record,
     get_site_env_config_version,
     get_first_staff_user_for_site,
     get_staff_user_by_phone,
@@ -88,6 +90,7 @@ from ..db import (
     set_staff_user_site_code,
     set_staff_user_password,
     touch_signup_phone_verification_attempt,
+    upsert_site_apartment_profile,
     upsert_site_env_config,
     update_staff_user,
     update_staff_user_profile_fields,
@@ -96,6 +99,7 @@ from ..db import (
     verify_password,
     withdraw_staff_user,
     write_security_audit_log,
+    delete_site_apartment_profile,
 )
 from ..schema_defs import (
     DEFAULT_INITIAL_VISIBLE_TAB_KEYS,
@@ -2662,6 +2666,173 @@ def api_site_env_delete(
         "site_name": clean_site_name,
         "site_code": clean_site_code,
         "prechange_backup": prechange_backup,
+    }
+
+
+@router.get("/apartment_profile")
+def api_apartment_profile_get(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+):
+    user, _token = _require_site_env_manager(request)
+    clean_site_name, clean_site_code = _resolve_spec_env_site_target(
+        user, site_name, site_code, site_id, require_any=True, for_write=False
+    )
+    resolved_identity = resolve_site_identity(
+        site_id=_clean_site_id(site_id, required=False),
+        site_name=clean_site_name,
+        site_code=clean_site_code,
+        create_site_if_missing=False,
+    )
+    resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
+
+    row = get_site_apartment_profile_record(
+        site_id=resolved_site_id,
+        site_name=clean_site_name,
+        site_code=clean_site_code or None,
+    )
+    if not row:
+        defaults = apartment_profile_defaults()
+        return {
+            "ok": True,
+            "exists": False,
+            "site_id": int(resolved_site_id or 0),
+            "site_name": clean_site_name,
+            "site_code": clean_site_code,
+            **defaults,
+            "created_at": None,
+            "updated_at": None,
+        }
+
+    return {
+        "ok": True,
+        "exists": True,
+        "site_id": int(row.get("site_id") or resolved_site_id or 0),
+        "site_name": clean_site_name,
+        "site_code": clean_site_code,
+        "households_total": int(row.get("households_total") or 0),
+        "building_start": int(row.get("building_start") or 101),
+        "building_count": int(row.get("building_count") or 0),
+        "default_line_count": int(row.get("default_line_count") or 6),
+        "default_max_floor": int(row.get("default_max_floor") or 60),
+        "default_basement_floors": int(row.get("default_basement_floors") or 0),
+        "building_overrides": row.get("building_overrides") if isinstance(row.get("building_overrides"), dict) else {},
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+@router.put("/apartment_profile")
+def api_apartment_profile_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
+    user, _token = _require_site_env_manager(request)
+    _assert_mfa_confirmed(request, payload, operation_label="아파트 정보 설정 변경")
+    clean_site_name, clean_site_code = _resolve_spec_env_site_target(
+        user,
+        payload.get("site_name"),
+        payload.get("site_code"),
+        payload.get("site_id"),
+        require_any=True,
+        for_write=True,
+    )
+    resolved_identity = resolve_site_identity(
+        site_id=_clean_site_id(payload.get("site_id"), required=False),
+        site_name=clean_site_name,
+        site_code=clean_site_code,
+        create_site_if_missing=False,
+    )
+    resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
+    if not resolved_site_id:
+        raise HTTPException(status_code=404, detail="단지(site_id)를 찾을 수 없습니다.")
+
+    profile_payload = payload.get("profile") if isinstance(payload.get("profile"), dict) else payload
+    reason = str(payload.get("reason") or "").strip()
+    try:
+        row = upsert_site_apartment_profile(
+            site_name=clean_site_name,
+            site_code=clean_site_code or None,
+            site_id=int(resolved_site_id),
+            profile=profile_payload if isinstance(profile_payload, dict) else {},
+        )
+    except ValueError as e:
+        _audit_security(
+            user=user,
+            event_type="apartment_profile_update",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=clean_site_code,
+            target_site_name=clean_site_name,
+            detail={"reason": reason, "error": str(e)},
+        )
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    _audit_security(
+        user=user,
+        event_type="apartment_profile_update",
+        severity="INFO",
+        outcome="ok",
+        target_site_code=clean_site_code,
+        target_site_name=clean_site_name,
+        detail={"reason": reason, "admin_scope": _admin_scope_from_user(user)},
+    )
+
+    return {
+        "ok": True,
+        "exists": True,
+        "site_id": int(row.get("site_id") or resolved_site_id or 0),
+        "site_name": clean_site_name,
+        "site_code": clean_site_code,
+        "households_total": int(row.get("households_total") or 0),
+        "building_start": int(row.get("building_start") or 101),
+        "building_count": int(row.get("building_count") or 0),
+        "default_line_count": int(row.get("default_line_count") or 6),
+        "default_max_floor": int(row.get("default_max_floor") or 60),
+        "default_basement_floors": int(row.get("default_basement_floors") or 0),
+        "building_overrides": row.get("building_overrides") if isinstance(row.get("building_overrides"), dict) else {},
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+@router.delete("/apartment_profile")
+def api_apartment_profile_delete(
+    request: Request,
+    site_name: str = Query(default=""),
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+):
+    user, _token = _require_site_env_manager(request)
+    _assert_mfa_confirmed(request, operation_label="아파트 정보 설정 삭제")
+    clean_site_name, clean_site_code = _resolve_spec_env_site_target(
+        user, site_name, site_code, site_id, require_any=True, for_write=False
+    )
+    resolved_identity = resolve_site_identity(
+        site_id=_clean_site_id(site_id, required=False),
+        site_name=clean_site_name,
+        site_code=clean_site_code,
+        create_site_if_missing=False,
+    )
+    resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
+    ok = delete_site_apartment_profile(
+        site_id=int(resolved_site_id or 0),
+        site_name=clean_site_name,
+        site_code=clean_site_code or None,
+    )
+    _audit_security(
+        user=user,
+        event_type="apartment_profile_delete",
+        severity="WARN",
+        outcome=("ok" if ok else "noop"),
+        target_site_code=clean_site_code,
+        target_site_name=clean_site_name,
+        detail={"admin_scope": _admin_scope_from_user(user)},
+    )
+    return {
+        "ok": ok,
+        "site_id": int(resolved_site_id or 0),
+        "site_name": clean_site_name,
+        "site_code": clean_site_code,
     }
 
 
