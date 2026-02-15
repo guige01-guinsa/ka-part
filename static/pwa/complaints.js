@@ -52,12 +52,61 @@
     return String((user && user.role) || "").trim();
   }
 
+  function permissionLevelKey(user) {
+    return String((user && user.permission_level) || "").trim().toLowerCase();
+  }
+
+  function isResidentRoleText(role) {
+    const txt = String(role || "").trim();
+    return txt === "입주민" || txt === "주민" || txt === "세대주민";
+  }
+
+  function isResidentUser(user) {
+    if (!user) return false;
+    const lvl = permissionLevelKey(user);
+    if (lvl === "resident") return true;
+    return isResidentRoleText(roleText(user));
+  }
+
   function isSecurityRole(user) {
     const role = roleText(user);
     if (!role) return false;
     const compact = role.replaceAll(" ", "");
     if (compact === "보안/경비") return true;
     return role.includes("보안") || role.includes("경비");
+  }
+
+  function hideFieldByInputId(inputId) {
+    const el = typeof inputId === "string" ? document.querySelector(inputId) : null;
+    const wrap = el ? el.closest(".field") : null;
+    if (wrap) wrap.classList.add("hidden");
+  }
+
+  function hideFieldByElementId(elementId) {
+    const el = typeof elementId === "string" ? document.getElementById(elementId) : null;
+    const wrap = el ? el.closest(".field") : null;
+    if (wrap) wrap.classList.add("hidden");
+  }
+
+  function applyResidentIntakeMode() {
+    if (!me) return;
+    // Residents see a simplified intake form; admins keep full fields.
+    if (isAdmin(me)) return;
+    if (!isResidentUser(me)) return;
+
+    const unit = String(me.unit_label || "").trim();
+    if (unit) {
+      if (unitSelector && typeof unitSelector.setValue === "function") {
+        unitSelector.setValue(unit);
+      }
+      if ($("#unitLabel")) $("#unitLabel").value = unit;
+    }
+
+    // Hide dong/ho selector and triage fields for resident intake.
+    hideFieldByInputId("#unitLabel");
+    hideFieldByElementId("unitSelectorMount");
+    hideFieldByInputId("#scopeSelect");
+    hideFieldByInputId("#categorySelect");
   }
 
   function escapeHtml(v) {
@@ -248,7 +297,12 @@
     const scope = getSelectedScope();
     const site_name = normalizeText($("#siteName").value, 80, "단지명", false);
     const site_code = normalizeText($("#siteCode").value, 32, "단지코드", false).toUpperCase();
-    const unit_label = getUnitLabelValue();
+    let unit_label = getUnitLabelValue();
+    if (me && !isAdmin(me) && isResidentUser(me)) {
+      // Residents should file under their own unit label.
+      const fixed = String(me.unit_label || "").trim();
+      if (fixed) unit_label = fixed;
+    }
     const title = normalizeText($("#titleInput").value, 140, "제목", true);
     const description = normalizeText($("#descInput").value, 8000, "내용", true);
     const location_detail = normalizeText($("#locInput").value, 200, "위치", false);
@@ -639,6 +693,7 @@
     updateMetaLine();
     normalizeSiteContext();
     initUnitSelector();
+    applyResidentIntakeMode();
     await loadCategories();
     await loadMyComplaints();
     if (isAdmin(me)) {
