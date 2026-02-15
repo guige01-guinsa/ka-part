@@ -418,7 +418,44 @@
       showSignupResult("문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.");
       return;
     }
-    if (!body.name || !body.phone || !body.login_id || !body.site_name || !body.role || !body.address || !body.office_phone || !body.office_fax) {
+    const missingNormalFields =
+      !body.name || !body.phone || !body.login_id || !body.site_name || !body.role || !body.address || !body.office_phone || !body.office_fax;
+    if (missingNormalFields) {
+      // If the account was already approved by an admin (site registry flow), allow a phone-only path
+      // without exposing a separate "ready" button in the UI.
+      if (body.phone) {
+        try {
+          resetSignupFinalizeState();
+          const data = await KAAuth.requestJson("/api/auth/signup/request_ready_verification", {
+            method: "POST",
+            noAuth: true,
+            body: JSON.stringify({ phone: body.phone }),
+            headers: {},
+          });
+          if (data && data.already_registered) {
+            const lines = [];
+            lines.push(data.message || "이미 등록된 사용자입니다.");
+            lines.push(`아이디: ${data.login_id || "-"}`);
+            showSignupResult(lines.join("\n"));
+            setMsg($("#signupMsg"), "처리 완료");
+            if (data.login_id) $("#loginId").value = String(data.login_id);
+            return;
+          }
+          enableSignupReadyMode({
+            fromQuery: false,
+            phone: body.phone,
+            loginId: body.login_id,
+            requestId: data && data.request_id ? String(data.request_id) : "",
+          });
+          let msg = data.message || "인증번호를 전송했습니다.";
+          if (data.debug_code) msg += ` (개발용 인증번호: ${data.debug_code})`;
+          setMsg($("#signupMsg"), msg);
+          showSignupResult("문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.");
+          return;
+        } catch (_e) {
+          // fall through: user is in normal signup flow
+        }
+      }
       setMsg($("#signupMsg"), "필수 항목을 모두 입력하세요.", true);
       return;
     }
@@ -732,9 +769,6 @@
     });
     $("#btnPrepareSiteReg")?.addEventListener("click", () => {
       prepareSiteRegisterReservation().catch((e) => setSiteRegMsg(e.message || String(e), true));
-    });
-    $("#btnEnableReadyMode")?.addEventListener("click", () => {
-      enableSignupReadyMode({ fromQuery: false });
     });
     $("#suSiteName")?.addEventListener("input", () => {
       const sr = $("#srSiteName");
