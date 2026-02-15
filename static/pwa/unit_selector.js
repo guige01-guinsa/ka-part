@@ -10,7 +10,7 @@
   const MAX_RECENT = 8;
   const MAX_FAVORITES = 12;
   const DEFAULT_BUILDINGS = Array.from({ length: 20 }, (_x, i) => String(101 + i));
-  const DEFAULT_LINES = ["01", "02", "03", "04", "05", "06"];
+  const DEFAULT_LINES = ["01", "02", "03", "04", "05", "06", "07", "08"];
   const DEFAULT_FLOORS = Array.from({ length: 60 }, (_x, i) => i + 1);
   const PROFILE_ENDPOINT = "/api/v1/apartment_profile";
   const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -44,7 +44,7 @@
   }
 
   function buildLines(lineCount) {
-    const n = clampInt(lineCount, 6, 1, 6);
+    const n = clampInt(lineCount, DEFAULT_LINES.length, 1, 8);
     const out = [];
     for (let i = 1; i <= n; i += 1) out.push(String(i).padStart(2, "0"));
     return out;
@@ -185,10 +185,10 @@
 
     function lineCountForBuilding(building) {
       const p = activeProfile();
-      const base = profileValueInt(p, "default_line_count", DEFAULT_LINES.length, 1, 6);
+      const base = profileValueInt(p, "default_line_count", DEFAULT_LINES.length, 1, 8);
       const ov = buildingOverride(building);
       if (ov && Object.prototype.hasOwnProperty.call(ov, "line_count")) {
-        return clampInt(ov.line_count, base, 1, 6);
+        return clampInt(ov.line_count, base, 1, 8);
       }
       return base;
     }

@@ -227,7 +227,7 @@ def get_apartment_profile(
         "households_total": int(row.get("households_total") or 0),
         "building_start": int(row.get("building_start") or 101),
         "building_count": int(row.get("building_count") or 0),
-        "default_line_count": int(row.get("default_line_count") or 6),
+        "default_line_count": int(row.get("default_line_count") or 8),
         "default_max_floor": int(row.get("default_max_floor") or 60),
         "default_basement_floors": int(row.get("default_basement_floors") or 0),
         "building_overrides": row.get("building_overrides") if isinstance(row.get("building_overrides"), dict) else {},

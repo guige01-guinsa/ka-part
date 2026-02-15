@@ -923,7 +923,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
           households_total INTEGER NOT NULL DEFAULT 0,
           building_start INTEGER NOT NULL DEFAULT 101,
           building_count INTEGER NOT NULL DEFAULT 0,
-          default_line_count INTEGER NOT NULL DEFAULT 6,
+          default_line_count INTEGER NOT NULL DEFAULT 8,
           default_max_floor INTEGER NOT NULL DEFAULT 60,
           default_basement_floors INTEGER NOT NULL DEFAULT 0,
           building_overrides_json TEXT NOT NULL DEFAULT '{}',
@@ -938,7 +938,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "site_apartment_profiles", "households_total INTEGER NOT NULL DEFAULT 0")
     _ensure_column(con, "site_apartment_profiles", "building_start INTEGER NOT NULL DEFAULT 101")
     _ensure_column(con, "site_apartment_profiles", "building_count INTEGER NOT NULL DEFAULT 0")
-    _ensure_column(con, "site_apartment_profiles", "default_line_count INTEGER NOT NULL DEFAULT 6")
+    _ensure_column(con, "site_apartment_profiles", "default_line_count INTEGER NOT NULL DEFAULT 8")
     _ensure_column(con, "site_apartment_profiles", "default_max_floor INTEGER NOT NULL DEFAULT 60")
     _ensure_column(con, "site_apartment_profiles", "default_basement_floors INTEGER NOT NULL DEFAULT 0")
     _ensure_column(con, "site_apartment_profiles", "building_overrides_json TEXT NOT NULL DEFAULT '{}'")
@@ -2172,7 +2172,7 @@ def apartment_profile_defaults() -> Dict[str, Any]:
         "households_total": 0,
         "building_start": 101,
         "building_count": 20,
-        "default_line_count": 6,
+        "default_line_count": 8,
         "default_max_floor": 60,
         "default_basement_floors": 0,
         "building_overrides": {},
@@ -2208,8 +2208,8 @@ def _normalize_line_key(value: Any) -> str:
         n = int(raw)
     except Exception as e:
         raise ValueError("line key must be numeric") from e
-    if n < 1 or n > 6:
-        raise ValueError("line key must be 1..6")
+    if n < 1 or n > 8:
+        raise ValueError("line key must be 1..8")
     return f"{n:02d}"
 
 
@@ -2233,7 +2233,7 @@ def normalize_apartment_building_overrides(value: Any) -> Dict[str, Any]:
                 field="line_count",
                 default=0,
                 min_value=1,
-                max_value=6,
+                max_value=8,
             )
         if "max_floor" in raw_item:
             item["max_floor"] = _clean_apartment_int(
@@ -2302,7 +2302,7 @@ def normalize_site_apartment_profile(payload: Dict[str, Any] | None) -> Dict[str
         field="default_line_count",
         default=int(defaults["default_line_count"]),
         min_value=1,
-        max_value=6,
+        max_value=8,
     )
     out["default_max_floor"] = _clean_apartment_int(
         data.get("default_max_floor", defaults["default_max_floor"]),

@@ -143,10 +143,10 @@
   function updateDefaultsPreview() {
     const el = $("#defaultsPreview");
     if (!el) return;
-    const lc = intOr($("#defaultLineCount").value, 6);
+    const lc = intOr($("#defaultLineCount").value, 8);
     const mf = intOr($("#defaultMaxFloor").value, 60);
     const bf = intOr($("#defaultBasementFloors").value, 0);
-    el.textContent = `기본 구조: 1~${mf}층, 01~${String(Math.max(1, Math.min(lc, 6))).padStart(2, "0")}라인, 지하 ${Math.max(0, bf)}층`;
+    el.textContent = `기본 구조: 1~${mf}층, 01~${String(Math.max(1, Math.min(lc, 8))).padStart(2, "0")}라인, 지하 ${Math.max(0, bf)}층`;
   }
 
   function renderOverrides() {
@@ -165,9 +165,9 @@
         const maxFloor = intOr(it.max_floor, "");
         const basement = intOr(it.basement_floors, "");
         const lineMax = it.line_max_floors && typeof it.line_max_floors === "object" ? it.line_max_floors : {};
-        const lcEffective = lineCount ? Math.max(1, Math.min(lineCount, 6)) : intOr($("#defaultLineCount").value, 6);
+        const lcEffective = lineCount ? Math.max(1, Math.min(lineCount, 8)) : intOr($("#defaultLineCount").value, 8);
 
-        const lineInputs = Array.from({ length: 6 }, (_x, i) => String(i + 1).padStart(2, "0")).map((l) => {
+        const lineInputs = Array.from({ length: 8 }, (_x, i) => String(i + 1).padStart(2, "0")).map((l) => {
           const v = Object.prototype.hasOwnProperty.call(lineMax, l) ? intOr(lineMax[l], "") : "";
           const disabled = Number(l) > lcEffective;
           return `
@@ -187,7 +187,7 @@
             <div class="ov-grid">
               <label class="mini-field">
                 <label>라인수</label>
-                <input class="ov-field" data-building="${b}" data-field="line_count" type="number" min="1" max="6" value="${lineCount}" placeholder="(기본값 사용)" />
+                <input class="ov-field" data-building="${b}" data-field="line_count" type="number" min="1" max="8" value="${lineCount}" placeholder="(기본값 사용)" />
               </label>
               <label class="mini-field">
                 <label>최고층</label>
@@ -215,7 +215,7 @@
     const households_total = cleanInt($("#householdsTotal").value, 0, 0, 200000, "세대수");
     const building_start = cleanInt($("#buildingStart").value, 101, 1, 9999, "동 시작번호");
     const building_count = cleanInt($("#buildingCount").value, 20, 0, 500, "동 수");
-    const default_line_count = cleanInt($("#defaultLineCount").value, 6, 1, 6, "기본 라인수");
+    const default_line_count = cleanInt($("#defaultLineCount").value, 8, 1, 8, "기본 라인수");
     const default_max_floor = cleanInt($("#defaultMaxFloor").value, 60, 1, 60, "기본 최고층");
     const default_basement_floors = cleanInt($("#defaultBasementFloors").value, 0, 0, 20, "기본 지하층수");
 
@@ -227,7 +227,7 @@
       if (!raw || typeof raw !== "object") continue;
       const item = {};
       if (Object.prototype.hasOwnProperty.call(raw, "line_count")) {
-        item.line_count = cleanInt(intOr(raw.line_count, 0), 0, 1, 6, "라인수");
+        item.line_count = cleanInt(intOr(raw.line_count, 0), 0, 1, 8, "라인수");
       }
       if (Object.prototype.hasOwnProperty.call(raw, "max_floor")) {
         item.max_floor = cleanInt(intOr(raw.max_floor, 0), 0, 1, 60, "최고층");
@@ -241,6 +241,7 @@
       for (const [lk, lv] of Object.entries(lm)) {
         const lineKey = String(lk || "").trim().padStart(2, "0");
         if (!/^\d{2}$/.test(lineKey)) continue;
+        if (Number(lineKey) < 1 || Number(lineKey) > 8) continue;
         const v = intOr(lv, 0);
         if (!v) continue;
         lineOut[lineKey] = cleanInt(v, 0, 1, 60, `라인별 최고층(${lineKey})`);
@@ -278,7 +279,7 @@
     $("#householdsTotal").value = intOr(data.households_total, 0);
     $("#buildingStart").value = intOr(data.building_start, 101);
     $("#buildingCount").value = intOr(data.building_count, 20);
-    $("#defaultLineCount").value = String(intOr(data.default_line_count, 6));
+    $("#defaultLineCount").value = String(intOr(data.default_line_count, 8));
     $("#defaultMaxFloor").value = intOr(data.default_max_floor, 60);
     $("#defaultBasementFloors").value = intOr(data.default_basement_floors, 0);
     buildingOverrides = data.building_overrides && typeof data.building_overrides === "object" ? data.building_overrides : {};
@@ -342,7 +343,7 @@
       households_total: 0,
       building_start: 101,
       building_count: 20,
-      default_line_count: 6,
+      default_line_count: 8,
       default_max_floor: 60,
       default_basement_floors: 0,
       building_overrides: {},
@@ -360,7 +361,7 @@
       return;
     }
     const defaults = {
-      line_count: intOr($("#defaultLineCount").value, 6),
+      line_count: intOr($("#defaultLineCount").value, 8),
       max_floor: intOr($("#defaultMaxFloor").value, 60),
       basement_floors: intOr($("#defaultBasementFloors").value, 0),
       line_max_floors: {},
