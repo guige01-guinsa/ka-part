@@ -2528,7 +2528,8 @@ def api_site_registry_register(request: Request, payload: Dict[str, Any] = Body(
 @router.put("/site_env")
 def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     user, _token = _require_site_env_manager(request)
-    _assert_change_window("제원설정 변경")
+    if _env_enabled("KA_SPEC_ENV_CHANGE_WINDOW_ENABLED", False):
+        _assert_change_window("제원설정 변경")
     _assert_mfa_confirmed(request, payload, operation_label="제원설정 변경")
     clean_site_name, clean_site_code = _resolve_spec_env_site_target(
         user,
@@ -2615,7 +2616,8 @@ def api_site_env_delete(
     site_id: int = Query(default=0),
 ):
     user, _token = _require_site_env_manager(request)
-    _assert_change_window("제원설정 삭제")
+    if _env_enabled("KA_SPEC_ENV_CHANGE_WINDOW_ENABLED", False):
+        _assert_change_window("제원설정 삭제")
     _assert_mfa_confirmed(request, operation_label="제원설정 삭제")
     clean_site_name, clean_site_code = _resolve_spec_env_site_target(
         user, site_name, site_code, site_id, require_any=True, for_write=False
@@ -2724,7 +2726,8 @@ def api_site_env_history(
 @router.post("/site_env/rollback")
 def api_site_env_rollback(request: Request, payload: Dict[str, Any] = Body(...)):
     user, _token = _require_site_env_manager(request)
-    _assert_change_window("제원설정 롤백")
+    if _env_enabled("KA_SPEC_ENV_CHANGE_WINDOW_ENABLED", False):
+        _assert_change_window("제원설정 롤백")
     _assert_mfa_confirmed(request, payload, operation_label="제원설정 롤백")
     version_id = int(payload.get("version_id") or 0)
     if version_id <= 0:
