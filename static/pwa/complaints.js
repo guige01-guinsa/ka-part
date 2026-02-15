@@ -20,6 +20,23 @@
     PRIVATE: "세대내부",
     EMERGENCY: "긴급",
   };
+  const PRIORITY_LABELS = {
+    LOW: "낮음",
+    NORMAL: "보통",
+    HIGH: "높음",
+    URGENT: "긴급",
+  };
+  const RESOLUTION_LABELS = {
+    REPAIR: "수리/조치",
+    GUIDANCE_ONLY: "안내만",
+    EXTERNAL_VENDOR: "외주",
+  };
+  const WORK_ORDER_STATUS_LABELS = {
+    OPEN: "접수",
+    DISPATCHED: "출동/배정",
+    DONE: "완료",
+    CANCELED: "취소",
+  };
 
   let me = null;
   let categories = [];
@@ -71,6 +88,21 @@
   function toScopeLabel(scope) {
     const key = String(scope || "").trim().toUpperCase();
     return SCOPE_LABELS[key] || key || "-";
+  }
+
+  function toPriorityLabel(priority) {
+    const key = String(priority || "").trim().toUpperCase();
+    return PRIORITY_LABELS[key] || key || "-";
+  }
+
+  function toResolutionLabel(value) {
+    const key = String(value || "").trim().toUpperCase();
+    return RESOLUTION_LABELS[key] || key || "-";
+  }
+
+  function toWorkOrderStatusLabel(status) {
+    const key = String(status || "").trim().toUpperCase();
+    return WORK_ORDER_STATUS_LABELS[key] || key || "-";
   }
 
   function formatDateTime(value) {
@@ -267,7 +299,7 @@
           <span>${escapeHtml(row.ticket_no || `#${id}`)}</span>
           <span>${escapeHtml(toStatusLabel(row.status))}</span>
         </div>
-        <div class="sub">${escapeHtml(toScopeLabel(row.scope))} · ${escapeHtml(row.priority || "-")} · ${escapeHtml(row.category_name || "-")}</div>
+        <div class="sub">${escapeHtml(toScopeLabel(row.scope))} · ${escapeHtml(toPriorityLabel(row.priority))} · ${escapeHtml(row.category_name || "-")}</div>
         <div class="sub">${escapeHtml(row.title || "-")}</div>
         <div class="sub">${escapeHtml(formatDateTime(row.created_at || ""))}</div>
       </button>
@@ -295,13 +327,13 @@
     const lines = [];
     lines.push(`접수번호: ${item.ticket_no || "-"}`);
     lines.push(`상태: ${toStatusLabel(item.status)} / 구분: ${toScopeLabel(item.scope)}`);
-    lines.push(`우선순위: ${item.priority || "-"}`);
+    lines.push(`우선순위: ${toPriorityLabel(item.priority)}`);
     lines.push(`카테고리: ${item.category_name || "-"}`);
     lines.push(`제목: ${item.title || "-"}`);
     lines.push(`내용: ${item.description || "-"}`);
     lines.push(`위치: ${item.location_detail || "-"}`);
     lines.push(`접수일시: ${formatDateTime(item.created_at)}`);
-    if (item.resolution_type) lines.push(`처리방식: ${item.resolution_type}`);
+    if (item.resolution_type) lines.push(`처리방식: ${toResolutionLabel(item.resolution_type)}`);
     if (item.assignee_name || item.assigned_to_user_id) {
       lines.push(`담당자: ${item.assignee_name || item.assigned_to_user_id}`);
     }
@@ -373,7 +405,7 @@
     if (wos.length) {
       segments.push(
         `<div class="line2">작업지시: ${wos
-          .map((w) => `#${escapeHtml(w.id)} ${escapeHtml(w.status)} (${escapeHtml(w.assignee_name || w.assignee_user_id || "-")})`)
+          .map((w) => `#${escapeHtml(w.id)} ${escapeHtml(toWorkOrderStatusLabel(w.status))} (${escapeHtml(w.assignee_name || w.assignee_user_id || "-")})`)
           .join(" / ")}</div>`
       );
     }
@@ -517,8 +549,12 @@
     if (!isAdmin(me)) return;
     const data = await jfetch("/api/v1/admin/stats/complaints");
     const item = data && data.item ? data.item : {};
-    const byStatus = Array.isArray(item.by_status) ? item.by_status.map((x) => `${x.status}:${x.count}`).join(", ") : "-";
-    const byScope = Array.isArray(item.by_scope) ? item.by_scope.map((x) => `${x.scope}:${x.count}`).join(", ") : "-";
+    const byStatus = Array.isArray(item.by_status)
+      ? item.by_status.map((x) => `${toStatusLabel(x.status)}:${x.count}`).join(", ")
+      : "-";
+    const byScope = Array.isArray(item.by_scope)
+      ? item.by_scope.map((x) => `${toScopeLabel(x.scope)}:${x.count}`).join(", ")
+      : "-";
     $("#statsBox").textContent =
       `전체:${item.total_count || 0} / 긴급:${item.emergency_count || 0} / 지연:${item.delayed_count || 0}\n` +
       `평균해결시간(시간): ${item.avg_resolution_hours == null ? "-" : Number(item.avg_resolution_hours).toFixed(2)}\n` +

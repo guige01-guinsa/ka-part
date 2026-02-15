@@ -37,6 +37,28 @@ AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").st
 SECURITY_ROLE_KEYWORDS = ("보안", "경비")
 ALLOW_QUERY_ACCESS_TOKEN = (os.getenv("KA_ALLOW_QUERY_ACCESS_TOKEN") or "").strip().lower() in {"1", "true", "yes", "on"}
 
+_COMPLAINTS_DETAIL_KO_MAP = {
+    "auth required": "로그인이 필요합니다.",
+    "invalid or expired session": "로그인이 필요합니다. (세션 만료)",
+    "admin only": "관리자만 사용할 수 있습니다.",
+    "supervisor admin only": "최고/운영관리자만 사용할 수 있습니다.",
+    "complaint not found": "민원을 찾을 수 없습니다.",
+    "invalid category_id": "카테고리 값이 올바르지 않습니다.",
+    "invalid scope filter": "민원 구분(scope) 값이 올바르지 않습니다.",
+    "invalid status filter": "상태 필터 값이 올바르지 않습니다.",
+    "assignee_user_id not found or inactive": "배정할 사용자 ID를 찾을 수 없거나 비활성 상태입니다.",
+    "work_order not found": "작업지시를 찾을 수 없습니다.",
+    "visit not found": "방문기록을 찾을 수 없습니다.",
+    "notice not found": "공지사항을 찾을 수 없습니다.",
+}
+
+
+def _detail_ko(value: Any) -> str:
+    msg = str(value or "").strip()
+    if not msg:
+        return ""
+    return _COMPLAINTS_DETAIL_KO_MAP.get(msg, msg)
+
 
 class ComplaintCreatePayload(BaseModel):
     category_id: int = Field(..., ge=1)
@@ -111,7 +133,7 @@ def _extract_access_token(request: Request) -> str:
         token = (request.query_params.get("access_token") or "").strip()
         if token:
             return token
-    raise HTTPException(status_code=401, detail="auth required")
+    raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
 
 
 def _normalized_role_text(value: Any) -> str:
@@ -132,7 +154,7 @@ def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
     token = _extract_access_token(request)
     user = get_auth_user_by_token(token)
     if not user:
-        raise HTTPException(status_code=401, detail="invalid or expired session")
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다. (세션 만료)")
     if _is_security_role(user.get("role")):
         raise HTTPException(status_code=403, detail="보안/경비 계정은 주차관리 모듈만 사용할 수 있습니다.")
     return user, token
@@ -143,7 +165,7 @@ def _require_admin(request: Request) -> Tuple[Dict[str, Any], str]:
     is_admin = int(user.get("is_admin") or 0) == 1
     is_site_admin = int(user.get("is_site_admin") or 0) == 1
     if not (is_admin or is_site_admin):
-        raise HTTPException(status_code=403, detail="admin only")
+        raise HTTPException(status_code=403, detail="관리자만 사용할 수 있습니다.")
     return user, token
 
 
@@ -264,10 +286,10 @@ def post_complaint(payload: ComplaintCreatePayload, request: Request):
             force_emergency=False,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    message = "Complaint received."
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
+    message = "민원이 접수되었습니다."
     if str(created.get("scope")) == "PRIVATE":
-        message = "Private-unit issue: guidance provided, repair not dispatched."
+        message = "세대 내부 민원은 수리 출동을 제공하지 않으며 사용 안내 중심으로 처리됩니다."
     return {"ok": True, "message": message, "item": created}
 
 
@@ -298,8 +320,8 @@ def post_emergency(payload: ComplaintCreatePayload, request: Request):
             force_emergency=True,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"ok": True, "message": "Emergency complaint received with urgent priority.", "item": created}
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
+    return {"ok": True, "message": "긴급 민원이 접수되었습니다. 우선순위 '긴급'으로 처리됩니다.", "item": created}
 
 
 @router.get("/complaints")
@@ -318,7 +340,7 @@ def get_my_complaints(
             offset=offset,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
     return {"ok": True, "items": rows}
 
 
@@ -331,12 +353,12 @@ def get_my_complaint(complaint_id: int, request: Request):
         is_admin=(int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1),
     )
     if not item:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     # Site admins are constrained to their own site_code.
     if int(user.get("is_admin") or 0) != 1 and int(user.get("is_site_admin") or 0) == 1:
         site_scope = str(user.get("site_code") or "").strip().upper()
         if site_scope and str(item.get("site_code") or "").strip().upper() != site_scope:
-            raise HTTPException(status_code=404, detail="complaint not found")
+            raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     return {"ok": True, "item": item}
 
 
@@ -349,7 +371,7 @@ def post_comment(complaint_id: int, payload: CommentCreatePayload, request: Requ
         is_admin=(int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1),
     )
     if not item:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     try:
         out = add_comment(
             complaint_id=int(complaint_id),
@@ -358,7 +380,7 @@ def post_comment(complaint_id: int, payload: CommentCreatePayload, request: Requ
             is_internal=False,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
     return {"ok": True, "item": out}
 
 
@@ -383,7 +405,7 @@ def admin_get_complaints(
             offset=offset,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
     return {"ok": True, "items": rows}
 
 
@@ -392,10 +414,10 @@ def admin_get_complaint(complaint_id: int, request: Request):
     user, _token = _require_admin(request)
     item = get_complaint(int(complaint_id), requester_user_id=int(user["id"]), is_admin=True)
     if not item:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     scoped_site = _admin_site_scope(user)
     if scoped_site and str(item.get("site_code") or "").strip().upper() != scoped_site:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     return {"ok": True, "item": item}
 
 
@@ -404,10 +426,10 @@ def admin_triage_complaint(complaint_id: int, payload: AdminTriagePayload, reque
     user, _token = _require_admin(request)
     existing = get_complaint(int(complaint_id), requester_user_id=int(user["id"]), is_admin=True)
     if not existing:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     scoped_site = _admin_site_scope(user)
     if scoped_site and str(existing.get("site_code") or "").strip().upper() != scoped_site:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     try:
         out = triage_complaint(
             complaint_id=int(complaint_id),
@@ -419,7 +441,7 @@ def admin_triage_complaint(complaint_id: int, payload: AdminTriagePayload, reque
             note=payload.note,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
     return {"ok": True, "item": out}
 
 
@@ -428,10 +450,10 @@ def admin_assign_complaint(complaint_id: int, payload: AdminAssignPayload, reque
     user, _token = _require_admin(request)
     existing = get_complaint(int(complaint_id), requester_user_id=int(user["id"]), is_admin=True)
     if not existing:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     scoped_site = _admin_site_scope(user)
     if scoped_site and str(existing.get("site_code") or "").strip().upper() != scoped_site:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     try:
         out = assign_complaint(
             complaint_id=int(complaint_id),
@@ -441,7 +463,7 @@ def admin_assign_complaint(complaint_id: int, payload: AdminAssignPayload, reque
             note=payload.note,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
     return {"ok": True, "item": out}
 
 
@@ -456,9 +478,10 @@ def admin_patch_work_order(work_order_id: int, payload: WorkOrderPatchPayload, r
             result_note=payload.result_note,
         )
     except ValueError as e:
-        if "not found" in str(e):
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        msg = str(e)
+        if "not found" in msg:
+            raise HTTPException(status_code=404, detail=_detail_ko(msg)) from e
+        raise HTTPException(status_code=400, detail=_detail_ko(msg)) from e
     return {"ok": True, "item": out}
 
 
@@ -467,10 +490,10 @@ def admin_create_visit(payload: VisitCreatePayload, request: Request):
     user, _token = _require_admin(request)
     existing = get_complaint(int(payload.complaint_id), requester_user_id=int(user["id"]), is_admin=True)
     if not existing:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     scoped_site = _admin_site_scope(user)
     if scoped_site and str(existing.get("site_code") or "").strip().upper() != scoped_site:
-        raise HTTPException(status_code=404, detail="complaint not found")
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
     try:
         out = create_visit(
             complaint_id=int(payload.complaint_id),
@@ -479,7 +502,7 @@ def admin_create_visit(payload: VisitCreatePayload, request: Request):
             result_note=payload.result_note,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
     return {"ok": True, "item": out}
 
 
@@ -489,7 +512,7 @@ def admin_checkout_visit(visit_id: int, payload: VisitCheckoutPayload, request: 
     try:
         out = checkout_visit(visit_id=int(visit_id), result_note=payload.result_note)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise HTTPException(status_code=404, detail=_detail_ko(str(e))) from e
     return {"ok": True, "item": out}
 
 
@@ -497,7 +520,7 @@ def admin_checkout_visit(visit_id: int, payload: VisitCheckoutPayload, request: 
 def admin_create_notice(payload: NoticeCreatePayload, request: Request):
     user, _token = _require_admin(request)
     if int(user.get("is_admin") or 0) != 1:
-        raise HTTPException(status_code=403, detail="supervisor admin only")
+        raise HTTPException(status_code=403, detail="최고/운영관리자만 사용할 수 있습니다.")
     try:
         out = create_notice(
             author_user_id=int(user["id"]),
@@ -507,7 +530,7 @@ def admin_create_notice(payload: NoticeCreatePayload, request: Request):
             publish_now=payload.publish_now,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
     return {"ok": True, "item": out}
 
 
@@ -515,7 +538,7 @@ def admin_create_notice(payload: NoticeCreatePayload, request: Request):
 def admin_patch_notice(notice_id: int, payload: NoticePatchPayload, request: Request):
     user, _token = _require_admin(request)
     if int(user.get("is_admin") or 0) != 1:
-        raise HTTPException(status_code=403, detail="supervisor admin only")
+        raise HTTPException(status_code=403, detail="최고/운영관리자만 사용할 수 있습니다.")
     try:
         out = update_notice(
             notice_id=int(notice_id),
@@ -525,9 +548,10 @@ def admin_patch_notice(notice_id: int, payload: NoticePatchPayload, request: Req
             publish_now=payload.publish_now,
         )
     except ValueError as e:
-        if "not found" in str(e):
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        msg = str(e)
+        if "not found" in msg:
+            raise HTTPException(status_code=404, detail=_detail_ko(msg)) from e
+        raise HTTPException(status_code=400, detail=_detail_ko(msg)) from e
     return {"ok": True, "item": out}
 
 

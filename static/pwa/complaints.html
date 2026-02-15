@@ -167,28 +167,28 @@
       <h3>선택 민원 처리</h3>
       <div class="grid two">
         <label class="field">
-          <span>분류(scope)</span>
+          <span>구분</span>
           <select id="triageScope">
-            <option value="COMMON">COMMON</option>
-            <option value="PRIVATE">PRIVATE</option>
-            <option value="EMERGENCY">EMERGENCY</option>
+            <option value="COMMON">공용시설</option>
+            <option value="PRIVATE">세대내부</option>
+            <option value="EMERGENCY">긴급</option>
           </select>
         </label>
         <label class="field">
           <span>우선순위</span>
           <select id="triagePriority">
-            <option value="LOW">LOW</option>
-            <option value="NORMAL" selected>NORMAL</option>
-            <option value="HIGH">HIGH</option>
-            <option value="URGENT">URGENT</option>
+            <option value="LOW">낮음</option>
+            <option value="NORMAL" selected>보통</option>
+            <option value="HIGH">높음</option>
+            <option value="URGENT">긴급</option>
           </select>
         </label>
         <label class="field">
           <span>처리방식</span>
           <select id="triageResolution">
-            <option value="REPAIR">REPAIR</option>
-            <option value="GUIDANCE_ONLY">GUIDANCE_ONLY</option>
-            <option value="EXTERNAL_VENDOR">EXTERNAL_VENDOR</option>
+            <option value="REPAIR">수리/조치</option>
+            <option value="GUIDANCE_ONLY">안내만</option>
+            <option value="EXTERNAL_VENDOR">외주</option>
           </select>
         </label>
         <label class="field">
@@ -222,10 +222,10 @@
         <label class="field">
           <span>작업 상태</span>
           <select id="workOrderStatus">
-            <option value="OPEN">OPEN</option>
-            <option value="DISPATCHED">DISPATCHED</option>
-            <option value="DONE">DONE</option>
-            <option value="CANCELED">CANCELED</option>
+            <option value="OPEN">접수</option>
+            <option value="DISPATCHED">출동/배정</option>
+            <option value="DONE">완료</option>
+            <option value="CANCELED">취소</option>
           </select>
         </label>
       </div>
@@ -243,6 +243,6 @@
 
   <script src="/pwa/auth.js?v=20260207i"></script>
   <script src="/pwa/unit_selector.js?v=20260215c"></script>
-  <script src="/pwa/complaints.js?v=20260215a"></script>
+  <script src="/pwa/complaints.js?v=20260215b"></script>
 </body>
 </html>
