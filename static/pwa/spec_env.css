@@ -22,7 +22,7 @@ body {
   position: sticky;
   top: 0;
   z-index: 20;
-  padding: 10px 12px;
+  padding: calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left));
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(6px);
@@ -105,7 +105,7 @@ body {
 }
 
 .main {
-  padding: 12px;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
   display: grid;
   gap: 12px;
 }
@@ -133,6 +133,7 @@ h3 { margin: 12px 0 8px; font-size: 14px; color: var(--muted); }
 }
 
 .field input,
+select,
 textarea {
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -319,4 +320,31 @@ pre {
 .mig-status.executed {
   border-color: color-mix(in srgb, #23d17c 80%, var(--line));
   color: #b8ffd7;
+}
+
+@media (max-width: 760px) {
+  /* Keep header compact on phones */
+  .actions {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .actions .btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .row {
+    align-items: stretch;
+  }
+
+  textarea {
+    min-height: 220px;
+  }
+
+  /* Prevent iOS input zoom and improve touch readability */
+  .field input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }

@@ -29,7 +29,7 @@ body {
   position: sticky;
   top: 0;
   z-index: 20;
-  padding: 10px 12px;
+  padding: calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left));
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(6px);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
@@ -315,7 +315,7 @@ body {
 }
 
 .panels {
-  padding: 10px 12px 24px;
+  padding: 10px 12px calc(24px + env(safe-area-inset-bottom));
 }
 
 .panel {
@@ -419,7 +419,7 @@ body {
   display: none;
   position: fixed;
   left: 50%;
-  bottom: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   max-width: calc(100vw - 20px);
   border: 1px solid var(--line);

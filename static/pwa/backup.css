@@ -24,7 +24,7 @@ body {
   position: sticky;
   top: 0;
   z-index: 20;
-  padding: 10px 12px;
+  padding: calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left));
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(6px);
@@ -87,7 +87,7 @@ body {
 }
 
 .main {
-  padding: 12px;
+  padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
   display: grid;
   gap: 12px;
 }
@@ -211,5 +211,26 @@ h2 {
 @media (max-width: 760px) {
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Prevent iOS input zoom and improve touch readability */
+  .field input,
+  .field select {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 560px) {
+  .actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .actions .btn {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
   }
 }

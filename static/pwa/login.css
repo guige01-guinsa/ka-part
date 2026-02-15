@@ -22,7 +22,7 @@ body {
 .wrap {
   max-width: 520px;
   margin: 0 auto;
-  padding: 20px 14px 32px;
+  padding: calc(20px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
   display: grid;
   gap: 12px;
 }
@@ -171,5 +171,30 @@ a.btn {
 @media (max-width: 640px) {
   .grid2 {
     grid-template-columns: 1fr;
+  }
+
+  .inline-input {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .actions .btn,
+  .inline-input .btn {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  /* Prevent iOS input zoom and improve touch readability */
+  .field input,
+  .field select {
+    font-size: 16px;
   }
 }
