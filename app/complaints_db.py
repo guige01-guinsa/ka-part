@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import uuid
 import urllib.parse
@@ -656,7 +657,7 @@ def create_complaint(
             from_status=None,
             to_status=status,
             changed_by_user_id=int(reporter_user_id),
-            note="initial submit",
+            note="최초 접수",
         )
 
         if status == "GUIDANCE_SENT":
@@ -674,13 +675,102 @@ def create_complaint(
                 (
                     complaint_id,
                     int(reporter_user_id),
-                    str((tmpl["content"] if tmpl else "Guidance only for private unit issue.")),
+                    str((tmpl["content"] if tmpl else "세대 내부 민원은 사용 안내 중심으로 처리됩니다.")),
                     0,
                     ts,
                 ),
             )
         con.commit()
         return _complaint_detail(con, complaint_id, include_internal=True)
+    finally:
+        con.close()
+
+
+def add_complaint_attachments(
+    *,
+    complaint_id: int,
+    attachments: List[Tuple[str, str, int]],
+) -> List[Dict[str, Any]]:
+    """
+    Add file attachments for an existing complaint.
+
+    - file_url: storage-relative path (recommended) or http(s) URL.
+    - mime_type/size_bytes are optional but recommended for image previews.
+    """
+    clean_id = int(complaint_id)
+    rows = list(attachments or [])
+    if not rows:
+        return []
+
+    con = _with_schema()
+    try:
+        existing = _get_complaint_row(con, clean_id)
+        if not existing:
+            raise ValueError("complaint not found")
+
+        cnt_row = con.execute(
+            "SELECT COUNT(*) AS cnt FROM complaint_attachments WHERE complaint_id=?",
+            (clean_id,),
+        ).fetchone()
+        existing_count = int(cnt_row["cnt"] if cnt_row else 0)
+        if existing_count + len(rows) > MAX_ATTACHMENT_URLS:
+            raise ValueError(f"attachments length must be <= {MAX_ATTACHMENT_URLS}")
+
+        ts = now_iso()
+        out: List[Dict[str, Any]] = []
+        for file_url, mime_type, size_bytes in rows:
+            clean_url = _clean_text(
+                file_url,
+                required=True,
+                max_len=MAX_ATTACHMENT_URL_LENGTH,
+                field="file_url",
+            )
+            clean_mime = _clean_text(mime_type, required=False, max_len=80, field="mime_type")
+            size_val: Optional[int] = None
+            try:
+                if size_bytes is not None:
+                    size_val = int(size_bytes)
+            except Exception:
+                size_val = None
+            cur = con.execute(
+                """
+                INSERT INTO complaint_attachments(complaint_id, file_url, mime_type, size_bytes, created_at)
+                VALUES(?,?,?,?,?)
+                """,
+                (clean_id, clean_url, (clean_mime or None), size_val, ts),
+            )
+            att_id = int(cur.lastrowid)
+            out.append(
+                {
+                    "id": att_id,
+                    "complaint_id": clean_id,
+                    "file_url": clean_url,
+                    "mime_type": clean_mime or None,
+                    "size_bytes": size_val,
+                    "created_at": ts,
+                }
+            )
+
+        con.execute("UPDATE complaints SET updated_at=? WHERE id=?", (ts, clean_id))
+        con.commit()
+        return out
+    finally:
+        con.close()
+
+
+def get_complaint_attachment(*, complaint_id: int, attachment_id: int) -> Optional[Dict[str, Any]]:
+    con = _with_schema()
+    try:
+        row = con.execute(
+            """
+            SELECT id, complaint_id, file_url, mime_type, size_bytes, created_at
+            FROM complaint_attachments
+            WHERE id=? AND complaint_id=?
+            LIMIT 1
+            """,
+            (int(attachment_id), int(complaint_id)),
+        ).fetchone()
+        return dict(row) if row else None
     finally:
         con.close()
 

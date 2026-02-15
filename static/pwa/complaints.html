@@ -8,7 +8,7 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
-  <link rel="stylesheet" href="/pwa/complaints.css?v=20260215a" />
+  <link rel="stylesheet" href="/pwa/complaints.css?v=20260215b" />
   <link rel="stylesheet" href="/pwa/unit_selector.css?v=20260215c" />
 </head>
 <body>
@@ -71,8 +71,9 @@
           <input id="locInput" type="text" maxlength="200" placeholder="예: 103동 지하 B2 3열" />
         </label>
         <label class="field">
-          <span>첨부 URL(줄바꿈으로 여러개)</span>
-          <textarea id="attachInput" rows="2" placeholder="https://..."></textarea>
+          <span>사진첨부(선택, 최대 10장)</span>
+          <input id="photoInput" type="file" accept="image/*" multiple />
+          <div id="photoPreview" class="photo-preview muted">선택된 사진이 없습니다.</div>
         </label>
       </div>
       <div class="actions">
@@ -243,6 +244,6 @@
 
   <script src="/pwa/auth.js?v=20260207i"></script>
   <script src="/pwa/unit_selector.js?v=20260215c"></script>
-  <script src="/pwa/complaints.js?v=20260215c"></script>
+  <script src="/pwa/complaints.js?v=20260215d"></script>
 </body>
 </html>

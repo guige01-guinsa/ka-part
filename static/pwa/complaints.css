@@ -157,6 +157,29 @@ body {
   resize: vertical;
 }
 
+.field input[type="file"] {
+  padding: 9px;
+  background: color-mix(in srgb, var(--card) 94%, black 6%);
+}
+
+.photo-preview {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 8px 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.photo-preview.muted {
+  color: var(--muted);
+}
+
+.photo-preview a {
+  color: #cde2ff;
+  text-decoration: underline;
+}
+
 .field.grow {
   grid-column: 1 / -1;
 }

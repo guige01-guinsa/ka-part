@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import mimetypes
 import os
+import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..complaints_db import (
     SCOPE_VALUES,
     add_comment,
+    add_complaint_attachments,
     assign_complaint,
     checkout_visit,
     complaint_stats,
     create_complaint,
     create_notice,
     create_visit,
+    get_complaint_attachment,
     get_complaint,
     list_admin_complaints,
     list_complaint_categories,
@@ -36,6 +42,24 @@ router = APIRouter()
 AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
 SECURITY_ROLE_KEYWORDS = ("보안", "경비")
 ALLOW_QUERY_ACCESS_TOKEN = (os.getenv("KA_ALLOW_QUERY_ACCESS_TOKEN") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+COMPLAINT_UPLOAD_ROOT = Path(
+    (os.getenv("KA_COMPLAINT_UPLOAD_DIR") or str(ROOT_DIR / "uploads" / "complaints")).strip()
+).resolve()
+COMPLAINT_UPLOAD_MAX_FILES = int(os.getenv("KA_COMPLAINT_UPLOAD_MAX_FILES") or "10")
+COMPLAINT_UPLOAD_MAX_FILE_BYTES = int(os.getenv("KA_COMPLAINT_UPLOAD_MAX_FILE_BYTES") or str(8 * 1024 * 1024))
+COMPLAINT_UPLOAD_MAX_TOTAL_BYTES = int(os.getenv("KA_COMPLAINT_UPLOAD_MAX_TOTAL_BYTES") or str(25 * 1024 * 1024))
+_ALLOWED_IMAGE_MIME = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/heic",
+    "image/heif",
+}
+_ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif"}
 
 _COMPLAINTS_DETAIL_KO_MAP = {
     "auth required": "로그인이 필요합니다.",
@@ -175,6 +199,86 @@ def _admin_site_scope(user: Dict[str, Any]) -> str:
     return str(user.get("site_code") or "").strip().upper()
 
 
+def _enforce_site_admin_scope(user: Dict[str, Any], item: Dict[str, Any] | None) -> None:
+    if not item:
+        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
+    if int(user.get("is_admin") or 0) == 1:
+        return
+    if int(user.get("is_site_admin") or 0) == 1:
+        site_scope = str(user.get("site_code") or "").strip().upper()
+        if site_scope and str(item.get("site_code") or "").strip().upper() != site_scope:
+            raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
+
+
+def _decorate_attachment_access_urls(item: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    if not item or not isinstance(item, dict):
+        return item
+    cid = int(item.get("id") or 0)
+    raw = item.get("attachments")
+    if not isinstance(raw, list):
+        return item
+    out: List[Dict[str, Any]] = []
+    for a in raw:
+        if not isinstance(a, dict):
+            continue
+        row = dict(a)
+        aid = int(row.get("id") or 0)
+        file_url = str(row.get("file_url") or "").strip()
+        if file_url.lower().startswith("http://") or file_url.lower().startswith("https://"):
+            row["access_url"] = file_url
+        elif cid > 0 and aid > 0:
+            row["access_url"] = f"/api/v1/complaints/{cid}/attachments/{aid}"
+        else:
+            row["access_url"] = file_url
+        out.append(row)
+    item["attachments"] = out
+    return item
+
+
+def _guess_image_ext(upload: UploadFile) -> str:
+    ct = str(upload.content_type or "").strip().lower()
+    if ct in {"image/jpeg", "image/jpg"}:
+        return ".jpg"
+    if ct == "image/png":
+        return ".png"
+    if ct == "image/webp":
+        return ".webp"
+    if ct == "image/gif":
+        return ".gif"
+    if ct == "image/heic":
+        return ".heic"
+    if ct == "image/heif":
+        return ".heif"
+    suffix = Path(str(upload.filename or "")).suffix.lower()
+    if suffix in _ALLOWED_IMAGE_EXTS:
+        return suffix
+    return ".jpg"
+
+
+async def _save_upload_file(upload: UploadFile, dest: Path, *, max_bytes: int) -> int:
+    total = 0
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with dest.open("wb") as f:
+            while True:
+                chunk = await upload.read(1024 * 1024)  # 1MB
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"사진 파일은 최대 {max_bytes // (1024 * 1024)}MB까지 업로드할 수 있습니다.",
+                    )
+                f.write(chunk)
+    finally:
+        try:
+            await upload.close()
+        except Exception:
+            pass
+    return total
+
+
 @router.get("/codes/complaint-categories")
 def get_complaint_categories():
     return {"ok": True, "items": list_complaint_categories(active_only=True)}
@@ -290,7 +394,7 @@ def post_complaint(payload: ComplaintCreatePayload, request: Request):
     message = "민원이 접수되었습니다."
     if str(created.get("scope")) == "PRIVATE":
         message = "세대 내부 민원은 수리 출동을 제공하지 않으며 사용 안내 중심으로 처리됩니다."
-    return {"ok": True, "message": message, "item": created}
+    return {"ok": True, "message": message, "item": _decorate_attachment_access_urls(created)}
 
 
 @router.post("/emergencies")
@@ -321,7 +425,11 @@ def post_emergency(payload: ComplaintCreatePayload, request: Request):
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
-    return {"ok": True, "message": "긴급 민원이 접수되었습니다. 우선순위 '긴급'으로 처리됩니다.", "item": created}
+    return {
+        "ok": True,
+        "message": "긴급 민원이 접수되었습니다. 우선순위 '긴급'으로 처리됩니다.",
+        "item": _decorate_attachment_access_urls(created),
+    }
 
 
 @router.get("/complaints")
@@ -352,14 +460,122 @@ def get_my_complaint(complaint_id: int, request: Request):
         requester_user_id=int(user["id"]),
         is_admin=(int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1),
     )
-    if not item:
-        raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
-    # Site admins are constrained to their own site_code.
-    if int(user.get("is_admin") or 0) != 1 and int(user.get("is_site_admin") or 0) == 1:
-        site_scope = str(user.get("site_code") or "").strip().upper()
-        if site_scope and str(item.get("site_code") or "").strip().upper() != site_scope:
-            raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
-    return {"ok": True, "item": item}
+    _enforce_site_admin_scope(user, item)
+    return {"ok": True, "item": _decorate_attachment_access_urls(item)}
+
+
+@router.post("/complaints/{complaint_id}/attachments")
+async def upload_complaint_attachments(
+    complaint_id: int,
+    request: Request,
+    files: List[UploadFile] = File(...),
+):
+    user, _token = _require_auth(request)
+    is_admin = (int(user.get("is_admin") or 0) == 1) or (int(user.get("is_site_admin") or 0) == 1)
+
+    item = get_complaint(int(complaint_id), requester_user_id=int(user["id"]), is_admin=is_admin)
+    _enforce_site_admin_scope(user, item)
+
+    uploads = list(files or [])
+    if not uploads:
+        raise HTTPException(status_code=400, detail="업로드할 사진을 선택하세요.")
+    if len(uploads) > max(1, COMPLAINT_UPLOAD_MAX_FILES):
+        raise HTTPException(status_code=400, detail=f"사진은 최대 {COMPLAINT_UPLOAD_MAX_FILES}장까지 첨부할 수 있습니다.")
+
+    existing_count = 0
+    try:
+        existing_count = len(item.get("attachments") or []) if isinstance(item, dict) else 0
+    except Exception:
+        existing_count = 0
+    if existing_count + len(uploads) > 10:
+        raise HTTPException(status_code=400, detail="첨부는 최대 10개까지 등록할 수 있습니다.")
+
+    COMPLAINT_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    complaint_dir = (COMPLAINT_UPLOAD_ROOT / str(int(complaint_id))).resolve()
+    complaint_dir.mkdir(parents=True, exist_ok=True)
+
+    total_bytes = 0
+    saved: List[Tuple[str, str, int]] = []
+    saved_paths: List[Path] = []
+
+    for upload in uploads:
+        ct = str(upload.content_type or "").strip().lower()
+        suffix = Path(str(upload.filename or "")).suffix.lower()
+        is_image = (ct.startswith("image/") and (ct in _ALLOWED_IMAGE_MIME)) or (suffix in _ALLOWED_IMAGE_EXTS)
+        if not is_image:
+            raise HTTPException(status_code=400, detail="이미지 파일(jpg/png/webp/gif/heic)만 업로드할 수 있습니다.")
+        ext = _guess_image_ext(upload)
+        name = f"{uuid.uuid4().hex}{ext}"
+        dest = (complaint_dir / name).resolve()
+        if not dest.is_relative_to(complaint_dir):
+            raise HTTPException(status_code=400, detail="파일 경로가 올바르지 않습니다.")
+        try:
+            size = await _save_upload_file(upload, dest, max_bytes=COMPLAINT_UPLOAD_MAX_FILE_BYTES)
+        except Exception:
+            try:
+                if dest.exists():
+                    dest.unlink()
+            except Exception:
+                pass
+            raise
+        total_bytes += int(size)
+        if total_bytes > max(1, COMPLAINT_UPLOAD_MAX_TOTAL_BYTES):
+            try:
+                dest.unlink()
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=413,
+                detail=f"사진 업로드 총 용량은 최대 {COMPLAINT_UPLOAD_MAX_TOTAL_BYTES // (1024 * 1024)}MB까지 가능합니다.",
+            )
+        rel = f"{int(complaint_id)}/{name}"
+        saved.append((rel, ct, int(size)))
+        saved_paths.append(dest)
+
+    try:
+        add_complaint_attachments(complaint_id=int(complaint_id), attachments=saved)
+    except ValueError as e:
+        for p in saved_paths:
+            try:
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=400, detail=_detail_ko(str(e))) from e
+
+    updated = get_complaint(int(complaint_id), requester_user_id=int(user["id"]), is_admin=is_admin)
+    _enforce_site_admin_scope(user, updated)
+    return {"ok": True, "item": _decorate_attachment_access_urls(updated)}
+
+
+@router.get("/complaints/{complaint_id}/attachments/{attachment_id}")
+def download_complaint_attachment(complaint_id: int, attachment_id: int, request: Request):
+    user, _token = _require_auth(request)
+    is_admin = (int(user.get("is_admin") or 0) == 1) or (int(user.get("is_site_admin") or 0) == 1)
+
+    item = get_complaint(int(complaint_id), requester_user_id=int(user["id"]), is_admin=is_admin)
+    _enforce_site_admin_scope(user, item)
+
+    att = get_complaint_attachment(complaint_id=int(complaint_id), attachment_id=int(attachment_id))
+    if not att:
+        raise HTTPException(status_code=404, detail="첨부파일을 찾을 수 없습니다.")
+    file_url = str(att.get("file_url") or "").strip()
+    if not file_url or file_url.lower().startswith("http://") or file_url.lower().startswith("https://"):
+        raise HTTPException(status_code=404, detail="첨부파일을 찾을 수 없습니다.")
+
+    COMPLAINT_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    safe_rel = file_url.replace("\\", "/").lstrip("/")
+    abs_path = (COMPLAINT_UPLOAD_ROOT / safe_rel).resolve()
+    if not abs_path.is_relative_to(COMPLAINT_UPLOAD_ROOT):
+        raise HTTPException(status_code=404, detail="첨부파일을 찾을 수 없습니다.")
+    if not abs_path.exists() or not abs_path.is_file():
+        raise HTTPException(status_code=404, detail="첨부파일을 찾을 수 없습니다.")
+
+    media_type = str(att.get("mime_type") or "").strip().lower() or None
+    if not media_type:
+        guessed, _enc = mimetypes.guess_type(str(abs_path))
+        media_type = guessed or "application/octet-stream"
+    return FileResponse(path=str(abs_path), media_type=media_type, content_disposition_type="inline")
 
 
 @router.post("/complaints/{complaint_id}/comments")
@@ -418,7 +634,7 @@ def admin_get_complaint(complaint_id: int, request: Request):
     scoped_site = _admin_site_scope(user)
     if scoped_site and str(item.get("site_code") or "").strip().upper() != scoped_site:
         raise HTTPException(status_code=404, detail="민원을 찾을 수 없습니다.")
-    return {"ok": True, "item": item}
+    return {"ok": True, "item": _decorate_attachment_access_urls(item)}
 
 
 @router.patch("/admin/complaints/{complaint_id}/triage")

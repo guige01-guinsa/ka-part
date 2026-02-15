@@ -5,7 +5,7 @@
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
   const MAX_ATTACHMENTS = 10;
-  const MAX_URL_LENGTH = 500;
+  const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
   const STATUS_LABELS = {
     RECEIVED: "접수",
     TRIAGED: "분류완료",
@@ -174,23 +174,88 @@
     return txt;
   }
 
-  function parseSafeUrl(value) {
-    const raw = String(value || "").trim();
-    if (!raw) return "";
-    if (raw.length > MAX_URL_LENGTH) {
-      throw new Error(`첨부 URL은 ${MAX_URL_LENGTH}자 이하여야 합니다.`);
+  function selectedPhotoFiles() {
+    const input = $("#photoInput");
+    const list = input && input.files ? Array.from(input.files) : [];
+    return list.filter((f) => f && typeof f.size === "number");
+  }
+
+  function formatBytes(n) {
+    const v = Number(n || 0);
+    if (!Number.isFinite(v) || v <= 0) return "0B";
+    const kb = v / 1024;
+    if (kb < 1024) return `${kb.toFixed(0)}KB`;
+    const mb = kb / 1024;
+    return `${mb.toFixed(1)}MB`;
+  }
+
+  function renderPhotoPreview() {
+    const wrap = $("#photoPreview");
+    if (!wrap) return;
+    const files = selectedPhotoFiles();
+    if (!files.length) {
+      wrap.textContent = "선택된 사진이 없습니다.";
+      wrap.classList.add("muted");
+      return;
     }
-    let parsed = null;
-    try {
-      parsed = new URL(raw);
-    } catch (_e) {
-      throw new Error(`첨부 URL 형식이 올바르지 않습니다: ${raw}`);
+    wrap.classList.remove("muted");
+    const lines = [];
+    lines.push(`선택: ${files.length}장`);
+    for (const f of files.slice(0, MAX_ATTACHMENTS)) {
+      const name = String(f.name || "사진").trim() || "사진";
+      lines.push(`- ${name} (${formatBytes(f.size)})`);
     }
-    const protocol = String(parsed.protocol || "").toLowerCase();
-    if (protocol !== "http:" && protocol !== "https:") {
-      throw new Error(`첨부 URL은 http/https만 허용됩니다: ${raw}`);
+    if (files.length > MAX_ATTACHMENTS) {
+      lines.push(`- ... (최대 ${MAX_ATTACHMENTS}장)`);
     }
-    return parsed.toString();
+    wrap.textContent = lines.join("\n");
+  }
+
+  async function requestFormJson(url, formData) {
+    const headers = {};
+    const token = window.KAAuth && typeof window.KAAuth.getToken === "function" ? window.KAAuth.getToken() : "";
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(url, { method: "POST", body: formData, headers, credentials: "same-origin" });
+    const ct = res.headers.get("content-type") || "";
+    const body = ct.includes("application/json") ? await res.json() : await res.text();
+    const errMsg = (x, fallback) => {
+      if (!x) return fallback;
+      if (typeof x === "string") return x || fallback;
+      if (x.detail) return String(x.detail);
+      if (x.message) return String(x.message);
+      return fallback;
+    };
+    if (res.status === 401) {
+      if (window.KAAuth && typeof window.KAAuth.clearSession === "function") {
+        window.KAAuth.clearSession({ includeSensitive: true, broadcast: true });
+      }
+      if (window.KAAuth && typeof window.KAAuth.redirectLogin === "function") {
+        window.KAAuth.redirectLogin();
+      }
+      throw new Error(errMsg(body, "로그인이 필요합니다."));
+    }
+    if (!res.ok) {
+      throw new Error(errMsg(body, `${res.status}`));
+    }
+    return body;
+  }
+
+  async function uploadSelectedPhotos(complaintId) {
+    const id = Number(complaintId || 0);
+    if (!id) return null;
+    const files = selectedPhotoFiles();
+    if (!files.length) return null;
+    if (files.length > MAX_ATTACHMENTS) {
+      throw new Error(`사진은 최대 ${MAX_ATTACHMENTS}장까지 첨부할 수 있습니다.`);
+    }
+    const fd = new FormData();
+    for (const f of files) {
+      if (Number(f.size || 0) > MAX_PHOTO_BYTES) {
+        throw new Error(`사진 파일은 최대 ${(MAX_PHOTO_BYTES / (1024 * 1024)).toFixed(0)}MB까지 첨부할 수 있습니다.`);
+      }
+      fd.append("files", f, f.name || "photo");
+    }
+    return requestFormJson(`/api/v1/complaints/${id}/attachments`, fd);
   }
 
   function parseQuery() {
@@ -281,18 +346,6 @@
     fillCategories();
   }
 
-  function parseAttachmentUrls() {
-    const raw = String($("#attachInput").value || "");
-    const rows = raw
-      .split(/\r?\n/g)
-      .map((x) => x.trim())
-      .filter(Boolean);
-    if (rows.length > MAX_ATTACHMENTS) {
-      throw new Error(`첨부 URL은 최대 ${MAX_ATTACHMENTS}개까지 등록할 수 있습니다.`);
-    }
-    return rows.map((x) => parseSafeUrl(x));
-  }
-
   function payloadForSubmit(forceEmergency) {
     const scope = getSelectedScope();
     const site_name = normalizeText($("#siteName").value, 80, "단지명", false);
@@ -320,7 +373,7 @@
       site_code,
       site_name,
       unit_label,
-      attachments: parseAttachmentUrls(),
+      attachments: [],
     };
   }
 
@@ -332,14 +385,34 @@
       body: JSON.stringify(payload),
     });
     const item = data && data.item ? data.item : null;
-    setMsg(data && data.message ? String(data.message) : "접수되었습니다.");
+    const createdId = item && item.id ? Number(item.id) : 0;
+    const photos = selectedPhotoFiles();
+    const baseMsg = data && data.message ? String(data.message) : "접수되었습니다.";
+    let uploadFailed = false;
+    if (createdId && photos.length) {
+      setMsg("민원 접수 완료. 사진 업로드 중...");
+      try {
+        await uploadSelectedPhotos(createdId);
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        setMsg(`접수는 완료되었지만 사진 업로드에 실패했습니다: ${msg}`, true);
+        uploadFailed = true;
+      }
+    }
+    if (!uploadFailed) {
+      const suffix = photos.length ? " (사진 첨부 완료)" : "";
+      setMsg(`${baseMsg}${suffix}`);
+    }
     $("#titleInput").value = "";
     $("#descInput").value = "";
     $("#locInput").value = "";
-    $("#attachInput").value = "";
+    if (!uploadFailed) {
+      if ($("#photoInput")) $("#photoInput").value = "";
+      renderPhotoPreview();
+    }
     await loadMyComplaints();
-    if (item && item.id) {
-      selectedComplaintId = Number(item.id);
+    if (createdId) {
+      selectedComplaintId = createdId;
       await loadComplaintDetail(selectedComplaintId, false);
     }
   }
@@ -454,7 +527,16 @@
     const wos = Array.isArray(item.work_orders) ? item.work_orders : [];
     const visits = Array.isArray(item.visits) ? item.visits : [];
     if (atts.length) {
-      segments.push(`<div class="line2">첨부: ${atts.map((a) => escapeHtml(a.file_url || "-")).join(" / ")}</div>`);
+      const links = atts
+        .map((a, idx) => {
+          const url = String((a && (a.access_url || a.file_url)) || "").trim();
+          if (!url) return "";
+          const label = `사진${idx + 1}`;
+          return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`;
+        })
+        .filter(Boolean)
+        .join(" ");
+      segments.push(`<div class="line2">첨부: ${links || "-"}</div>`);
     }
     if (wos.length) {
       segments.push(
@@ -619,6 +701,15 @@
     $("#scopeSelect")?.addEventListener("change", () => fillCategories());
     $("#siteCode")?.addEventListener("change", () => unitSelector && unitSelector.refresh && unitSelector.refresh());
     $("#siteName")?.addEventListener("change", () => unitSelector && unitSelector.refresh && unitSelector.refresh());
+    $("#photoInput")?.addEventListener("change", () => {
+      const input = $("#photoInput");
+      const files = selectedPhotoFiles();
+      if (files.length > MAX_ATTACHMENTS) {
+        setMsg(`사진은 최대 ${MAX_ATTACHMENTS}장까지 첨부할 수 있습니다.`, true);
+        if (input) input.value = "";
+      }
+      renderPhotoPreview();
+    });
     $("#btnProfile")?.addEventListener("click", () => {
       window.location.href = "/pwa/profile.html";
     });
@@ -694,6 +785,7 @@
     normalizeSiteContext();
     initUnitSelector();
     applyResidentIntakeMode();
+    renderPhotoPreview();
     await loadCategories();
     await loadMyComplaints();
     if (isAdmin(me)) {
