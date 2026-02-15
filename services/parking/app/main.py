@@ -1328,13 +1328,13 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>주차관리 DB</title>
   <style>
     :root { --bg:#0a1a23; --panel:#112735; --line:#27465a; --text:#e9f2f7; --muted:#8fb0c2; --ok:#16a34a; --warn:#b45309; --bad:#dc2626; --btn:#1d4ed8; }
     * { box-sizing:border-box; }
     body { margin:0; font-family:"Noto Sans KR",system-ui,sans-serif; color:var(--text); background:radial-gradient(circle at top, #173a4e, #0a1a23 58%); }
-    .wrap { max-width:1100px; margin:0 auto; padding:16px; display:grid; gap:12px; }
+    .wrap { max-width:1100px; margin:0 auto; padding:16px; padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); display:grid; gap:12px; }
     .card { background:rgba(17,39,53,.94); border:1px solid var(--line); border-radius:14px; padding:14px; }
     .head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
     .title { margin:0; font-size:24px; }
@@ -1359,15 +1359,41 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
     .table-scroll tr > *:last-child { border-right:1px solid var(--line); }
     .table-scroll tbody tr:last-child > * { border-bottom:1px solid var(--line); }
     #tbVehicles thead th { position: sticky; top: 0; z-index: 2; }
+    #tbViolations thead th { position: sticky; top: 0; z-index: 2; }
+    #violationsTableWrap table { min-width:760px; }
     tr.sel { background:rgba(29,78,216,.25); }
     .msg { min-height:22px; margin-top:8px; color:#b8d7e8; white-space:pre-wrap; }
     .msg.ok { color:#8ee6a6; }
     .msg.err { color:#ffb4b4; }
     .hintbox { border:1px dashed var(--line); background:#0c2130; border-radius:10px; padding:10px; font-size:12px; color:var(--muted); line-height:1.6; }
     .perm { color:#ffd4a8; font-size:13px; }
+    .tab-section { }
+
+    details.adv { margin-top:8px; border:1px dashed var(--line); background:#0c2130; border-radius:12px; padding:10px; }
+    details.adv > summary { cursor:pointer; font-weight:800; color:#cae2ef; }
+    details.adv > summary::-webkit-details-marker { display:none; }
+    details.adv > summary:before { content:"▸"; display:inline-block; margin-right:8px; color:var(--muted); }
+    details.adv[open] > summary:before { content:"▾"; }
+    details.adv[open] > summary { margin-bottom:8px; }
+
+    .bottom-tabs { display:none; position:fixed; left:0; right:0; bottom:0; z-index:999; background:rgba(10,26,35,.82); border-top:1px solid var(--line); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); padding:8px 8px calc(8px + env(safe-area-inset-bottom)); gap:8px; }
+    .bottom-tabs .tab { flex:1; border:1px solid var(--line); border-radius:12px; background:rgba(13,34,48,.85); color:var(--text); padding:10px 8px; font-weight:900; font-size:12px; text-decoration:none; cursor:pointer; text-align:center; }
+    .bottom-tabs .tab.active { border-color:rgba(29,78,216,.75); background:rgba(29,78,216,.25); }
+    .bottom-tabs .tab.danger { color:#ffd4d4; border-color:#7f1d1d; background:rgba(220,38,38,.12); }
+    .bottom-tabs .tab.disabled { opacity:.55; pointer-events:none; }
     @media (max-width: 900px) {
+      body.tabbed .wrap { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+      body.tabbed .bottom-tabs { display:flex; }
+      body.tabbed .tab-section { display:none; }
+      body.tabbed .tab-section.active { display:block; }
       .grid { grid-template-columns:1fr; }
       .field.w50 { width:100%; }
+      input, select { font-size:16px; }
+      .nav { width:100%; display:grid; grid-template-columns:1fr 1fr; }
+      .nav .btn { width:100%; text-align:center; }
+      .title { font-size:20px; }
+      .row.actions { display:grid; grid-template-columns:1fr 1fr; }
+      .row.actions .btn { width:100%; }
     }
   </style>
 </head>
@@ -1390,7 +1416,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       <div class="sub" id="sysLine"></div>
     </section>
 
-    <section class="card">
+    <section id="sectionVehicles" class="card tab-section">
       <h2 style="margin:0;">차량정보 DB 관리</h2>
       <div class="hintbox" id="importGuide">
         엑셀 컬럼 안내
@@ -1420,28 +1446,35 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
                   <option value="blocked">차단차량</option>
                 </select>
               </div>
-              <div class="field w50">
-                <label>동호수</label>
-                <input id="fUnit" placeholder="예: 101-1203" />
-              </div>
-              <div class="field w50">
-                <label>소유자</label>
-                <input id="fOwner" placeholder="예: 홍길동" />
-              </div>
-              <div class="field w50">
-                <label>적용시작일 (일/월/년)</label>
-                <input id="fFrom" placeholder="예: 2026-02-11 / 2026-02 / 2026" />
-              </div>
-              <div class="field w50">
-                <label>적용종료일 (일/월/년)</label>
-                <input id="fTo" placeholder="예: 2026-12-31 / 2026-12 / 2026" />
-              </div>
-              <div class="field">
-                <label>비고</label>
-                <input id="fNote" placeholder="선택 입력" />
-              </div>
             </div>
-            <div class="row">
+
+            <details id="advFields" class="adv" open>
+              <summary>추가 입력 (선택)</summary>
+              <div class="row">
+                <div class="field w50">
+                  <label>동호수</label>
+                  <input id="fUnit" placeholder="예: 101-1203" />
+                </div>
+                <div class="field w50">
+                  <label>소유자</label>
+                  <input id="fOwner" placeholder="예: 홍길동" />
+                </div>
+                <div class="field w50">
+                  <label>적용시작일 (일/월/년)</label>
+                  <input id="fFrom" placeholder="예: 2026-02-11 / 2026-02 / 2026" />
+                </div>
+                <div class="field w50">
+                  <label>적용종료일 (일/월/년)</label>
+                  <input id="fTo" placeholder="예: 2026-12-31 / 2026-12 / 2026" />
+                </div>
+                <div class="field">
+                  <label>비고</label>
+                  <input id="fNote" placeholder="선택 입력" />
+                </div>
+              </div>
+            </details>
+
+            <div class="row actions">
               <button id="btnCreate" class="btn" type="button">신규등록</button>
               <button id="btnUpdate" class="btn warn" type="button">선택수정</button>
               <button id="btnDelete" class="btn bad" type="button">선택삭제</button>
@@ -1477,27 +1510,36 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       </div>
     </section>
 
-    <section class="card">
+    <section id="sectionViolations" class="card tab-section">
       <h2 style="margin:0;">위반기록</h2>
       <div class="row">
         <button id="btnReloadViolations" class="btn ghost" type="button">위반기록 새로고침</button>
       </div>
-      <table id="tbViolations">
-        <thead>
-          <tr>
-            <th>발생시각</th>
-            <th>차량번호</th>
-            <th>판정</th>
-            <th>위치</th>
-            <th>메모</th>
-            <th>등록자</th>
-            <th>사진</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+      <div id="violationsTableWrap" class="table-scroll">
+        <table id="tbViolations">
+          <thead>
+            <tr>
+              <th>발생시각</th>
+              <th>차량번호</th>
+              <th>판정</th>
+              <th>위치</th>
+              <th>메모</th>
+              <th>등록자</th>
+              <th>사진</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
   </main>
+
+  <nav class="bottom-tabs" id="bottomTabs" aria-label="빠른 메뉴">
+    <button type="button" class="tab" id="tabVehicles">차량DB</button>
+    <button type="button" class="tab" id="tabViolations">위반기록</button>
+    <a class="tab" id="tabScanner" href="./scanner">스캐너</a>
+    <button type="button" class="tab danger" id="tabLogout">로그아웃</button>
+  </nav>
 
   <script>window.__ADMIN_BOOT__ = __ADMIN_BOOT_JSON__;</script>
   <script>
@@ -1691,9 +1733,14 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
 
     function renderViolations(items){
       const tbody = qs("#tbViolations tbody");
+      const wrap = $("violationsTableWrap");
       if (!tbody) return;
       if (!items || !items.length){
         tbody.innerHTML = `<tr><td colspan="7">위반기록이 없습니다.</td></tr>`;
+        if (wrap) {
+          wrap.style.maxHeight = "none";
+          wrap.style.overflowY = "visible";
+        }
         return;
       }
       tbody.innerHTML = items.map((it) => `
@@ -1707,6 +1754,21 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
           <td>${it.photo_path ? `<a href="${esc(it.photo_path)}" target="_blank" rel="noopener">보기</a>` : "-"}</td>
         </tr>
       `).join("");
+
+      if (wrap) {
+        if (items.length > 18) {
+          const headerRow = qs("#tbViolations thead tr");
+          const sampleRow = tbody.querySelector("tr");
+          const headerHeight = headerRow ? Math.ceil(headerRow.getBoundingClientRect().height || 38) : 38;
+          const rowHeight = sampleRow ? Math.ceil(sampleRow.getBoundingClientRect().height || 36) : 36;
+          const maxHeight = headerHeight + (rowHeight * 18) + 2;
+          wrap.style.maxHeight = `${maxHeight}px`;
+          wrap.style.overflowY = "auto";
+        } else {
+          wrap.style.maxHeight = "none";
+          wrap.style.overflowY = "visible";
+        }
+      }
     }
 
     async function loadVehicles(){
@@ -1837,6 +1899,73 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       location.href = boot.logout_redirect_url || "/pwa/login.html";
     }
 
+    function _isSmallScreen(){
+      try { return !!(window.matchMedia && window.matchMedia("(max-width: 900px)").matches); } catch (_) { return false; }
+    }
+
+    function _setActiveTab(tabName){
+      const t = String(tabName || "").trim().toLowerCase();
+      const sVehicles = $("sectionVehicles");
+      const sViolations = $("sectionViolations");
+      if (sVehicles) sVehicles.classList.toggle("active", t === "vehicles");
+      if (sViolations) sViolations.classList.toggle("active", t === "violations");
+      const tabVehicles = $("tabVehicles");
+      const tabViolations = $("tabViolations");
+      if (tabVehicles) tabVehicles.classList.toggle("active", t === "vehicles");
+      if (tabViolations) tabViolations.classList.toggle("active", t === "violations");
+    }
+
+    function enableTabbedUI(){
+      if (!_isSmallScreen()) return;
+      if (!$("bottomTabs")) return;
+
+      const initial = isManager ? "vehicles" : "violations";
+      _setActiveTab(initial);
+
+      const tabScanner = $("tabScanner");
+      if (tabScanner) tabScanner.setAttribute("href", boot.scanner_url || "./scanner");
+
+      if (!isManager) {
+        const tv = $("tabVehicles");
+        if (tv) {
+          tv.disabled = true;
+          tv.classList.add("disabled");
+        }
+        const sv = $("sectionVehicles");
+        if (sv) sv.style.display = "none";
+      }
+
+      const tabVehicles = $("tabVehicles");
+      if (tabVehicles) {
+        tabVehicles.addEventListener("click", () => {
+          if (tabVehicles.disabled) return;
+          _setActiveTab("vehicles");
+          try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (_) { window.scrollTo(0, 0); }
+        });
+      }
+      const tabViolations = $("tabViolations");
+      if (tabViolations) {
+        tabViolations.addEventListener("click", () => {
+          _setActiveTab("violations");
+          try { window.scrollTo({ top: 0, behavior: "smooth" }); } catch (_) { window.scrollTo(0, 0); }
+        });
+      }
+      const tabLogout = $("tabLogout");
+      if (tabLogout) {
+        tabLogout.addEventListener("click", (e) => {
+          e.preventDefault();
+          runIntegratedLogout();
+        });
+      }
+
+      try {
+        const adv = $("advFields");
+        if (adv && adv.tagName === "DETAILS") adv.open = false;
+      } catch (_) {}
+
+      document.body.classList.add("tabbed");
+    }
+
     function bindEvents(){
       on("btnRefreshAll", "click", async () => {
         try {
@@ -1893,6 +2022,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       } else {
         clearForm();
       }
+      try { enableTabbedUI(); } catch (_e) {}
       bindEvents();
       window.__parkingAdminMainReady = true;
       await loadSystemCheck();
@@ -1911,6 +2041,7 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
   (function(){
     function fallbackBind(){
       if (window.__parkingAdminMainReady) return;
+      try { document.body.classList.remove("tabbed"); } catch (_e) {}
       const boot = window.__ADMIN_BOOT__ || {};
       const $ = (id) => document.getElementById(id);
       const msg = (text, ok) => {
@@ -2088,7 +2219,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#0a2633" />
   <title>주차 스캐너</title>
   <link rel="manifest" href="./manifest.webmanifest" />
@@ -2096,7 +2227,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     :root { --bg:#081923; --panel:#102533; --line:#244255; --text:#e7f1f6; --muted:#8cabbb; --ok:#16a34a; --bad:#dc2626; --warn:#d97706; --btn:#1d4ed8; }
     * { box-sizing: border-box; }
     body { margin:0; font-family: "Noto Sans KR", system-ui, sans-serif; background: radial-gradient(circle at top, #123347, #081923 58%); color:var(--text); }
-    .app { max-width: 920px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+    .app { max-width: 920px; margin: 0 auto; padding: 16px; padding: calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); display: grid; gap: 12px; }
     .panel { background: rgba(16,37,51,.92); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
     .head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap: wrap; }
     .title { margin: 0; font-size: 22px; }
@@ -2117,6 +2248,9 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     .list { display:grid; gap:8px; margin-top:8px; }
     .item { border:1px solid var(--line); border-radius:10px; padding:8px 10px; background:#0a1f2b; }
     .item .meta { color:var(--muted); font-size:12px; margin-top:4px; }
+    @media (max-width: 900px) {
+      input { font-size: 16px; }
+    }
   </style>
 </head>
 <body>
