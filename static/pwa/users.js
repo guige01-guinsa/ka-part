@@ -103,6 +103,67 @@
     return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
   }
 
+  function canViewSiteIdentity(user) {
+    return isSuperAdmin(user);
+  }
+
+  function setWrapHiddenByInputId(inputId, hidden) {
+    const el = typeof inputId === "string" ? document.getElementById(inputId) : null;
+    const wrap = el ? el.closest(".field") : null;
+    if (wrap) wrap.classList.toggle("hidden", !!hidden);
+  }
+
+  function setTableColumnsHiddenByHeaderText(table, headerTexts, hidden) {
+    if (!table) return;
+    const texts = Array.isArray(headerTexts) ? headerTexts : [];
+    const heads = Array.from(table.querySelectorAll("thead th"));
+    if (!heads.length) return;
+    const hideIdxs = [];
+    for (let i = 0; i < heads.length; i += 1) {
+      const txt = String(heads[i].textContent || "").trim();
+      if (texts.includes(txt)) hideIdxs.push(i);
+    }
+    for (const idx of hideIdxs) {
+      const th = heads[idx];
+      if (th) th.style.display = hidden ? "none" : "";
+    }
+    for (const row of Array.from(table.querySelectorAll("tbody tr"))) {
+      const cells = Array.from(row.children);
+      for (const idx of hideIdxs) {
+        if (cells[idx]) cells[idx].style.display = hidden ? "none" : "";
+      }
+    }
+  }
+
+  function applySiteIdentityVisibility() {
+    const show = canViewSiteIdentity(me);
+    const hide = !show;
+    setWrapHiddenByInputId("userSiteName", hide);
+    setWrapHiddenByInputId("userSiteCode", hide);
+    setWrapHiddenByInputId("filterSiteCode", hide);
+    setWrapHiddenByInputId("filterSiteName", hide);
+    setTableColumnsHiddenByHeaderText(document.getElementById("userSheet"), ["단지코드", "단지명"], hide);
+    if (hide) stripSiteIdentityFromUrl();
+  }
+
+  function stripSiteIdentityFromUrl() {
+    try {
+      const u = new URL(window.location.href);
+      let changed = false;
+      if (u.searchParams.has("site_name")) {
+        u.searchParams.delete("site_name");
+        changed = true;
+      }
+      if (u.searchParams.has("site_code")) {
+        u.searchParams.delete("site_code");
+        changed = true;
+      }
+      if (!changed) return;
+      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
+      window.history.replaceState({}, "", next);
+    } catch (_e) {}
+  }
+
   function isResidentRole(role) {
     const txt = String(role || "").trim();
     return txt === "입주민" || txt === "주민" || txt === "세대주민";
@@ -150,8 +211,9 @@
     $("#userRole").disabled = !isAdminView;
     $("#isActive").disabled = !isAdminView;
     $("#loginId").readOnly = !isAdminView;
-    $("#userSiteCode").readOnly = !isAdminView;
-    $("#userSiteName").readOnly = !isAdminView;
+    const canEditSite = !!(isAdminView && isSuperAdminView);
+    $("#userSiteCode").readOnly = !canEditSite;
+    $("#userSiteName").readOnly = !canEditSite;
 
     $("#btnReload").textContent = isAdminView ? "새로고침" : "내정보 새로고침";
     $("#btnSaveUser").textContent = isAdminView ? "저장" : "내 정보 저장";
@@ -160,6 +222,7 @@
       $("#formTitle").textContent = "내 정보";
     }
     syncAdminScopeVisibility();
+    applySiteIdentityVisibility();
   }
 
   function syncAdminScopeVisibility() {
@@ -189,6 +252,10 @@
     $("#adminScope").value = "ops_admin";
     $("#isActive").checked = true;
     syncAdminScopeVisibility();
+    if (me && !canViewSiteIdentity(me)) {
+      $("#userSiteCode").value = String(me.site_code || "").trim().toUpperCase();
+      $("#userSiteName").value = String(me.site_name || "").trim();
+    }
     setMsg("");
   }
 
@@ -248,9 +315,11 @@
       const user = selfProfile || me || {};
       const name = String(user.name || user.login_id || "사용자");
       const level = permissionLabel(user);
+      const showSite = canViewSiteIdentity(user);
       const siteCode = String(user.site_code || "-");
       const siteName = String(user.site_name || "-");
-      el.textContent = `${name} (${level}) · ${siteCode} / ${siteName}`;
+      const siteText = showSite ? `${siteCode} / ${siteName}` : "(숨김)";
+      el.textContent = `${name} (${level}) · ${siteText}`;
       el.classList.remove("warn");
       return;
     }
@@ -268,8 +337,10 @@
     const el = $("#filterSummary");
     if (!el) return;
     const parts = [];
-    if (filterState.site_code) parts.push(`단지코드=${filterState.site_code}`);
-    if (filterState.site_name) parts.push(`단지명=${filterState.site_name}`);
+    if (isSuperAdminView) {
+      if (filterState.site_code) parts.push(`단지코드=${filterState.site_code}`);
+      if (filterState.site_name) parts.push(`단지명=${filterState.site_name}`);
+    }
     if (filterState.region) parts.push(`지역=${filterState.region}`);
     if (filterState.keyword) parts.push(`키워드=${filterState.keyword}`);
     if (filterState.active_only) parts.push("활성만");
@@ -311,9 +382,11 @@
     if (!body) return;
     if (!users.length) {
       body.innerHTML = '<tr><td colspan="15" class="cell-center">조회된 사용자가 없습니다.</td></tr>';
+      applySiteIdentityVisibility();
       return;
     }
     body.innerHTML = users.map((u, idx) => rowHtml(u, idx)).join("");
+    applySiteIdentityVisibility();
   }
 
   function updateSiteReqMeta(pendingCount) {

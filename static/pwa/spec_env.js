@@ -44,8 +44,42 @@
     return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
   }
 
+  function canViewSiteIdentity(user) {
+    return isSuperAdmin(user);
+  }
+
   function canManageSiteCodeMigration(user) {
     return isSuperAdmin(user);
+  }
+
+  function applySiteIdentityVisibility() {
+    const show = canViewSiteIdentity(me);
+    const siteWrap = $("#siteName")?.closest(".field");
+    const codeWrap = $("#siteCode")?.closest(".field");
+    if (siteWrap) siteWrap.classList.toggle("hidden", !show);
+    if (codeWrap) codeWrap.classList.toggle("hidden", !show);
+
+    const listCard = $("#siteList")?.closest("section.card");
+    if (listCard) listCard.hidden = !show;
+    if (!show) stripSiteIdentityFromUrl();
+  }
+
+  function stripSiteIdentityFromUrl() {
+    try {
+      const u = new URL(window.location.href);
+      let changed = false;
+      if (u.searchParams.has("site_name")) {
+        u.searchParams.delete("site_name");
+        changed = true;
+      }
+      if (u.searchParams.has("site_code")) {
+        u.searchParams.delete("site_code");
+        changed = true;
+      }
+      if (!changed) return;
+      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
+      window.history.replaceState({}, "", next);
+    } catch (_e) {}
   }
 
   function setMsg(msg, isErr = false) {
@@ -396,8 +430,12 @@
     const lines = [];
     const sid = normalizeSiteId((data && data.site_id) || getSiteId());
     lines.push(`site_id: ${sid > 0 ? sid : "-"}`);
-    lines.push(`site_name: ${data.site_name || getSiteName()}`);
-    lines.push(`site_code: ${data.site_code || getSiteCode() || "-"}`);
+    if (canViewSiteIdentity(me)) {
+      lines.push(`site_name: ${data.site_name || getSiteName()}`);
+      lines.push(`site_code: ${data.site_code || getSiteCode() || "-"}`);
+    } else {
+      lines.push("site: (숨김)");
+    }
     lines.push(`tab_count: ${Object.keys(schema).length}`);
     for (const [tabKey, tabDef] of Object.entries(schema)) {
       const title = tabDef.title || tabKey;
@@ -1208,6 +1246,7 @@
         codeInput.setAttribute("aria-readonly", "true");
         codeInput.title = "단지코드 생성/변경은 최고관리자만 가능합니다.";
       }
+      applySiteIdentityVisibility();
       return;
     }
 
@@ -1225,6 +1264,7 @@
     codeInput.setAttribute("aria-readonly", "true");
     siteInput.title = "소속 단지는 관리자만 변경할 수 있습니다.";
     codeInput.title = "소속 단지코드는 관리자만 변경할 수 있습니다.";
+    applySiteIdentityVisibility();
   }
 
   async function init() {
@@ -1254,7 +1294,11 @@
     }
     await loadBaseSchema();
     await loadTemplates();
-    await loadSiteList().catch(() => {});
+    if (canViewSiteIdentity(me)) {
+      await loadSiteList().catch(() => {});
+    } else {
+      applySiteIdentityVisibility();
+    }
     if (getSiteName() || getSiteCode()) {
       await syncSiteIdentity(true).catch(() => {});
       try {

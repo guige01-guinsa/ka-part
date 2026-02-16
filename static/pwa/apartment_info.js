@@ -18,6 +18,33 @@
     return !!(user && user.is_admin);
   }
 
+  function isSuperAdmin(user) {
+    if (!user || !user.is_admin) return false;
+    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
+  }
+
+  function canViewSiteIdentity(user) {
+    return isSuperAdmin(user);
+  }
+
+  function stripSiteIdentityFromUrl() {
+    try {
+      const u = new URL(window.location.href);
+      let changed = false;
+      if (u.searchParams.has("site_name")) {
+        u.searchParams.delete("site_name");
+        changed = true;
+      }
+      if (u.searchParams.has("site_code")) {
+        u.searchParams.delete("site_code");
+        changed = true;
+      }
+      if (!changed) return;
+      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
+      window.history.replaceState({}, "", next);
+    } catch (_e) {}
+  }
+
   function setMsg(msg, isErr = false) {
     const el = $("#msg");
     if (!el) return;
@@ -335,7 +362,8 @@
     await syncSiteIdentity(false);
     const site = getSiteName();
     const code = getSiteCode();
-    const ok = confirm(`${site}${code ? ` [${code}]` : ""} 단지의 아파트 정보 설정을 삭제할까요?`);
+    const label = canViewSiteIdentity(me) ? `${site}${code ? ` [${code}]` : ""}` : "현재 단지";
+    const ok = confirm(`${label}의 아파트 정보 설정을 삭제할까요?`);
     if (!ok) return;
     const qs = buildSiteQuery(site, code);
     await jfetch(`/api/apartment_profile?${qs}`, { method: "DELETE", headers: { "X-KA-MFA-VERIFIED": "1" } });
@@ -427,13 +455,19 @@
   }
 
   function applyPermissionPolicy() {
-    const canEditSite = isAdmin(me);
+    const canEditSite = isSuperAdmin(me);
     $("#siteName").readOnly = !canEditSite;
     $("#siteCode").readOnly = !canEditSite;
     if (!canEditSite) {
       $("#siteName").title = "단지명 입력/수정은 관리자만 가능합니다.";
       $("#siteCode").title = "단지코드 입력/수정은 관리자만 가능합니다.";
     }
+
+    const show = canViewSiteIdentity(me);
+    const nameWrap = $("#siteName")?.closest(".field");
+    const codeWrap = $("#siteCode")?.closest(".field");
+    if (nameWrap) nameWrap.classList.toggle("hidden", !show);
+    if (codeWrap) codeWrap.classList.toggle("hidden", !show);
   }
 
   function loadSiteFromQueryOrStorage() {
@@ -452,7 +486,7 @@
     $("#btnGoMain")?.addEventListener("click", (e) => {
       e.preventDefault();
       markActionSuccess(e.currentTarget, "↗");
-      const qs = buildSiteQuery(getSiteName(), getSiteCode());
+      const qs = canViewSiteIdentity(me) ? buildSiteQuery(getSiteName(), getSiteCode()) : "";
       window.setTimeout(() => {
         window.location.href = qs ? `/pwa/?${qs}` : "/pwa/";
       }, 200);
@@ -488,6 +522,12 @@
       return;
     }
     loadSiteFromQueryOrStorage();
+    if (!canViewSiteIdentity(me)) {
+      stripSiteIdentityFromUrl();
+      if (me && me.site_id) setSiteId(me.site_id);
+      if (me && me.site_name) setSiteName(me.site_name);
+      if (me && me.site_code) setSiteCode(me.site_code);
+    }
     if (getSiteId() <= 0) setSiteId(me && me.site_id);
     if (!getSiteName()) setSiteName(me && me.site_name);
     if (!getSiteCode()) setSiteCode(me && me.site_code);

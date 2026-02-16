@@ -33,12 +33,18 @@
     return map[key] || key;
   }
 
+  function isSuperAdmin(user) {
+    if (!user || !user.is_admin) return false;
+    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
+  }
+
   function isResidentRole(user) {
     const txt = String((user && user.role) || "").trim();
     return txt === "입주민" || txt === "주민" || txt === "세대주민";
   }
 
   function siteDisplay(user) {
+    if (!isSuperAdmin(user)) return "(숨김)";
     const code = String((user && user.site_code) || "").trim();
     const name = String((user && user.site_name) || "").trim();
     if (code && name) return `${code} / ${name}`;
@@ -207,4 +213,3 @@
     setMsg(msg, true);
   });
 })();
-

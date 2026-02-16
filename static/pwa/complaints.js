@@ -48,6 +48,15 @@
     return !!(user && (user.is_admin || user.is_site_admin));
   }
 
+  function isSuperAdmin(user) {
+    if (!user || !user.is_admin) return false;
+    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
+  }
+
+  function canViewSiteIdentity(user) {
+    return isSuperAdmin(user);
+  }
+
   function roleText(user) {
     return String((user && user.role) || "").trim();
   }
@@ -86,6 +95,32 @@
     const el = typeof elementId === "string" ? document.getElementById(elementId) : null;
     const wrap = el ? el.closest(".field") : null;
     if (wrap) wrap.classList.add("hidden");
+  }
+
+  function applySiteIdentityVisibility() {
+    const show = canViewSiteIdentity(me);
+    const nameWrap = $("#siteName")?.closest(".field");
+    const codeWrap = $("#siteCode")?.closest(".field");
+    if (nameWrap) nameWrap.classList.toggle("hidden", !show);
+    if (codeWrap) codeWrap.classList.toggle("hidden", !show);
+  }
+
+  function stripSiteIdentityFromUrl() {
+    try {
+      const u = new URL(window.location.href);
+      let changed = false;
+      if (u.searchParams.has("site_name")) {
+        u.searchParams.delete("site_name");
+        changed = true;
+      }
+      if (u.searchParams.has("site_code")) {
+        u.searchParams.delete("site_code");
+        changed = true;
+      }
+      if (!changed) return;
+      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
+      window.history.replaceState({}, "", next);
+    } catch (_e) {}
   }
 
   function applyResidentIntakeMode() {
@@ -277,22 +312,23 @@
     const storedSiteName = String(localStorage.getItem(SITE_NAME_KEY) || "").trim();
     const storedSiteCode = String(localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
 
+    const showSite = canViewSiteIdentity(me);
     let siteName = q.site_name || storedSiteName || userSiteName || "";
     let siteCode = q.site_code || storedSiteCode || userSiteCode || "";
 
-    if (!isAdmin(me)) {
+    if (!showSite) {
       siteName = userSiteName || siteName;
       siteCode = userSiteCode || siteCode;
     }
 
     $("#siteName").value = siteName;
     $("#siteCode").value = siteCode;
-    if (!isAdmin(me)) {
-      $("#siteName").readOnly = true;
-      $("#siteCode").readOnly = true;
-    }
+    $("#siteName").readOnly = !showSite;
+    $("#siteCode").readOnly = !showSite;
     localStorage.setItem(SITE_NAME_KEY, siteName);
     localStorage.setItem(SITE_CODE_KEY, siteCode);
+    applySiteIdentityVisibility();
+    if (!showSite) stripSiteIdentityFromUrl();
   }
 
   function initUnitSelector() {
@@ -318,10 +354,11 @@
   function updateMetaLine() {
     const el = $("#metaLine");
     if (!el || !me) return;
+    const showSite = canViewSiteIdentity(me);
     const level = me.is_admin ? "관리자" : (me.is_site_admin ? "단지대표자" : "일반");
     const siteCode = String(me.site_code || "").trim().toUpperCase();
     const siteName = String(me.site_name || "").trim();
-    const site = siteCode ? `${siteCode}${siteName ? ` / ${siteName}` : ""}` : (siteName || "-");
+    const site = showSite ? (siteCode ? `${siteCode}${siteName ? ` / ${siteName}` : ""}` : (siteName || "-")) : "(숨김)";
     el.textContent = `${me.name || me.login_id} (${level}) · 소속: ${site}`;
   }
 

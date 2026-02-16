@@ -13,6 +13,15 @@
     return !!(user && user.is_admin);
   }
 
+  function isSuperAdmin(user) {
+    if (!user || !user.is_admin) return false;
+    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
+  }
+
+  function canViewSiteIdentity(user) {
+    return isSuperAdmin(user);
+  }
+
   function canManageBackup(user) {
     return !!(user && (user.is_admin || user.is_site_admin));
   }
@@ -72,10 +81,37 @@
     const el = $("#metaLine");
     if (!el || !me) return;
     const level = isAdmin(me) ? "관리자" : "단지대표자";
+    const showSite = canViewSiteIdentity(me);
     const code = (me.site_code || "").trim().toUpperCase();
     const name = (me.site_name || "").trim();
-    const siteText = code ? `${code}${name ? ` / ${name}` : ""}` : (name || "-");
+    const siteText = showSite ? (code ? `${code}${name ? ` / ${name}` : ""}` : (name || "-")) : "(숨김)";
     el.textContent = `${me.name || me.login_id} (${level}) · 소속: ${siteText}`;
+  }
+
+  function applySiteIdentityVisibility() {
+    const show = canViewSiteIdentity(me);
+    const codeWrap = $("#siteCode")?.closest(".field");
+    const nameWrap = $("#siteName")?.closest(".field");
+    if (codeWrap) codeWrap.classList.toggle("hidden", !show);
+    if (nameWrap) nameWrap.classList.toggle("hidden", !show);
+  }
+
+  function stripSiteIdentityFromUrl() {
+    try {
+      const u = new URL(window.location.href);
+      let changed = false;
+      if (u.searchParams.has("site_name")) {
+        u.searchParams.delete("site_name");
+        changed = true;
+      }
+      if (u.searchParams.has("site_code")) {
+        u.searchParams.delete("site_code");
+        changed = true;
+      }
+      if (!changed) return;
+      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
+      window.history.replaceState({}, "", next);
+    } catch (_e) {}
   }
 
   function setMaintenanceStatus(payload) {
@@ -130,6 +166,7 @@
 
   function applyRolePolicy() {
     const admin = isAdmin(me);
+    const superAdmin = isSuperAdmin(me);
     const scopeEl = $("#scopeSelect");
     const siteCodeEl = $("#siteCode");
     const siteNameEl = $("#siteName");
@@ -138,6 +175,12 @@
     if (!admin) {
       scopeEl.value = "site";
       scopeEl.disabled = true;
+      siteCodeEl.value = String(me.site_code || "").trim().toUpperCase();
+      siteNameEl.value = String(me.site_name || "").trim();
+      siteCodeEl.readOnly = true;
+      siteNameEl.readOnly = true;
+    } else if (!superAdmin) {
+      scopeEl.disabled = false;
       siteCodeEl.value = String(me.site_code || "").trim().toUpperCase();
       siteNameEl.value = String(me.site_name || "").trim();
       siteCodeEl.readOnly = true;
@@ -154,6 +197,9 @@
       siteCodeEl.readOnly = false;
       siteNameEl.readOnly = false;
     }
+
+    applySiteIdentityVisibility();
+    if (!canViewSiteIdentity(me)) stripSiteIdentityFromUrl();
   }
 
   function renderScheduleInfo(schedules) {
@@ -199,7 +245,7 @@
     const trigger = escapeHtml(item.trigger_label || item.trigger || "-");
     const when = escapeHtml(formatDateTime(item.created_at || ""));
     const targetLabels = Array.isArray(item.target_labels) ? item.target_labels.join(", ") : "-";
-    const sitePart = item.site_code ? ` · 단지코드 ${escapeHtml(item.site_code)}` : "";
+    const sitePart = canViewSiteIdentity(me) && item.site_code ? ` · 단지코드 ${escapeHtml(item.site_code)}` : "";
     const rel = escapeHtml(item.relative_path || "");
     const size = prettyBytes(item.file_size_bytes);
     const rawScope = String(item.scope || "").trim().toLowerCase();

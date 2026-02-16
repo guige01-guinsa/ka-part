@@ -106,6 +106,25 @@
     return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
   }
 
+  function canViewSiteIdentity(user) {
+    return isSuperAdmin(user);
+  }
+
+  function setWrapHiddenByInputSelector(inputSelector, hidden) {
+    const el = typeof inputSelector === "string" ? document.querySelector(inputSelector) : null;
+    const wrap = el ? (el.closest(".field") || el.closest(".input")) : null;
+    if (wrap) wrap.classList.toggle("hidden", !!hidden);
+  }
+
+  function applySiteIdentityVisibility() {
+    const show = canViewSiteIdentity(authUser);
+    setWrapHiddenByInputSelector("#siteName", !show);
+    setWrapHiddenByInputSelector("#siteCode", !show);
+    // Home tab site identity fields (if present)
+    setWrapHiddenByInputSelector("#f-home-complex_name", !show);
+    setWrapHiddenByInputSelector("#f-home-complex_code", !show);
+  }
+
   function hasSiteAdminPermission(user) {
     return !!(user && (user.is_admin || user.is_site_admin));
   }
@@ -256,9 +275,10 @@
   function updateContextLine() {
     const el = $("#contextLine");
     if (!el) return;
-    const siteName = String(getSiteNameRaw() || getSiteName() || "").trim();
-    const siteCode = String(getSiteCodeRaw() || getSiteCode() || "").trim().toUpperCase();
-    const siteText = [siteCode, siteName].filter(Boolean).join(" / ") || "-";
+    const showSite = canViewSiteIdentity(authUser);
+    const siteName = showSite ? String(getSiteNameRaw() || getSiteName() || "").trim() : "";
+    const siteCode = showSite ? String(getSiteCodeRaw() || getSiteCode() || "").trim().toUpperCase() : "";
+    const siteText = showSite ? ([siteCode, siteName].filter(Boolean).join(" / ") || "-") : "(숨김)";
     const displayDate = getDateStart() || "-";
     const from = rangeQueryFrom || getDateStart();
     const to = rangeQueryTo || getDateEnd();
@@ -332,7 +352,7 @@
 
     btn.addEventListener("click", () => {
       if (menuOpen) closeMenu();
-      else openMenu({ focusSelector: "#siteName" });
+      else openMenu({ focusSelector: canViewSiteIdentity(authUser) ? "#siteName" : "#dateStart" });
     });
     closeBtn?.addEventListener("click", () => closeMenu());
     overlay.addEventListener("click", () => closeMenu());
@@ -471,6 +491,7 @@
       codeEl.setAttribute("aria-readonly", "true");
       codeEl.title = "단지코드 입력/수정은 관리자만 가능합니다.";
     }
+    applySiteIdentityVisibility();
   }
 
   async function ensureAuth() {
@@ -496,6 +517,7 @@
     enforceSiteIdentityPolicy();
     const assignedCode = assignedSiteCodeForUser();
     if (assignedCode) setSiteCode(assignedCode);
+    applySiteIdentityVisibility();
   }
 
   function parseFilename(contentDisposition, fallback) {
@@ -656,14 +678,15 @@
 
   function updateAddressBarSiteQuery() {
     const u = new URL(window.location.href);
+    const showSite = canViewSiteIdentity(authUser);
     const siteName = getSiteNameRaw();
     const siteCode = getSiteCodeRaw();
     const siteId = getSiteId();
     if (siteId > 0) u.searchParams.set("site_id", String(siteId));
     else u.searchParams.delete("site_id");
-    if (siteName) u.searchParams.set("site_name", siteName);
+    if (showSite && siteName) u.searchParams.set("site_name", siteName);
     else u.searchParams.delete("site_name");
-    if (siteCode) u.searchParams.set("site_code", siteCode);
+    if (showSite && siteCode) u.searchParams.set("site_code", siteCode);
     else u.searchParams.delete("site_code");
     const next = `${u.pathname}${u.search ? `?${u.searchParams.toString()}` : ""}`;
     window.history.replaceState({}, "", next);
@@ -685,6 +708,7 @@
       homeCode.title = canEdit ? "단지코드는 상단 입력창에서 변경됩니다." : "단지코드 입력/수정은 관리자만 가능합니다.";
     }
     syncHomeSiteIdentityDisplay();
+    applySiteIdentityVisibility();
   }
 
   async function syncSiteIdentity({ requireInput = true } = {}) {
@@ -1341,31 +1365,31 @@
     $("#btnUsers")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = buildSiteQuery(site, siteCode);
+      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/users.html?${qs}` : "/pwa/users.html";
     });
     $("#btnSpecEnv")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = buildSiteQuery(site, siteCode);
+      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/spec_env.html?${qs}` : "/pwa/spec_env.html";
     });
     $("#btnApartmentInfo")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = buildSiteQuery(site, siteCode);
+      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/apartment_info.html?${qs}` : "/pwa/apartment_info.html";
     });
     $("#btnComplaints")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = buildSiteQuery(site, siteCode);
+      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/complaints.html?${qs}` : "/pwa/complaints.html";
     });
     $("#btnBackup")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = buildSiteQuery(site, siteCode);
+      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/backup.html?${qs}` : "/pwa/backup.html";
     });
     $("#btnNoticeQna")?.addEventListener("click", () => {
