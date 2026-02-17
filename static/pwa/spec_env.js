@@ -730,6 +730,47 @@
     }
   }
 
+  function templateFieldInputsByTab(tabKey) {
+    const tab = String(tabKey || "").trim();
+    const out = [];
+    if (!tab) return out;
+    for (const f of document.querySelectorAll("#templateScopeWrap input.tpl-field")) {
+      if (String(f.dataset.tab || "").trim() === tab) out.push(f);
+    }
+    return out;
+  }
+
+  function setTemplateFieldsByTab(tabKey, checked) {
+    const on = !!checked;
+    for (const f of templateFieldInputsByTab(tabKey)) {
+      f.disabled = !on;
+      f.checked = on;
+    }
+  }
+
+  function syncTemplateTabFromFields(tabKey) {
+    const tab = String(tabKey || "").trim();
+    if (!tab) return;
+    let tabEl = null;
+    for (const t of document.querySelectorAll("#templateScopeWrap input.tpl-tab")) {
+      if (String(t.dataset.tab || "").trim() === tab) {
+        tabEl = t;
+        break;
+      }
+    }
+    if (!tabEl) return;
+    const fields = templateFieldInputsByTab(tab);
+    if (!fields.length) return;
+    const anyChecked = fields.some((f) => !!f.checked);
+    tabEl.checked = anyChecked;
+    if (!anyChecked) {
+      for (const f of fields) {
+        f.checked = false;
+        f.disabled = true;
+      }
+    }
+  }
+
   function syncTemplateFieldDisables() {
     const tabMap = {};
     for (const t of document.querySelectorAll("#templateScopeWrap input.tpl-tab")) {
@@ -1186,7 +1227,19 @@
       syncTemplateFieldDisables();
     });
     $("#templateScopeWrap").addEventListener("change", (e) => {
-      if (e.target.closest("input.tpl-tab")) syncTemplateFieldDisables();
+      const tabInput = e.target.closest("input.tpl-tab");
+      if (tabInput) {
+        const tabKey = String(tabInput.dataset.tab || "").trim();
+        setTemplateFieldsByTab(tabKey, !!tabInput.checked);
+        syncTemplateFieldDisables();
+        return;
+      }
+      const fieldInput = e.target.closest("input.tpl-field");
+      if (fieldInput) {
+        const tabKey = String(fieldInput.dataset.tab || "").trim();
+        syncTemplateTabFromFields(tabKey);
+        syncTemplateFieldDisables();
+      }
     });
 
     $("#btnMigRequest")?.addEventListener("click", () =>
