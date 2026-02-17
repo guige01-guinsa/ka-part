@@ -1397,9 +1397,12 @@ def _public_access_site_code(site_name: str) -> str:
 
 
 def _public_access_admin_scope() -> str:
-    raw = (os.getenv("KA_PUBLIC_FULL_ACCESS_ADMIN_SCOPE") or "super_admin").strip().lower()
+    raw = (os.getenv("KA_PUBLIC_FULL_ACCESS_ADMIN_SCOPE") or "ops_admin").strip().lower()
     clean = _clean_admin_scope(raw, required=False)
-    return clean or "super_admin"
+    # Never allow public-access sessions to escalate to super_admin.
+    if clean == "super_admin":
+        return "ops_admin"
+    return clean or "ops_admin"
 
 
 def _ensure_public_access_user() -> Dict[str, Any]:
@@ -3598,6 +3601,8 @@ def auth_public_access(request: Request):
         raise HTTPException(status_code=403, detail="public access is disabled")
 
     user = _ensure_public_access_user()
+    # Invalidate any stale public-access sessions before issuing a new one.
+    revoke_all_user_sessions(int(user["id"]))
     mark_staff_user_login(int(user["id"]))
     cleanup_expired_sessions()
     session = create_auth_session(
