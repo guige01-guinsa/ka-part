@@ -4,8 +4,6 @@
   const $ = (sel) => document.querySelector(sel);
   const PREFERRED_TAB_ORDER = [
     "home",
-    "notice_qna",
-    "todo",
     "tr1",
     "tr2",
     "tr3",
@@ -1462,15 +1460,6 @@
       const siteCode = getSiteCode();
       const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/backup.html?${qs}` : "/pwa/backup.html";
-    });
-    $("#btnNoticeQna")?.addEventListener("click", () => {
-      const target = TABS.find((t) => t.key === "notice_qna");
-      if (!target) {
-        toast("공지/질문 탭이 현재 비활성화되어 있습니다.");
-        return;
-      }
-      activateTab(target.key, true);
-      document.getElementById("tabs")?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     $("#btnParking")?.addEventListener("click", () => {
       const run = async () => {

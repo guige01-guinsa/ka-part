@@ -1892,8 +1892,6 @@ def _home_only_site_env_config() -> Dict[str, Any]:
             "hide_tabs": hide_tabs,
             "tabs": {
                 "home": {"title": "홈"},
-                "notice_qna": {"title": "공지/질문"},
-                "todo": {"title": "Todo 일정관리"},
             },
         }
     )
