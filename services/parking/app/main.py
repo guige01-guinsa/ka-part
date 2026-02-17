@@ -387,7 +387,8 @@ def _session_site_code(sess: dict[str, Any] | None) -> str:
 
 def _is_manager_session(sess: dict[str, Any] | None) -> bool:
     role = str((sess or {}).get("r") or "").strip().lower()
-    return role in {"admin", "guard"}
+    # 운영 정책: 주차 모듈은 로그인 방식과 관계없이 인증 세션이면 전체 메뉴를 사용한다.
+    return role in {"admin", "guard", "viewer"}
 
 
 def _require_manager_session(request: Request) -> dict[str, Any]:
@@ -1655,8 +1656,8 @@ ADMIN2_HTML_TEMPLATE = r"""<!doctype html>
       const site = [boot.site_code || "-", boot.site_name || ""].filter(Boolean).join(" / ");
       $("ctxLine").textContent = `단지: ${site} · 사용자: ${boot.display_name || "-"} · 권한: ${role}`;
       $("permLine").textContent = isManager
-        ? "관리 권한으로 차량 DB CRUD/엑셀가져오기를 사용할 수 있습니다."
-        : "현재 권한은 차량 DB CRUD/엑셀가져오기를 사용할 수 없습니다.";
+        ? "현재 세션은 주차관리 전체 메뉴(차량/위반/엑셀/스캐너)를 사용할 수 있습니다."
+        : "현재 세션은 조회 메뉴만 사용할 수 있습니다.";
       $("btnBack").setAttribute("href", boot.back_url || "/pwa/");
       $("btnScanner").setAttribute("href", boot.scanner_url || "./scanner");
     }
