@@ -283,7 +283,8 @@
     const from = rangeQueryFrom || getDateStart();
     const to = rangeQueryTo || getDateEnd();
     const rangeText = from && to ? (from === to ? from : `${from}~${to}`) : (from || to || "-");
-    el.textContent = `단지: ${siteText} · 표시: ${displayDate} · 범위: ${rangeText}`;
+    const workType = getSelectedWorkType() || "-";
+    el.textContent = `단지: ${siteText} · 업무구분: ${workType} · 표시: ${displayDate} · 범위: ${rangeText}`;
   }
 
   function relocateFiltersBlock() {
@@ -744,6 +745,26 @@
     return getDateStart();
   }
 
+  function getSelectedWorkType() {
+    const el = document.getElementById("f-home-work_type");
+    const raw = el && typeof el.value === "string" ? el.value : "";
+    return String(raw || "").trim();
+  }
+
+  function appendWorkTypeQuery(urlOrPath) {
+    const source = String(urlOrPath || "").trim();
+    if (!source) return source;
+    const wt = getSelectedWorkType();
+    if (!wt) return source;
+    try {
+      const u = new URL(source, window.location.origin);
+      u.searchParams.set("work_type", wt);
+      return /^https?:\/\//i.test(source) ? u.toString() : `${u.pathname}${u.search ? `?${u.searchParams.toString()}` : ""}`;
+    } catch (_e) {
+      return source;
+    }
+  }
+
   function sortSchemaKeys(keys) {
     return [...keys].sort((a, b) => {
       const ia = PREFERRED_TAB_ORDER.indexOf(a);
@@ -1101,7 +1122,7 @@
 
   async function loadOne(site, date, siteCode = "") {
     const qs = buildSiteQuery(site, siteCode || getSiteCode());
-    const url = `/api/load?${qs}&date=${encodeURIComponent(date)}`;
+    const url = appendWorkTypeQuery(`/api/load?${qs}&date=${encodeURIComponent(date)}`);
     const data = await jfetch(url);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
@@ -1118,7 +1139,7 @@
     rangeQueryTo = dt || "";
     updateContextLine();
     const qs = buildSiteQuery(site, siteCode);
-    const url = `/api/list_range?${qs}&date_from=${encodeURIComponent(df)}&date_to=${encodeURIComponent(dt)}`;
+    const url = appendWorkTypeQuery(`/api/list_range?${qs}&date_from=${encodeURIComponent(df)}&date_to=${encodeURIComponent(dt)}`);
     const data = await jfetch(url);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
@@ -1219,7 +1240,7 @@
     const ok = confirm(`${date} 데이터를 삭제할까요?`);
     if (!ok) return;
     const qs = buildSiteQuery(getSiteNameRaw() || getSiteName(), getSiteCodeRaw() || getSiteCode());
-    const url = `/api/delete?${qs}&date=${encodeURIComponent(date)}`;
+    const url = appendWorkTypeQuery(`/api/delete?${qs}&date=${encodeURIComponent(date)}`);
     await jfetch(url, { method: "DELETE" });
     await loadRange().catch(() => {});
     toast("삭제 완료");
@@ -1228,14 +1249,14 @@
   async function doExport() {
     await syncSiteIdentity({ requireInput: true });
     const qs = buildSiteQuery(getSiteNameRaw() || getSiteName(), getSiteCodeRaw() || getSiteCode());
-    const url = `/api/export?${qs}&date_from=${encodeURIComponent(getDateStart())}&date_to=${encodeURIComponent(getDateEnd())}`;
+    const url = appendWorkTypeQuery(`/api/export?${qs}&date_from=${encodeURIComponent(getDateStart())}&date_to=${encodeURIComponent(getDateEnd())}`);
     await downloadWithAuth(url, "export.xlsx");
   }
 
   async function doPdf() {
     await syncSiteIdentity({ requireInput: true });
     const qs = buildSiteQuery(getSiteNameRaw() || getSiteName(), getSiteCodeRaw() || getSiteCode());
-    const url = `/api/pdf?${qs}&date=${encodeURIComponent(getPickedDate())}`;
+    const url = appendWorkTypeQuery(`/api/pdf?${qs}&date=${encodeURIComponent(getPickedDate())}`);
     await downloadWithAuth(url, "report.pdf");
   }
 
@@ -1345,6 +1366,12 @@
       const t = e.target;
       if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) {
         saveHomeDraft();
+        if (t.id === "f-home-work_type") {
+          rangeQueryFrom = "";
+          rangeQueryTo = "";
+          updateContextLine();
+          loadRange().catch(() => {});
+        }
       }
     });
 

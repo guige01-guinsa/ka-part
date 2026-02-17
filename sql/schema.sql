@@ -11,9 +11,10 @@ CREATE TABLE IF NOT EXISTS entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   site_id INTEGER NOT NULL,
   entry_date TEXT NOT NULL,            -- YYYY-MM-DD
+  work_type TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE(site_id, entry_date),
+  UNIQUE(site_id, entry_date, work_type),
   FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
 );
 
@@ -31,4 +32,5 @@ CREATE TABLE IF NOT EXISTS entry_values (
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(entry_date);
+CREATE INDEX IF NOT EXISTS idx_entries_site_date_work_type ON entries(site_id, entry_date, work_type);
 CREATE INDEX IF NOT EXISTS idx_values_tab ON entry_values(tab_key);

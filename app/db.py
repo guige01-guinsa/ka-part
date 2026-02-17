@@ -16,6 +16,7 @@ from .schema_defs import (
     LEGACY_TAB_ALIASES,
     SCHEMA_DEFS,
     TAB_STORAGE_SPECS,
+    WORK_TYPES,
     build_effective_schema,
     canonical_tab_key,
     canonicalize_tab_fields,
@@ -34,6 +35,13 @@ _SITE_CODE_REMOVE_RE = re.compile(r"[\s-]+")
 _SITE_CODE_FULL_RE = re.compile(r"^[A-Z]{3}[0-9]{5}$")
 _raw_site_prefix = str(os.getenv("KA_SITE_CODE_PREFIX", "APT") or "APT").strip().upper()
 SITE_CODE_PREFIX = _raw_site_prefix if re.fullmatch(r"[A-Z]{3}", _raw_site_prefix) else "APT"
+_WORK_TYPE_ALIAS_MAP = {
+    "정기": "일상",
+    "기타일상": "일상",
+    "기타": "일상",
+}
+_WORK_TYPE_SET = {str(x or "").strip() for x in WORK_TYPES if str(x or "").strip()}
+DEFAULT_WORK_TYPE = "일일" if "일일" in _WORK_TYPE_SET else (next(iter(_WORK_TYPE_SET), ""))
 
 
 def _connect() -> sqlite3.Connection:
@@ -116,6 +124,16 @@ def _to_text(v: Any) -> Optional[str]:
         return None
     s = str(v).strip()
     return s if s else None
+
+
+def normalize_work_type(value: Any, *, default: str = DEFAULT_WORK_TYPE) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return str(default or "")
+    mapped = _WORK_TYPE_ALIAS_MAP.get(raw, raw)
+    if mapped in _WORK_TYPE_SET:
+        return mapped
+    return str(default or "")
 
 
 def _clean_site_code_value(value: Any) -> str | None:
@@ -539,11 +557,13 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(con, "transformer_450_reads", "entry_date TEXT")
+    _ensure_column(con, "transformer_450_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "transformer_450_reads", "updated_at TEXT")
+    con.execute("DROP INDEX IF EXISTS ux_tr450_site_date")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_tr450_site_date
-        ON transformer_450_reads(site_name, entry_date);
+        ON transformer_450_reads(site_name, entry_date, work_type);
         """
     )
 
@@ -563,11 +583,13 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(con, "transformer_400_reads", "entry_date TEXT")
+    _ensure_column(con, "transformer_400_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "transformer_400_reads", "updated_at TEXT")
+    con.execute("DROP INDEX IF EXISTS ux_tr400_site_date")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_tr400_site_date
-        ON transformer_400_reads(site_name, entry_date);
+        ON transformer_400_reads(site_name, entry_date, work_type);
         """
     )
 
@@ -592,11 +614,13 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "main_vcb_reads", "main_vcb_l1_a REAL")
     _ensure_column(con, "main_vcb_reads", "main_vcb_l2_a REAL")
     _ensure_column(con, "main_vcb_reads", "main_vcb_l3_a REAL")
+    _ensure_column(con, "main_vcb_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "main_vcb_reads", "updated_at TEXT")
+    con.execute("DROP INDEX IF EXISTS ux_main_vcb_site_date")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_main_vcb_site_date
-        ON main_vcb_reads(site_name, entry_date);
+        ON main_vcb_reads(site_name, entry_date, work_type);
         """
     )
 
@@ -617,11 +641,13 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "dc_panel_reads", "entry_date TEXT")
     _ensure_column(con, "dc_panel_reads", "dc_panel_v REAL")
     _ensure_column(con, "dc_panel_reads", "dc_panel_a REAL")
+    _ensure_column(con, "dc_panel_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "dc_panel_reads", "updated_at TEXT")
+    con.execute("DROP INDEX IF EXISTS ux_dc_panel_site_date")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_dc_panel_site_date
-        ON dc_panel_reads(site_name, entry_date);
+        ON dc_panel_reads(site_name, entry_date, work_type);
         """
     )
 
@@ -648,11 +674,13 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "temperature_reads", "temperature_tr3 REAL")
     _ensure_column(con, "temperature_reads", "temperature_tr4 REAL")
     _ensure_column(con, "temperature_reads", "temperature_indoor REAL")
+    _ensure_column(con, "temperature_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "temperature_reads", "updated_at TEXT")
+    con.execute("DROP INDEX IF EXISTS ux_temperature_site_date")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_temperature_site_date
-        ON temperature_reads(site_name, entry_date);
+        ON temperature_reads(site_name, entry_date, work_type);
         """
     )
 
@@ -670,11 +698,13 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(con, "power_meter_reads", "entry_date TEXT")
+    _ensure_column(con, "power_meter_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "power_meter_reads", "updated_at TEXT")
+    con.execute("DROP INDEX IF EXISTS ux_meter_site_date")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_meter_site_date
-        ON power_meter_reads(site_name, entry_date);
+        ON power_meter_reads(site_name, entry_date, work_type);
         """
     )
 
@@ -694,11 +724,13 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(con, "facility_checks", "entry_date TEXT")
+    _ensure_column(con, "facility_checks", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "facility_checks", "updated_at TEXT")
+    con.execute("DROP INDEX IF EXISTS ux_fac_site_date")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_fac_site_date
-        ON facility_checks(site_name, entry_date);
+        ON facility_checks(site_name, entry_date, work_type);
         """
     )
 
@@ -720,11 +752,13 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(con, "facility_subtasks", "entry_date TEXT")
+    _ensure_column(con, "facility_subtasks", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "facility_subtasks", "updated_at TEXT")
+    con.execute("DROP INDEX IF EXISTS ux_subtasks_site_date_domain")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_subtasks_site_date_domain
-        ON facility_subtasks(site_name, entry_date, domain_key);
+        ON facility_subtasks(site_name, entry_date, domain_key, work_type);
         """
     )
     con.execute(
@@ -1096,6 +1130,136 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     )
 
 
+def _index_columns(con: sqlite3.Connection, index_name: str) -> List[str]:
+    rows = con.execute(f"PRAGMA index_info({index_name})").fetchall()
+    out: List[str] = []
+    for r in rows:
+        try:
+            out.append(str(r["name"]))
+        except Exception:
+            try:
+                out.append(str(r[2]))
+            except Exception:
+                continue
+    return out
+
+
+def _has_unique_index(con: sqlite3.Connection, table: str, cols: List[str]) -> bool:
+    expected = [str(c) for c in cols]
+    rows = con.execute(f"PRAGMA index_list({table})").fetchall()
+    for r in rows:
+        is_unique = 0
+        try:
+            is_unique = int(r["unique"] or 0)
+        except Exception:
+            try:
+                is_unique = int(r[2] or 0)
+            except Exception:
+                is_unique = 0
+        if is_unique != 1:
+            continue
+        try:
+            idx_name = str(r["name"])
+        except Exception:
+            idx_name = str(r[1])
+        if _index_columns(con, idx_name) == expected:
+            return True
+    return False
+
+
+def _normalize_entries_work_type(con: sqlite3.Connection) -> None:
+    cols = set(table_columns(con, "entries"))
+    if "work_type" not in cols:
+        return
+    value_col = _entry_values_value_col(con)
+    con.execute(
+        f"""
+        UPDATE entries
+        SET work_type = (
+            SELECT TRIM(COALESCE(ev.{value_col}, ''))
+            FROM entry_values ev
+            WHERE ev.entry_id = entries.id
+              AND ev.tab_key = 'home'
+              AND ev.field_key = 'work_type'
+            ORDER BY ev.id DESC
+            LIMIT 1
+        )
+        WHERE (work_type IS NULL OR TRIM(work_type) = '');
+        """
+    )
+
+    rows = con.execute("SELECT id, work_type FROM entries").fetchall()
+    for row in rows:
+        entry_id = int(row["id"])
+        normalized = normalize_work_type(row["work_type"], default=DEFAULT_WORK_TYPE)
+        con.execute("UPDATE entries SET work_type=? WHERE id=?", (normalized, entry_id))
+
+
+def _migrate_entries_work_type_key(con: sqlite3.Connection) -> None:
+    cols = set(table_columns(con, "entries"))
+    has_work_col = "work_type" in cols
+    has_new_unique = _has_unique_index(con, "entries", ["site_id", "entry_date", "work_type"])
+    has_old_unique = _has_unique_index(con, "entries", ["site_id", "entry_date"])
+    if has_work_col and has_new_unique and not has_old_unique:
+        _normalize_entries_work_type(con)
+        con.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_entries_site_date_work_type
+            ON entries(site_id, entry_date, work_type);
+            """
+        )
+        return
+
+    fk_enabled = int(con.execute("PRAGMA foreign_keys").fetchone()[0] or 0)
+    con.execute("PRAGMA foreign_keys=OFF;")
+    try:
+        con.execute("DROP TABLE IF EXISTS entries__new;")
+        con.execute(
+            """
+            CREATE TABLE entries__new (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              site_id INTEGER NOT NULL,
+              entry_date TEXT NOT NULL,
+              work_type TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(site_id, entry_date, work_type),
+              FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
+            );
+            """
+        )
+        if has_work_col:
+            con.execute(
+                """
+                INSERT INTO entries__new(id, site_id, entry_date, work_type, created_at, updated_at)
+                SELECT id, site_id, entry_date, COALESCE(work_type, ''), created_at, updated_at
+                FROM entries;
+                """
+            )
+        else:
+            con.execute(
+                """
+                INSERT INTO entries__new(id, site_id, entry_date, work_type, created_at, updated_at)
+                SELECT id, site_id, entry_date, '', created_at, updated_at
+                FROM entries;
+                """
+            )
+        con.execute("DROP TABLE entries;")
+        con.execute("ALTER TABLE entries__new RENAME TO entries;")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(entry_date);")
+        con.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_entries_site_date_work_type
+            ON entries(site_id, entry_date, work_type);
+            """
+        )
+        _invalidate_col_cache("entries")
+    finally:
+        con.execute(f"PRAGMA foreign_keys={1 if fk_enabled else 0};")
+
+    _normalize_entries_work_type(con)
+
+
 def _rename_entry_value_key(con: sqlite3.Connection, tab_key: str, old_key: str, new_key: str) -> None:
     con.execute(
         """
@@ -1164,6 +1328,7 @@ def init_db() -> None:
         _normalize_site_code_columns(con)
         migrate_legacy_tab_keys(con)
         migrate_legacy_entry_values(con)
+        _migrate_entries_work_type_key(con)
         con.commit()
     finally:
         con.close()
@@ -3107,34 +3272,53 @@ def migrate_site_code(
         con.close()
 
 
-def upsert_entry(site_id: int, entry_date: str) -> int:
+def upsert_entry(site_id: int, entry_date: str, work_type: str = "") -> int:
+    clean_work_type = normalize_work_type(work_type, default=DEFAULT_WORK_TYPE)
     con = _connect()
     try:
-        row = con.execute(
-            "SELECT id FROM entries WHERE site_id=? AND entry_date=?",
-            (site_id, entry_date),
-        ).fetchone()
+        cols = set(table_columns(con, "entries"))
+        has_work_type = "work_type" in cols
+        if has_work_type:
+            row = con.execute(
+                "SELECT id FROM entries WHERE site_id=? AND entry_date=? AND work_type=?",
+                (site_id, entry_date, clean_work_type),
+            ).fetchone()
+        else:
+            row = con.execute(
+                "SELECT id FROM entries WHERE site_id=? AND entry_date=?",
+                (site_id, entry_date),
+            ).fetchone()
         ts = now_iso()
         if row:
             entry_id = int(row["id"])
-            cols = table_columns(con, "entries")
             if "updated_at" in cols:
                 con.execute("UPDATE entries SET updated_at=? WHERE id=?", (ts, entry_id))
             con.commit()
             return entry_id
 
+        payload = {"site_id": site_id, "entry_date": entry_date}
+        key_cols = ["site_id", "entry_date"]
+        if has_work_type:
+            payload["work_type"] = clean_work_type
+            key_cols.append("work_type")
         dynamic_upsert(
             con,
             "entries",
-            ["site_id", "entry_date"],
-            {"site_id": site_id, "entry_date": entry_date},
+            key_cols,
+            payload,
             ts=ts,
         )
         con.commit()
-        row2 = con.execute(
-            "SELECT id FROM entries WHERE site_id=? AND entry_date=?",
-            (site_id, entry_date),
-        ).fetchone()
+        if has_work_type:
+            row2 = con.execute(
+                "SELECT id FROM entries WHERE site_id=? AND entry_date=? AND work_type=?",
+                (site_id, entry_date, clean_work_type),
+            ).fetchone()
+        else:
+            row2 = con.execute(
+                "SELECT id FROM entries WHERE site_id=? AND entry_date=?",
+                (site_id, entry_date),
+            ).fetchone()
         return int(row2["id"])
     finally:
         con.close()
@@ -3194,15 +3378,30 @@ def _load_entry_values_for_entry(
 def load_entry(
     site_id: int,
     entry_date: str,
+    work_type: str = "",
     *,
+    fallback_empty_work_type: bool = True,
     allowed_keys_by_tab: Optional[Dict[str, set[str]]] = None,
 ) -> Dict[str, Dict[str, str]]:
+    clean_work_type = normalize_work_type(work_type, default=DEFAULT_WORK_TYPE)
     con = _connect()
     try:
-        row = con.execute(
-            "SELECT id FROM entries WHERE site_id=? AND entry_date=?",
-            (site_id, entry_date),
-        ).fetchone()
+        has_work_type = "work_type" in set(table_columns(con, "entries"))
+        if has_work_type:
+            row = con.execute(
+                "SELECT id FROM entries WHERE site_id=? AND entry_date=? AND work_type=?",
+                (site_id, entry_date, clean_work_type),
+            ).fetchone()
+            if not row and fallback_empty_work_type and clean_work_type:
+                row = con.execute(
+                    "SELECT id FROM entries WHERE site_id=? AND entry_date=? AND (work_type IS NULL OR TRIM(work_type)='')",
+                    (site_id, entry_date),
+                ).fetchone()
+        else:
+            row = con.execute(
+                "SELECT id FROM entries WHERE site_id=? AND entry_date=?",
+                (site_id, entry_date),
+            ).fetchone()
         if not row:
             return {}
         return _load_entry_values_for_entry(con, int(row["id"]), allowed_keys_by_tab=allowed_keys_by_tab)
@@ -3210,13 +3409,26 @@ def load_entry(
         con.close()
 
 
-def delete_entry(site_id: int, entry_date: str) -> bool:
+def delete_entry(site_id: int, entry_date: str, work_type: str = "") -> bool:
+    clean_work_type = normalize_work_type(work_type, default=DEFAULT_WORK_TYPE)
     con = _connect()
     try:
-        row = con.execute(
-            "SELECT id FROM entries WHERE site_id=? AND entry_date=?",
-            (site_id, entry_date),
-        ).fetchone()
+        has_work_type = "work_type" in set(table_columns(con, "entries"))
+        if has_work_type:
+            row = con.execute(
+                "SELECT id FROM entries WHERE site_id=? AND entry_date=? AND work_type=?",
+                (site_id, entry_date, clean_work_type),
+            ).fetchone()
+            if not row and clean_work_type:
+                row = con.execute(
+                    "SELECT id FROM entries WHERE site_id=? AND entry_date=? AND (work_type IS NULL OR TRIM(work_type)='')",
+                    (site_id, entry_date),
+                ).fetchone()
+        else:
+            row = con.execute(
+                "SELECT id FROM entries WHERE site_id=? AND entry_date=?",
+                (site_id, entry_date),
+            ).fetchone()
         if not row:
             return False
         con.execute("DELETE FROM entries WHERE id=?", (int(row["id"]),))
@@ -3226,9 +3438,42 @@ def delete_entry(site_id: int, entry_date: str) -> bool:
         con.close()
 
 
-def list_entries(site_id: int, date_from: str, date_to: str) -> List[sqlite3.Row]:
+def list_entries(site_id: int, date_from: str, date_to: str, work_type: str = "") -> List[sqlite3.Row]:
+    clean_work_type = normalize_work_type(work_type, default=DEFAULT_WORK_TYPE)
     con = _connect()
     try:
+        has_work_type = "work_type" in set(table_columns(con, "entries"))
+        if has_work_type:
+            rows = con.execute(
+                """
+                SELECT id, entry_date, work_type, created_at, updated_at
+                FROM entries
+                WHERE site_id=?
+                  AND entry_date BETWEEN ? AND ?
+                  AND (
+                    work_type=?
+                    OR (work_type IS NULL OR TRIM(work_type)='')
+                  )
+                ORDER BY entry_date ASC, id ASC
+                """,
+                (site_id, date_from, date_to, clean_work_type),
+            ).fetchall()
+            # Legacy fallback rows(work_type='') may coexist.
+            if not rows:
+                return rows
+            chosen: Dict[str, sqlite3.Row] = {}
+            for row in rows:
+                d = str(row["entry_date"] or "")
+                prev = chosen.get(d)
+                if prev is None:
+                    chosen[d] = row
+                    continue
+                row_wt = str(row["work_type"] or "").strip()
+                prev_wt = str(prev["work_type"] or "").strip()
+                if row_wt == clean_work_type and prev_wt != clean_work_type:
+                    chosen[d] = row
+            return sorted(chosen.values(), key=lambda r: str(r["entry_date"] or ""))
+
         rows = con.execute(
             """
             SELECT id, entry_date, created_at, updated_at
@@ -3251,13 +3496,20 @@ def load_entry_by_id(entry_id: int, *, allowed_keys_by_tab: Optional[Dict[str, s
         con.close()
 
 
-def upsert_tab_domain_data(site_name: str, entry_date: str, tab_key: str, fields: Dict[str, Any]) -> bool:
+def upsert_tab_domain_data(
+    site_name: str,
+    entry_date: str,
+    tab_key: str,
+    fields: Dict[str, Any],
+    work_type: str = "",
+) -> bool:
+    clean_work_type = normalize_work_type(work_type, default=DEFAULT_WORK_TYPE)
     canonical_key = canonical_tab_key(tab_key)
     spec = TAB_STORAGE_SPECS.get(canonical_key)
     if not spec:
         return False
     clean = canonicalize_tab_fields(canonical_key, fields)
-    payload: Dict[str, Any] = {"site_name": site_name, "entry_date": entry_date}
+    payload: Dict[str, Any] = {"site_name": site_name, "entry_date": entry_date, "work_type": clean_work_type}
     payload.update(dict(spec.get("fixed") or {}))
 
     numeric_tabs = {"tr1", "tr2", "main_vcb", "dc_panel", "temperature", "meter", "facility_check"}
@@ -3281,20 +3533,20 @@ def upsert_tab_domain_data(site_name: str, entry_date: str, tab_key: str, fields
         con.close()
 
 
-def upsert_transformer_450(site_name: str, entry_date: str, fields: Dict[str, Any]) -> None:
-    upsert_tab_domain_data(site_name, entry_date, "tr1", fields)
+def upsert_transformer_450(site_name: str, entry_date: str, fields: Dict[str, Any], work_type: str = "") -> None:
+    upsert_tab_domain_data(site_name, entry_date, "tr1", fields, work_type=work_type)
 
 
-def upsert_transformer_400(site_name: str, entry_date: str, fields: Dict[str, Any]) -> None:
-    upsert_tab_domain_data(site_name, entry_date, "tr2", fields)
+def upsert_transformer_400(site_name: str, entry_date: str, fields: Dict[str, Any], work_type: str = "") -> None:
+    upsert_tab_domain_data(site_name, entry_date, "tr2", fields, work_type=work_type)
 
 
-def upsert_power_meter(site_name: str, entry_date: str, fields: Dict[str, Any]) -> None:
-    upsert_tab_domain_data(site_name, entry_date, "meter", fields)
+def upsert_power_meter(site_name: str, entry_date: str, fields: Dict[str, Any], work_type: str = "") -> None:
+    upsert_tab_domain_data(site_name, entry_date, "meter", fields, work_type=work_type)
 
 
-def upsert_facility_check(site_name: str, entry_date: str, fields: Dict[str, Any]) -> None:
-    upsert_tab_domain_data(site_name, entry_date, "facility_check", fields)
+def upsert_facility_check(site_name: str, entry_date: str, fields: Dict[str, Any], work_type: str = "") -> None:
+    upsert_tab_domain_data(site_name, entry_date, "facility_check", fields, work_type=work_type)
 
 
 def schema_alignment_report() -> Dict[str, Any]:

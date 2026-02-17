@@ -78,6 +78,7 @@ from ..db import (
     mark_staff_user_login,
     mark_privileged_change_request_executed,
     normalize_staff_user_site_identity,
+    normalize_work_type,
     migrate_site_code,
     approve_privileged_change_request,
     revoke_all_user_sessions,
@@ -530,6 +531,20 @@ def _clean_required_text(value: Any, max_len: int, field_name: str) -> str:
     if len(txt) > max_len:
         raise HTTPException(status_code=400, detail=f"{field_name} length must be <= {max_len}")
     return txt
+
+
+def _clean_work_type(value: Any, *, default: str = "일일") -> str:
+    clean_default = str(default or "").strip() or "일일"
+    return normalize_work_type(value, default=clean_default)
+
+
+def _entry_work_type_from_tabs(tabs: Dict[str, Dict[str, Any]] | None, *, default: str = "일일") -> str:
+    if not isinstance(tabs, dict):
+        return _clean_work_type("", default=default)
+    home = tabs.get("home")
+    if not isinstance(home, dict):
+        return _clean_work_type("", default=default)
+    return _clean_work_type(home.get("work_type"), default=default)
 
 
 def _format_phone_digits(digits: str) -> str:
@@ -4468,20 +4483,25 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
 
     schema, _env_cfg = _site_schema_and_env(site_name, site_code)
     tabs = normalize_tabs_payload(raw_tabs, schema_defs=schema)
+    entry_work_type = _entry_work_type_from_tabs(tabs, default="일일")
+    if "home" in tabs:
+        tabs["home"] = dict(tabs["home"] or {})
+        tabs["home"]["work_type"] = entry_work_type
     ignored_tabs = sorted(set(str(k) for k in raw_tabs.keys()) - set(tabs.keys()))
 
     site_id = ensure_site(site_name)
-    entry_id = upsert_entry(site_id, entry_date)
+    entry_id = upsert_entry(site_id, entry_date, entry_work_type)
 
     for tab_key, fields in tabs.items():
         save_tab_values(entry_id, tab_key, fields, schema_defs=schema)
-        upsert_tab_domain_data(site_name, entry_date, tab_key, fields)
+        upsert_tab_domain_data(site_name, entry_date, tab_key, fields, work_type=entry_work_type)
 
     return {
         "ok": True,
         "site_name": site_name,
         "site_code": site_code,
         "date": entry_date,
+        "work_type": entry_work_type,
         "saved_tabs": sorted(tabs.keys()),
         "ignored_tabs": ignored_tabs,
     }
@@ -4493,14 +4513,33 @@ def api_load(
     site_name: str = Query(default=""),
     site_code: str = Query(default=""),
     date: str = Query(...),
+    work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
     site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
     entry_date = safe_ymd(date)
+    entry_work_type = _clean_work_type(work_type, default="일일")
     site_id = ensure_site(site_name)
     schema, _env_cfg = _site_schema_and_env(site_name, site_code)
-    tabs = load_entry(site_id, entry_date, allowed_keys_by_tab=_schema_allowed_keys(schema))
-    return {"ok": True, "site_name": site_name, "site_code": site_code, "date": entry_date, "tabs": tabs}
+    tabs = load_entry(
+        site_id,
+        entry_date,
+        entry_work_type,
+        fallback_empty_work_type=True,
+        allowed_keys_by_tab=_schema_allowed_keys(schema),
+    )
+    if isinstance(tabs, dict):
+        home = tabs.get("home")
+        if isinstance(home, dict):
+            home["work_type"] = str(home.get("work_type") or entry_work_type).strip() or entry_work_type
+    return {
+        "ok": True,
+        "site_name": site_name,
+        "site_code": site_code,
+        "date": entry_date,
+        "work_type": entry_work_type,
+        "tabs": tabs,
+    }
 
 
 @router.delete("/delete")
@@ -4509,13 +4548,15 @@ def api_delete(
     site_name: str = Query(default=""),
     site_code: str = Query(default=""),
     date: str = Query(...),
+    work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
     site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
     entry_date = safe_ymd(date)
+    entry_work_type = _clean_work_type(work_type, default="일일")
     site_id = ensure_site(site_name)
-    ok = delete_entry(site_id, entry_date)
-    return {"ok": ok, "site_name": site_name, "site_code": site_code}
+    ok = delete_entry(site_id, entry_date, entry_work_type)
+    return {"ok": ok, "site_name": site_name, "site_code": site_code, "work_type": entry_work_type}
 
 
 @router.get("/list_range")
@@ -4525,6 +4566,7 @@ def api_list_range(
     site_code: str = Query(default=""),
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
+    work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
     site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
@@ -4532,10 +4574,19 @@ def api_list_range(
     dt = safe_ymd(date_to) if date_to else today_ymd()
     if df > dt:
         df, dt = dt, df
+    entry_work_type = _clean_work_type(work_type, default="일일")
     site_id = ensure_site(site_name)
-    entries = list_entries(site_id, df, dt)
+    entries = list_entries(site_id, df, dt, entry_work_type)
     dates = [e["entry_date"] for e in entries]
-    return {"ok": True, "site_name": site_name, "site_code": site_code, "date_from": df, "date_to": dt, "dates": dates}
+    return {
+        "ok": True,
+        "site_name": site_name,
+        "site_code": site_code,
+        "work_type": entry_work_type,
+        "date_from": df,
+        "date_to": dt,
+        "dates": dates,
+    }
 
 
 @router.get("/export")
@@ -4545,6 +4596,7 @@ def api_export(
     site_code: str = Query(default=""),
     date_from: str = Query(default=""),
     date_to: str = Query(default=""),
+    work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
     site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
@@ -4553,13 +4605,20 @@ def api_export(
     if df > dt:
         df, dt = dt, df
 
+    entry_work_type = _clean_work_type(work_type, default="일일")
     site_id = ensure_site(site_name)
     schema, _env_cfg = _site_schema_and_env(site_name, site_code)
     allowed = _schema_allowed_keys(schema)
-    entries = list_entries(site_id, df, dt)
+    entries = list_entries(site_id, df, dt, entry_work_type)
     rows: List[Dict[str, Any]] = []
     for e in entries:
-        rows.append({"entry_date": e["entry_date"], "tabs": load_entry_by_id(int(e["id"]), allowed_keys_by_tab=allowed)})
+        rows.append(
+            {
+                "entry_date": e["entry_date"],
+                "work_type": str(e["work_type"] or entry_work_type),
+                "tabs": load_entry_by_id(int(e["id"]), allowed_keys_by_tab=allowed),
+            }
+        )
 
     xbytes = build_excel(site_name, df, dt, rows, schema_defs=schema)
     from urllib.parse import quote
@@ -4580,13 +4639,25 @@ def api_pdf(
     site_name: str = Query(default=""),
     site_code: str = Query(default=""),
     date: str = Query(...),
+    work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
     site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
     entry_date = safe_ymd(date)
+    entry_work_type = _clean_work_type(work_type, default="일일")
     site_id = ensure_site(site_name)
     schema, _env_cfg = _site_schema_and_env(site_name, site_code)
-    tabs = load_entry(site_id, entry_date, allowed_keys_by_tab=_schema_allowed_keys(schema))
+    tabs = load_entry(
+        site_id,
+        entry_date,
+        entry_work_type,
+        fallback_empty_work_type=True,
+        allowed_keys_by_tab=_schema_allowed_keys(schema),
+    )
+    if isinstance(tabs, dict):
+        home = tabs.get("home")
+        if isinstance(home, dict):
+            home["work_type"] = str(home.get("work_type") or entry_work_type).strip() or entry_work_type
 
     pbytes = build_pdf(site_name, entry_date, tabs, schema_defs=schema)
     from urllib.parse import quote

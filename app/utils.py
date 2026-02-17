@@ -66,12 +66,21 @@ def build_excel(
     ws.title = "entries"
 
     export_keys = _ordered_export_keys(rows, schema_defs=schema_defs)
-    flattened = [(r.get("entry_date", ""), _flatten_tabs(r.get("tabs") or {})) for r in rows]
-    headers = ["entry_date"] + export_keys
+    include_work_type = any(str(r.get("work_type") or "").strip() for r in rows)
+    flattened = [
+        (
+            r.get("entry_date", ""),
+            str(r.get("work_type") or "").strip(),
+            _flatten_tabs(r.get("tabs") or {}),
+        )
+        for r in rows
+    ]
+    headers = ["entry_date"] + (["work_type"] if include_work_type else []) + export_keys
     ws.append(headers)
 
-    for entry_date, flat in flattened:
-        ws.append([entry_date] + [flat.get(k, "") for k in export_keys])
+    for entry_date, work_type, flat in flattened:
+        lead = [entry_date] + ([work_type] if include_work_type else [])
+        ws.append(lead + [flat.get(k, "") for k in export_keys])
 
     # Automatic width optimization by real content length.
     for i, h in enumerate(headers, start=1):
