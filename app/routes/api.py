@@ -1396,22 +1396,12 @@ def _public_access_site_code(site_name: str) -> str:
         return "PUB00001"
 
 
-def _public_access_admin_scope() -> str:
-    raw = (os.getenv("KA_PUBLIC_FULL_ACCESS_ADMIN_SCOPE") or "ops_admin").strip().lower()
-    clean = _clean_admin_scope(raw, required=False)
-    # Never allow public-access sessions to escalate to super_admin.
-    if clean == "super_admin":
-        return "ops_admin"
-    return clean or "ops_admin"
-
-
 def _ensure_public_access_user() -> Dict[str, Any]:
     login_id = _public_access_login_id()
     name = _public_access_name()
     site_name = _public_access_site_name()
     site_code = _public_access_site_code(site_name)
-    role = ROLE_LABEL_BY_PERMISSION["admin"]
-    admin_scope = _public_access_admin_scope()
+    role = ROLE_LABEL_BY_PERMISSION["user"]
 
     existing = get_staff_user_by_login(login_id)
     if existing:
@@ -1430,9 +1420,9 @@ def _ensure_public_access_user() -> Dict[str, Any]:
             unit_label=existing.get("unit_label"),
             household_key=existing.get("household_key"),
             note=existing.get("note"),
-            is_admin=1,
+            is_admin=0,
             is_site_admin=0,
-            admin_scope=admin_scope,
+            admin_scope="",
             is_active=1,
         )
         if not user:
@@ -1446,9 +1436,9 @@ def _ensure_public_access_user() -> Dict[str, Any]:
                 site_code=site_code,
                 site_name=site_name,
                 password_hash=hash_password(secrets.token_urlsafe(32)),
-                is_admin=1,
+                is_admin=0,
                 is_site_admin=0,
-                admin_scope=admin_scope,
+                admin_scope="",
                 is_active=1,
             )
         except Exception:
