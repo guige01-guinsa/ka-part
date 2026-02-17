@@ -85,6 +85,12 @@
   const SITE_CODE_KEY = "ka_current_site_code_v1";
   const SITE_ID_KEY = "ka_current_site_id_v1";
   const DEFAULT_SITE_NAME = "미지정단지";
+  const DEFAULT_WORK_TYPE = "일일";
+  const WORK_TYPE_ALIAS_MAP = {
+    정기: "일상",
+    기타일상: "일상",
+    기타: "일상",
+  };
 
   let TABS = [];
   let rangeDates = [];
@@ -745,10 +751,29 @@
     return getDateStart();
   }
 
+  function normalizeWorkTypeValue(value, fallback = DEFAULT_WORK_TYPE) {
+    const raw = String(value || "").trim();
+    const mapped = WORK_TYPE_ALIAS_MAP[raw] || raw;
+    const fallbackRaw = String(fallback || "").trim();
+    const fallbackMapped = WORK_TYPE_ALIAS_MAP[fallbackRaw] || fallbackRaw;
+    const select = document.getElementById("f-home-work_type");
+    if (!select) return mapped || fallbackMapped || DEFAULT_WORK_TYPE;
+
+    const allowed = new Set(
+      Array.from(select.options || [])
+        .map((opt) => String(opt.value || "").trim())
+        .filter(Boolean)
+    );
+    if (mapped && allowed.has(mapped)) return mapped;
+    if (fallbackMapped && allowed.has(fallbackMapped)) return fallbackMapped;
+    const first = Array.from(allowed)[0];
+    return first || DEFAULT_WORK_TYPE;
+  }
+
   function getSelectedWorkType() {
     const el = document.getElementById("f-home-work_type");
     const raw = el && typeof el.value === "string" ? el.value : "";
-    return String(raw || "").trim();
+    return normalizeWorkTypeValue(raw, DEFAULT_WORK_TYPE);
   }
 
   function appendWorkTypeQuery(urlOrPath) {
@@ -1012,11 +1037,16 @@
   }
 
   function fillTabs(tabs) {
+    const keepWorkType = getSelectedWorkType() || DEFAULT_WORK_TYPE;
     for (const tab of TABS) {
       const values = tabs && tabs[tab.key] ? tabs[tab.key] : {};
       for (const field of tab.fields) {
         const el = document.getElementById(`f-${tab.key}-${field.k}`);
         if (!el) continue;
+        if (tab.key === "home" && field.k === "work_type") {
+          el.value = normalizeWorkTypeValue(values[field.k], keepWorkType);
+          continue;
+        }
         el.value = values[field.k] ?? "";
       }
     }
@@ -1075,7 +1105,9 @@
       for (const f of home.fields) {
         if (f.readonly) continue;
         const el = document.getElementById(`f-home-${f.k}`);
-        if (el) obj[f.k] = el.value ?? "";
+        if (!el) continue;
+        if (f.k === "work_type") obj[f.k] = normalizeWorkTypeValue(el.value, DEFAULT_WORK_TYPE);
+        else obj[f.k] = el.value ?? "";
       }
       localStorage.setItem(HOME_DRAFT_KEY, JSON.stringify(obj));
     } catch (_e) {}
@@ -1099,7 +1131,9 @@
     for (const f of home.fields) {
       if (f.readonly) continue;
       const el = document.getElementById(`f-home-${f.k}`);
-      if (el && obj[f.k] !== undefined) el.value = obj[f.k];
+      if (!el || obj[f.k] === undefined) continue;
+      if (f.k === "work_type") el.value = normalizeWorkTypeValue(obj[f.k], getSelectedWorkType() || DEFAULT_WORK_TYPE);
+      else el.value = obj[f.k];
     }
     syncHomeSiteIdentityDisplay();
     enforceHomeSiteIdentityPolicy();
@@ -1114,7 +1148,9 @@
     for (const f of home.fields) {
       if (f.readonly) continue;
       const el = document.getElementById(`f-home-${f.k}`);
-      if (el) el.value = "";
+      if (!el) continue;
+      if (f.k === "work_type") el.value = normalizeWorkTypeValue("", DEFAULT_WORK_TYPE);
+      else el.value = "";
     }
     syncHomeSiteIdentityDisplay();
     enforceHomeSiteIdentityPolicy();
@@ -1146,7 +1182,11 @@
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     rangeDates = data && Array.isArray(data.dates) ? data.dates : [];
     if (!rangeDates.length) {
-      fillTabs({});
+      fillTabs({
+        home: {
+          work_type: getSelectedWorkType() || DEFAULT_WORK_TYPE,
+        },
+      });
       rangeIndex = -1;
       toast("해당 기간에 기록이 없습니다.");
       return;
@@ -1362,18 +1402,22 @@
     $("#dateStart")?.addEventListener("change", resetRangeQuery);
     $("#dateEnd")?.addEventListener("change", resetRangeQuery);
 
-    document.getElementById("panel-home")?.addEventListener("input", (e) => {
+    const onHomePanelValueChanged = (e) => {
       const t = e.target;
       if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) {
         saveHomeDraft();
         if (t.id === "f-home-work_type") {
+          t.value = normalizeWorkTypeValue(t.value, getSelectedWorkType() || DEFAULT_WORK_TYPE);
           rangeQueryFrom = "";
           rangeQueryTo = "";
           updateContextLine();
           loadRange().catch(() => {});
         }
       }
-    });
+    };
+    const homePanel = document.getElementById("panel-home");
+    homePanel?.addEventListener("input", onHomePanelValueChanged);
+    homePanel?.addEventListener("change", onHomePanelValueChanged);
 
     $("#btnPrev")?.addEventListener("click", () => doPrev().catch((err) => alert("이전 오류: " + err.message)));
     $("#btnLoad")?.addEventListener("click", () => doLoad().catch((err) => alert("조회 오류: " + err.message)));
