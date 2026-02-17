@@ -1306,6 +1306,15 @@ def _bind_user_site_identity(user: Dict[str, Any]) -> Dict[str, Any]:
     return user
 
 
+def _is_public_access_user(user: Dict[str, Any]) -> bool:
+    if not isinstance(user, dict):
+        return False
+    login_id = str(user.get("login_id") or "").strip().lower()
+    if not login_id:
+        return False
+    return login_id == _public_access_login_id()
+
+
 def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     permission_level = _permission_level_from_user(user)
     admin_scope = _admin_scope_from_user(user)
@@ -1340,6 +1349,7 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "admin_scope_label": _admin_scope_label(admin_scope),
         "permission_level": permission_level,
         "account_type": account_type,
+        "is_public_access": _is_public_access_user(user),
         "allowed_modules": allowed_modules,
         "default_landing_path": _default_landing_path_for_user(user),
         "is_active": bool(user.get("is_active")),
@@ -4604,6 +4614,8 @@ def api_users_delete(request: Request, user_id: int):
 @router.post("/save")
 def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
     user, _token = _require_auth(request)
+    if _is_public_access_user(user):
+        raise HTTPException(status_code=403, detail="로그인 없이 사용자는 저장할 수 없습니다. 신규가입 후 사용해 주세요.")
     site_name, site_code = _resolve_main_site_target(
         user, payload.get("site_name"), payload.get("site_code"), required=True
     )

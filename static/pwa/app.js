@@ -89,6 +89,8 @@
     기타일상: "일상",
     기타: "일상",
   };
+  const PUBLIC_ACCESS_ALLOWED_MENU_BUTTON_IDS = new Set(["btnParking", "btnComplaints", "btnLogout"]);
+  const PUBLIC_ACCESS_SIGNUP_MESSAGE = "신규가입 후 사용해 주세요.";
 
   let TABS = [];
   let rangeDates = [];
@@ -175,6 +177,62 @@
     const compact = role.replaceAll(" ", "");
     if (compact === "보안/경비") return true;
     return role.includes("보안") || role.includes("경비");
+  }
+
+  function isPublicAccessUser(user) {
+    if (!user || typeof user !== "object") return false;
+    if (user.is_public_access === true) return true;
+    const loginId = String(user.login_id || "").trim().toLowerCase();
+    return loginId === "public_guest";
+  }
+
+  function showPublicAccessSignupNotice() {
+    alert(`로그인 없이 사용자는 이 기능을 사용할 수 없습니다.\n${PUBLIC_ACCESS_SIGNUP_MESSAGE}`);
+    toast(PUBLIC_ACCESS_SIGNUP_MESSAGE);
+  }
+
+  function isPublicAccessMenuActionAllowed(buttonId) {
+    const id = String(buttonId || "").trim();
+    if (!isPublicAccessUser(authUser)) return true;
+    return PUBLIC_ACCESS_ALLOWED_MENU_BUTTON_IDS.has(id);
+  }
+
+  function menuDrawerFocusSelector() {
+    if (isPublicAccessUser(authUser)) return "#btnParking";
+    return canViewSiteIdentity(authUser) ? "#siteName" : "#dateStart";
+  }
+
+  function applyPublicAccessMenuPolicy() {
+    if (!isPublicAccessUser(authUser)) return;
+    const drawer = $("#menuDrawer");
+    if (!drawer) return;
+
+    for (const btn of drawer.querySelectorAll(".menu-grid button.btn")) {
+      const allow = PUBLIC_ACCESS_ALLOWED_MENU_BUTTON_IDS.has(btn.id || "");
+      btn.disabled = !allow;
+      btn.style.display = allow ? "" : "none";
+      if (allow) btn.removeAttribute("aria-hidden");
+      else btn.setAttribute("aria-hidden", "true");
+    }
+
+    for (const section of drawer.querySelectorAll(".menu-section")) {
+      let visible = true;
+      if (section.querySelector("#filtersMountDrawer")) {
+        visible = false;
+      } else {
+        const gridButtons = [...section.querySelectorAll(".menu-grid button.btn")];
+        if (gridButtons.length) visible = gridButtons.some((btn) => btn.style.display !== "none");
+      }
+      section.style.display = visible ? "" : "none";
+      if (visible) section.removeAttribute("aria-hidden");
+      else section.setAttribute("aria-hidden", "true");
+    }
+
+    const saveBtn = $("#btnSave");
+    if (saveBtn) {
+      saveBtn.title = `로그인 없이 사용자는 저장할 수 없습니다. ${PUBLIC_ACCESS_SIGNUP_MESSAGE}`;
+      saveBtn.setAttribute("aria-disabled", "true");
+    }
   }
 
   function toast(msg) {
@@ -357,10 +415,24 @@
 
     btn.addEventListener("click", () => {
       if (menuOpen) closeMenu();
-      else openMenu({ focusSelector: canViewSiteIdentity(authUser) ? "#siteName" : "#dateStart" });
+      else openMenu({ focusSelector: menuDrawerFocusSelector() });
     });
     closeBtn?.addEventListener("click", () => closeMenu());
     overlay.addEventListener("click", () => closeMenu());
+
+    drawer.addEventListener(
+      "click",
+      (e) => {
+        const actionBtn = e.target.closest(".menu-grid button.btn");
+        if (!actionBtn) return;
+        if (isPublicAccessMenuActionAllowed(actionBtn.id)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+        showPublicAccessSignupNotice();
+      },
+      true
+    );
 
     drawer.addEventListener("click", (e) => {
       const actionBtn = e.target.closest(".menu-grid button.btn");
@@ -376,7 +448,7 @@
       }
     });
 
-    $("#contextLine")?.addEventListener("click", () => openMenu({ focusSelector: "#dateStart" }));
+    $("#contextLine")?.addEventListener("click", () => openMenu({ focusSelector: menuDrawerFocusSelector() }));
 
     relocateFiltersBlock();
     updateContextLine();
@@ -518,6 +590,7 @@
     if (btnApt && !hasSiteAdminPermission(authUser)) btnApt.style.display = "none";
     const btnBackup = $("#btnBackup");
     if (btnBackup && !hasSiteAdminPermission(authUser)) btnBackup.style.display = "none";
+    applyPublicAccessMenuPolicy();
     setSiteId(normalizeSiteId(authUser && authUser.site_id));
     enforceSiteIdentityPolicy();
     const assignedCode = assignedSiteCodeForUser();
@@ -1240,6 +1313,10 @@
   }
 
   async function doSave() {
+    if (isPublicAccessUser(authUser)) {
+      showPublicAccessSignupNotice();
+      return;
+    }
     if (!getSiteNameRaw() && !getSiteCodeRaw()) {
       const msg = "단지명이 없으면 단지명과 단지코드를 확인후 다시 저장하세요";
       alert(msg);
