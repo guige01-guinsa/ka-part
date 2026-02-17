@@ -4,6 +4,7 @@
   const TOKEN_KEY = "ka_part_auth_token_v1";
   const USER_KEY = "ka_part_auth_user_v1";
   const LOGOUT_BROADCAST_KEY = "ka_part_logout_event_v1";
+  const PUBLIC_ACCESS_ENDPOINT = "/api/auth/public_access";
   const SENSITIVE_STORAGE_KEYS = [
     "ka_current_site_name_v1",
     "ka_current_site_code_v1",
@@ -215,6 +216,18 @@
     return body;
   }
 
+  async function requestPublicAccess() {
+    const data = await requestJson(PUBLIC_ACCESS_ENDPOINT, {
+      method: "POST",
+      noAuth: true,
+      body: JSON.stringify({}),
+    });
+    if (!data || !data.user) return null;
+    const token = String(data.token || "").trim();
+    setSession(token, data.user);
+    return data.user;
+  }
+
   async function requireAuth() {
     const token = getToken();
     try {
@@ -223,6 +236,12 @@
       setSession(token, me.user);
       return me.user;
     } catch (_e) {
+      if (!token) {
+        try {
+          const guestUser = await requestPublicAccess();
+          if (guestUser) return guestUser;
+        } catch (_guestErr) {}
+      }
       clearSession();
       redirectLogin();
       throw new Error("로그인이 필요합니다.");
@@ -250,6 +269,7 @@
     loginUrl,
     redirectLogin,
     requestJson,
+    requestPublicAccess,
     requireAuth,
   };
 })();

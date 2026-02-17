@@ -36,6 +36,12 @@
     return normalizePath(u.searchParams.get("next")) || "/pwa/";
   }
 
+  function wantsGuestAutoEntry() {
+    const u = new URL(window.location.href);
+    const flag = String(u.searchParams.get("guest") || "").trim().toLowerCase();
+    return flag === "1" || flag === "true" || flag === "yes" || flag === "y";
+  }
+
   function signupReadyContextFromQuery() {
     const u = new URL(window.location.href);
     const flag = String(u.searchParams.get("signup_ready") || "").trim().toLowerCase();
@@ -642,6 +648,18 @@
     goNext(data.user || null);
   }
 
+  async function guestAccess() {
+    const data = await KAAuth.requestJson("/api/auth/public_access", {
+      method: "POST",
+      noAuth: true,
+      body: JSON.stringify({}),
+      headers: {},
+    });
+    KAAuth.setSession(data.token, data.user);
+    setMsg($("#loginMsg"), "로그인 없이 접속했습니다.");
+    goNext(data.user || null);
+  }
+
   async function checkAlreadyLoggedIn() {
     const token = KAAuth.getToken();
     try {
@@ -745,6 +763,9 @@
     $("#btnLogin").addEventListener("click", () => {
       login().catch((e) => setMsg($("#loginMsg"), e.message || String(e), true));
     });
+    $("#btnGuestAccess")?.addEventListener("click", () => {
+      guestAccess().catch((e) => setMsg($("#loginMsg"), e.message || String(e), true));
+    });
     $("#btnBootstrap").addEventListener("click", () => {
       bootstrap().catch((e) => setMsg($("#bootstrapMsg"), e.message || String(e), true));
     });
@@ -798,6 +819,10 @@
     applySignupPasswordPolicy(null);
     resetSignupFinalizeState();
     wire();
+    if (wantsGuestAutoEntry()) {
+      await guestAccess();
+      return;
+    }
     applySignupReadyContext();
     await loadBootstrapStatus();
     await checkAlreadyLoggedIn();

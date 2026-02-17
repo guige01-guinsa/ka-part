@@ -1349,6 +1349,117 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _public_access_enabled() -> bool:
+    return _env_enabled("KA_PUBLIC_FULL_ACCESS_ENABLED", True)
+
+
+def _public_access_login_id() -> str:
+    raw = (os.getenv("KA_PUBLIC_FULL_ACCESS_LOGIN_ID") or "public_guest").strip().lower()
+    try:
+        return _clean_login_id(raw)
+    except HTTPException:
+        return _clean_login_id("public_guest")
+
+
+def _public_access_name() -> str:
+    raw = (os.getenv("KA_PUBLIC_FULL_ACCESS_NAME") or "로그인없이 사용자").strip()
+    try:
+        return _clean_name(raw)
+    except HTTPException:
+        return _clean_name("로그인없이 사용자")
+
+
+def _public_access_site_name() -> str:
+    raw = (os.getenv("KA_PUBLIC_FULL_ACCESS_SITE_NAME") or DEFAULT_SITE_NAME).strip()
+    try:
+        return _clean_site_name(raw, required=False)
+    except HTTPException:
+        return DEFAULT_SITE_NAME
+
+
+def _public_access_site_code(site_name: str) -> str:
+    raw = (os.getenv("KA_PUBLIC_FULL_ACCESS_SITE_CODE") or "").strip().upper()
+    preferred = ""
+    try:
+        preferred = _clean_site_code(raw, required=False)
+    except HTTPException:
+        preferred = ""
+
+    try:
+        return _resolve_site_code_for_site(site_name, preferred, allow_create=True, allow_remap=False)
+    except HTTPException:
+        if preferred:
+            return preferred
+        found = _clean_site_code(find_site_code_by_name(site_name), required=False)
+        if found:
+            return found
+        return "PUB00001"
+
+
+def _public_access_admin_scope() -> str:
+    raw = (os.getenv("KA_PUBLIC_FULL_ACCESS_ADMIN_SCOPE") or "super_admin").strip().lower()
+    clean = _clean_admin_scope(raw, required=False)
+    return clean or "super_admin"
+
+
+def _ensure_public_access_user() -> Dict[str, Any]:
+    login_id = _public_access_login_id()
+    name = _public_access_name()
+    site_name = _public_access_site_name()
+    site_code = _public_access_site_code(site_name)
+    role = ROLE_LABEL_BY_PERMISSION["admin"]
+    admin_scope = _public_access_admin_scope()
+
+    existing = get_staff_user_by_login(login_id)
+    if existing:
+        user = update_staff_user(
+            int(existing["id"]),
+            login_id=login_id,
+            name=name,
+            role=role,
+            phone=existing.get("phone"),
+            site_code=site_code,
+            site_name=site_name,
+            site_id=existing.get("site_id"),
+            address=existing.get("address"),
+            office_phone=existing.get("office_phone"),
+            office_fax=existing.get("office_fax"),
+            unit_label=existing.get("unit_label"),
+            household_key=existing.get("household_key"),
+            note=existing.get("note"),
+            is_admin=1,
+            is_site_admin=0,
+            admin_scope=admin_scope,
+            is_active=1,
+        )
+        if not user:
+            user = get_staff_user(int(existing["id"])) or existing
+    else:
+        try:
+            user = create_staff_user(
+                login_id=login_id,
+                name=name,
+                role=role,
+                site_code=site_code,
+                site_name=site_name,
+                password_hash=hash_password(secrets.token_urlsafe(32)),
+                is_admin=1,
+                is_site_admin=0,
+                admin_scope=admin_scope,
+                is_active=1,
+            )
+        except Exception:
+            user = get_staff_user_by_login(login_id)
+            if not user:
+                raise
+
+    uid = int(user.get("id") or 0)
+    if uid <= 0:
+        raise HTTPException(status_code=500, detail="public access user resolve failed")
+    fresh = normalize_staff_user_site_identity(uid) or get_staff_user(uid)
+    return fresh or user
+
+
 def _site_schema_and_env(site_name: str, site_code: str = "") -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
     raw = get_site_env_config(site_name, site_code=site_code or None)
     if raw is None:
@@ -3473,6 +3584,34 @@ def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)):
         "token": session["token"],
         "expires_at": session["expires_at"],
         "user": _public_user(user),
+    }
+    resp = JSONResponse(body)
+    _set_auth_cookie(resp, session["token"])
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
+@router.post("/auth/public_access")
+def auth_public_access(request: Request):
+    if not _public_access_enabled():
+        raise HTTPException(status_code=403, detail="public access is disabled")
+
+    user = _ensure_public_access_user()
+    mark_staff_user_login(int(user["id"]))
+    cleanup_expired_sessions()
+    session = create_auth_session(
+        int(user["id"]),
+        ttl_hours=12,
+        user_agent=request.headers.get("user-agent"),
+        ip_address=(_client_ip(request) or None),
+    )
+    body = {
+        "ok": True,
+        "token": session["token"],
+        "expires_at": session["expires_at"],
+        "user": _public_user(user),
+        "landing_path": _default_landing_path_for_user(user),
     }
     resp = JSONResponse(body)
     _set_auth_cookie(resp, session["token"])
