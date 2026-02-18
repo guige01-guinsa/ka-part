@@ -59,6 +59,7 @@ class TemplatePayload(BaseModel):
     period: str = Field(default="MONTHLY", max_length=20)
     is_active: bool = True
     force_new: bool = False
+    auto_backup: bool = False
     items: List[TemplateItemPayload] = Field(default_factory=list)
 
 
@@ -332,6 +333,71 @@ def _save_template_items(con, template_id: int, items: List[TemplateItemPayload]
         )
 
 
+def _backup_template_form_snapshot(
+    con,
+    *,
+    template_id: int,
+    actor_login: str,
+    backup_source: str,
+    ts: str,
+) -> int:
+    row = con.execute(
+        """
+        SELECT tp.id, tp.site_code, tp.target_id, tp.name, tp.period, tp.is_active, tp.created_by, tp.created_at, tp.updated_at,
+               t.name AS target_name
+        FROM inspection_templates tp
+        LEFT JOIN inspection_targets t ON t.id = tp.target_id
+        WHERE tp.id=?
+        LIMIT 1
+        """,
+        (int(template_id),),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="점검표를 찾을 수 없습니다.")
+
+    template = dict(row)
+    items = [
+        dict(x)
+        for x in con.execute(
+            """
+            SELECT id, template_id, item_key, item_text, category, severity, sort_order,
+                   requires_photo, requires_note, is_active, created_at, updated_at
+            FROM inspection_template_items
+            WHERE template_id=?
+            ORDER BY sort_order ASC, id ASC
+            """,
+            (int(template_id),),
+        ).fetchall()
+    ]
+    snapshot = {"template": template, "items": items}
+    snapshot_json = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+    checksum = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
+
+    con.execute(
+        """
+        INSERT INTO inspection_template_backups(
+          site_code, target_id, target_name, template_id, template_name, period, item_count,
+          snapshot_json, checksum, backup_source, created_by, created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            str(template.get("site_code") or ""),
+            int(template.get("target_id") or 0) or None,
+            str(template.get("target_name") or ""),
+            int(template.get("id") or 0),
+            str(template.get("name") or ""),
+            str(template.get("period") or ""),
+            len(items),
+            snapshot_json,
+            checksum,
+            str(backup_source or "manual"),
+            str(actor_login or ""),
+            ts,
+        ),
+    )
+    return int(con.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+
+
 @router.get("/inspection/bootstrap")
 def inspection_bootstrap(request: Request, site_code: str = Query(default="")):
     user, _token = _require_inspection_user(request)
@@ -523,6 +589,7 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
     ts = _now_ts()
     clean_name = str(payload.name).strip()
     clean_period = _safe_period(payload.period)
+    do_backup = bool(payload.auto_backup) or bool(payload.force_new)
     con = _connect()
     try:
         target = con.execute(
@@ -556,8 +623,17 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
                 (int(payload.target_id), clean_period, 1 if payload.is_active else 0, ts, template_id),
             )
             _save_template_items(con, template_id, payload.items, ts)
+            backup_id = None
+            if do_backup:
+                backup_id = _backup_template_form_snapshot(
+                    con,
+                    template_id=template_id,
+                    actor_login=str(user.get("login_id") or ""),
+                    backup_source="auto_form" if bool(payload.force_new) else "manual_form",
+                    ts=ts,
+                )
             con.commit()
-            return {"ok": True, "template_id": template_id, "upserted": True}
+            return {"ok": True, "template_id": template_id, "upserted": True, "backup_id": backup_id}
 
         con.execute(
             """
@@ -577,8 +653,17 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
         )
         template_id = int(con.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
         _save_template_items(con, template_id, payload.items, ts)
+        backup_id = None
+        if do_backup:
+            backup_id = _backup_template_form_snapshot(
+                con,
+                template_id=template_id,
+                actor_login=str(user.get("login_id") or ""),
+                backup_source="auto_form" if bool(payload.force_new) else "manual_form",
+                ts=ts,
+            )
         con.commit()
-        return {"ok": True, "template_id": template_id}
+        return {"ok": True, "template_id": template_id, "backup_id": backup_id}
     except HTTPException:
         raise
     except Exception as e:

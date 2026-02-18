@@ -454,6 +454,7 @@
       period,
       is_active: true,
       force_new: true,
+      auto_backup: true,
       items,
     });
     const templateId = Number(templateOut?.template_id || templateOut?.item?.id || 0);
@@ -464,7 +465,12 @@
     await loadBootstrap();
     if (targetId > 0 && $("#targetId")) $("#targetId").value = String(targetId);
     if (templateId > 0 && $("#templateId")) $("#templateId").value = String(templateId);
-    msg("리스트 폼 자동 생성 완료: 점검대상/점검표가 신규로 추가되었습니다.");
+    const backupId = Number(templateOut?.backup_id || 0);
+    if (backupId > 0) {
+      msg(`리스트 폼 자동 생성 완료: 점검대상/점검표 신규 추가 + DB 백업(${backupId}) 완료`);
+    } else {
+      msg("리스트 폼 자동 생성 완료: 점검대상/점검표가 신규로 추가되었습니다.");
+    }
   }
 
   function collectItemPayloads() {

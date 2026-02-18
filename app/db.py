@@ -1367,6 +1367,39 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
 
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inspection_template_backups (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          target_id INTEGER,
+          target_name TEXT,
+          template_id INTEGER NOT NULL,
+          template_name TEXT NOT NULL,
+          period TEXT,
+          item_count INTEGER NOT NULL DEFAULT 0,
+          snapshot_json TEXT NOT NULL,
+          checksum TEXT NOT NULL,
+          backup_source TEXT NOT NULL DEFAULT 'manual_form',
+          created_by TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(template_id) REFERENCES inspection_templates(id) ON DELETE CASCADE
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_template_backups_site_date
+        ON inspection_template_backups(site_code, created_at DESC, id DESC);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_template_backups_template
+        ON inspection_template_backups(template_id, created_at DESC);
+        """
+    )
+
 
 def _index_columns(con: sqlite3.Connection, index_name: str) -> List[str]:
     rows = con.execute(f"PRAGMA index_info({index_name})").fetchall()
