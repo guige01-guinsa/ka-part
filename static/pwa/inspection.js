@@ -162,11 +162,11 @@
             <input data-role="detail-major" type="text" maxlength="120" placeholder="예: 전기" />
           </label>
           <label class="field">
-            <span>세부리스트 ${i} - 중분류</span>
+            <span>세부리스트 ${i} - 중분류(선택)</span>
             <input data-role="detail-middle" type="text" maxlength="120" placeholder="예: 수전설비" />
           </label>
           <label class="field">
-            <span>세부리스트 ${i} - 소분류</span>
+            <span>세부리스트 ${i} - 소분류(선택)</span>
             <input data-role="detail-minor" type="text" maxlength="120" placeholder="예: 차단기 상태 확인" />
           </label>
         </div>
@@ -185,13 +185,17 @@
       const major = String(row.querySelector("input[data-role='detail-major']")?.value || "").trim();
       const middle = String(row.querySelector("input[data-role='detail-middle']")?.value || "").trim();
       const minor = String(row.querySelector("input[data-role='detail-minor']")?.value || "").trim();
-      if (!major || !middle || !minor) {
+      if (!major) {
         missing.push(idx + 1);
         return;
       }
+      const detailTextParts = [];
+      if (middle) detailTextParts.push(middle);
+      if (minor) detailTextParts.push(minor);
+      const itemText = detailTextParts.length ? detailTextParts.join(" / ") : major;
       items.push({
         item_key: `item_${String(idx + 1).padStart(2, "0")}`,
-        item_text: `${middle} / ${minor}`,
+        item_text: itemText,
         category: major,
         severity: 1,
         sort_order: (idx + 1) * 10,
@@ -201,7 +205,7 @@
       });
     });
     if (missing.length) {
-      throw new Error(`세부리스트 항목의 대/중/소분류를 모두 입력해 주세요: ${missing.join(", ")}번`);
+      throw new Error(`세부리스트 항목의 대분류를 입력해 주세요: ${missing.join(", ")}번`);
     }
     return items;
   }
