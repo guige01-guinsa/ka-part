@@ -1055,6 +1055,26 @@
       msg("점검 목록에서 상세 내역을 먼저 선택해 주세요.", true);
       return;
     }
+    if (canEditCurrentRun(state.selectedRun)) {
+      const payload = { items: collectItemPayloads() };
+      await apiPatch(`/api/inspection/runs/${runId}/items`, payload);
+      await openRun(runId);
+      await loadRuns();
+    }
+    const check = await apiGet(`/api/inspection/runs/${runId}/export-check`);
+    const issueCount = Number(check?.issue_count || 0);
+    if (issueCount > 0) {
+      const issues = Array.isArray(check?.issues) ? check.issues : [];
+      const lines = issues.slice(0, 8).map((x) => `- ${x.item_text}: ${x.message}`);
+      const tail = issueCount > 8 ? `\n...외 ${issueCount - 8}건` : "";
+      const ok = window.confirm(
+        `누락/점검 필요 항목 ${issueCount}건이 있습니다.\n${lines.join("\n")}${tail}\n\n그래도 상세 엑셀을 다운로드할까요?`
+      );
+      if (!ok) {
+        msg(`엑셀 다운로드를 취소했습니다. 누락 항목 ${issueCount}건을 먼저 보완해 주세요.`, true);
+        return;
+      }
+    }
     const token = getToken();
     const headers = {};
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -1095,7 +1115,11 @@
     a.click();
     a.remove();
     window.URL.revokeObjectURL(url);
-    msg("점검 상세 엑셀 다운로드 완료");
+    if (issueCount > 0) {
+      msg(`점검 상세 엑셀 다운로드 완료 (누락점검 ${issueCount}건 포함)`);
+    } else {
+      msg("점검 상세 엑셀 다운로드 완료");
+    }
   }
 
   async function init() {

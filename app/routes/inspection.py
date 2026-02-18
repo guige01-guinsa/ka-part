@@ -1052,6 +1052,52 @@ def _run_status_label(value: Any) -> str:
     return raw or "-"
 
 
+def _collect_export_issues(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    for row in items or []:
+        item_id = int(row.get("id") or 0)
+        item_text = str(row.get("item_text") or row.get("item_key") or f"항목#{item_id or '-'}").strip()
+        result_raw = str(row.get("result") or "").strip().upper()
+        note = str(row.get("note") or "").strip()
+        photo_path = str(row.get("photo_path") or "").strip()
+        requires_note = int(row.get("requires_note") or 0) == 1
+        requires_photo = int(row.get("requires_photo") or 0) == 1
+
+        if result_raw not in {"COMPLIANT", "NONCOMPLIANT", "NA"}:
+            issues.append(
+                {
+                    "item_id": item_id,
+                    "item_text": item_text,
+                    "type": "invalid_result",
+                    "message": "결과값이 비정상입니다.",
+                }
+            )
+            continue
+
+        if result_raw != "NONCOMPLIANT":
+            continue
+
+        if requires_note and not note:
+            issues.append(
+                {
+                    "item_id": item_id,
+                    "item_text": item_text,
+                    "type": "missing_note",
+                    "message": "부적합 항목 메모 누락",
+                }
+            )
+        if requires_photo and not photo_path:
+            issues.append(
+                {
+                    "item_id": item_id,
+                    "item_text": item_text,
+                    "type": "missing_photo",
+                    "message": "부적합 항목 사진 누락",
+                }
+            )
+    return issues
+
+
 @router.get("/inspection/runs/export.xlsx")
 def inspection_runs_export_xlsx(
     request: Request,
@@ -1215,6 +1261,7 @@ def inspection_runs_detail_export_xlsx(run_id: int, request: Request):
     items = detail.get("items") or []
     approvals = detail.get("approvals") or []
     archive = detail.get("archive") or {}
+    issues = _collect_export_issues(items)
 
     wb = Workbook()
     ws_meta = wb.active
@@ -1300,6 +1347,26 @@ def inspection_runs_detail_export_xlsx(run_id: int, request: Request):
         ws_archive.column_dimensions["A"].width = 18
         ws_archive.column_dimensions["B"].width = 60
 
+    ws_issues = wb.create_sheet("누락점검")
+    issue_headers = ["항목ID", "점검항목", "이슈유형", "메시지"]
+    ws_issues.append(issue_headers)
+    if issues:
+        for issue in issues:
+            ws_issues.append(
+                [
+                    int(issue.get("item_id") or 0),
+                    str(issue.get("item_text") or ""),
+                    str(issue.get("type") or ""),
+                    str(issue.get("message") or ""),
+                ]
+            )
+    else:
+        ws_issues.append(["", "", "ok", "누락 항목 없음"])
+    ws_issues.column_dimensions["A"].width = 10
+    ws_issues.column_dimensions["B"].width = 42
+    ws_issues.column_dimensions["C"].width = 18
+    ws_issues.column_dimensions["D"].width = 36
+
     bio = BytesIO()
     wb.save(bio)
     run_code = str(run.get("run_code") or f"run_{int(run_id)}")
@@ -1310,6 +1377,26 @@ def inspection_runs_detail_export_xlsx(run_id: int, request: Request):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
     )
+
+
+@router.get("/inspection/runs/{run_id}/export-check")
+def inspection_runs_detail_export_check(run_id: int, request: Request):
+    user, _token = _require_inspection_user(request)
+    con = _connect()
+    try:
+        detail = _query_run_detail_data(con=con, user=user, run_id=run_id)
+    finally:
+        con.close()
+    run = detail.get("run") or {}
+    items = detail.get("items") or []
+    issues = _collect_export_issues(items)
+    return {
+        "ok": True,
+        "run_id": int(run.get("id") or run_id),
+        "run_code": str(run.get("run_code") or ""),
+        "issue_count": len(issues),
+        "issues": issues,
+    }
 
 
 @router.patch("/inspection/runs/{run_id}/items")
