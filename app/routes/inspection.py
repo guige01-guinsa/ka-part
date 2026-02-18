@@ -41,6 +41,13 @@ class TargetPayload(BaseModel):
     force_new: bool = False
 
 
+class TargetUpdatePayload(BaseModel):
+    name: str | None = None
+    location: str | None = None
+    description: str | None = None
+    is_active: bool | None = None
+
+
 class TemplateItemPayload(BaseModel):
     item_key: str = Field(..., min_length=1, max_length=80)
     item_text: str = Field(..., min_length=1, max_length=300)
@@ -61,6 +68,15 @@ class TemplatePayload(BaseModel):
     force_new: bool = False
     auto_backup: bool = False
     items: List[TemplateItemPayload] = Field(default_factory=list)
+
+
+class TemplateUpdatePayload(BaseModel):
+    target_id: int | None = None
+    name: str | None = None
+    period: str | None = None
+    is_active: bool | None = None
+    auto_backup: bool = False
+    items: List[TemplateItemPayload] | None = None
 
 
 class RunCreatePayload(BaseModel):
@@ -539,6 +555,71 @@ def inspection_targets_create(request: Request, payload: TargetPayload = Body(..
         con.close()
 
 
+@router.patch("/inspection/targets/{target_id}")
+def inspection_targets_update(target_id: int, request: Request, payload: TargetUpdatePayload = Body(...)):
+    user, _token = _require_manager_user(request)
+    ts = _now_ts()
+    con = _connect()
+    try:
+        row = con.execute("SELECT * FROM inspection_targets WHERE id=? LIMIT 1", (int(target_id),)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="점검대상을 찾을 수 없습니다.")
+        item = dict(row)
+        scoped_site = _scope_site_code(user, item.get("site_code"))
+
+        new_name = str(payload.name).strip() if payload.name is not None else str(item.get("name") or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="점검대상 이름은 비울 수 없습니다.")
+
+        dup = con.execute(
+            """
+            SELECT id FROM inspection_targets
+            WHERE site_code=? AND name=? AND id<>?
+            LIMIT 1
+            """,
+            (scoped_site, new_name, int(target_id)),
+        ).fetchone()
+        if dup:
+            raise HTTPException(status_code=409, detail="같은 이름의 점검대상이 이미 있습니다.")
+
+        new_location = str(payload.location) if payload.location is not None else str(item.get("location") or "")
+        new_description = str(payload.description) if payload.description is not None else str(item.get("description") or "")
+        new_active = int(payload.is_active) if payload.is_active is not None else int(item.get("is_active") or 0)
+        new_active = 1 if new_active == 1 else 0
+
+        con.execute(
+            """
+            UPDATE inspection_targets
+            SET name=?, location=?, description=?, is_active=?, updated_at=?
+            WHERE id=?
+            """,
+            (new_name, new_location.strip(), new_description.strip(), new_active, ts, int(target_id)),
+        )
+        con.commit()
+        out = con.execute("SELECT * FROM inspection_targets WHERE id=? LIMIT 1", (int(target_id),)).fetchone()
+        return {"ok": True, "item": dict(out) if out else {"id": int(target_id)}}
+    finally:
+        con.close()
+
+
+@router.delete("/inspection/targets/{target_id}")
+def inspection_targets_delete(target_id: int, request: Request):
+    user, _token = _require_manager_user(request)
+    ts = _now_ts()
+    con = _connect()
+    try:
+        row = con.execute("SELECT * FROM inspection_targets WHERE id=? LIMIT 1", (int(target_id),)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="점검대상을 찾을 수 없습니다.")
+        item = dict(row)
+        _scope_site_code(user, item.get("site_code"))
+        con.execute("UPDATE inspection_targets SET is_active=0, updated_at=? WHERE id=?", (ts, int(target_id)))
+        con.commit()
+        return {"ok": True, "deleted": True, "target_id": int(target_id)}
+    finally:
+        con.close()
+
+
 @router.get("/inspection/templates")
 def inspection_templates_list(
     request: Request,
@@ -668,6 +749,96 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
         raise
     except Exception as e:
         raise HTTPException(status_code=409, detail=f"점검표 생성 실패: {e}") from e
+    finally:
+        con.close()
+
+
+@router.patch("/inspection/templates/{template_id}")
+def inspection_templates_update(template_id: int, request: Request, payload: TemplateUpdatePayload = Body(...)):
+    user, _token = _require_manager_user(request)
+    ts = _now_ts()
+    con = _connect()
+    try:
+        row = con.execute("SELECT * FROM inspection_templates WHERE id=? LIMIT 1", (int(template_id),)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="점검표를 찾을 수 없습니다.")
+        cur = dict(row)
+        scoped_site = _scope_site_code(user, cur.get("site_code"))
+
+        target_id = int(cur.get("target_id") or 0)
+        if payload.target_id is not None:
+            t = con.execute(
+                "SELECT id, site_code FROM inspection_targets WHERE id=? AND is_active=1 LIMIT 1",
+                (int(payload.target_id),),
+            ).fetchone()
+            if not t:
+                raise HTTPException(status_code=404, detail="점검대상을 찾을 수 없습니다.")
+            if _clean_site_code(t["site_code"]) != scoped_site:
+                raise HTTPException(status_code=403, detail="같은 단지의 점검대상으로만 변경할 수 있습니다.")
+            target_id = int(payload.target_id)
+
+        new_name = str(payload.name).strip() if payload.name is not None else str(cur.get("name") or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="점검표 이름은 비울 수 없습니다.")
+        dup = con.execute(
+            """
+            SELECT id FROM inspection_templates
+            WHERE site_code=? AND name=? AND id<>?
+            LIMIT 1
+            """,
+            (scoped_site, new_name, int(template_id)),
+        ).fetchone()
+        if dup:
+            raise HTTPException(status_code=409, detail="같은 이름의 점검표가 이미 있습니다.")
+
+        new_period = _safe_period(payload.period) if payload.period is not None else str(cur.get("period") or "MONTHLY")
+        new_active = int(payload.is_active) if payload.is_active is not None else int(cur.get("is_active") or 0)
+        new_active = 1 if new_active == 1 else 0
+
+        con.execute(
+            """
+            UPDATE inspection_templates
+            SET target_id=?, name=?, period=?, is_active=?, updated_at=?
+            WHERE id=?
+            """,
+            (target_id, new_name, new_period, new_active, ts, int(template_id)),
+        )
+
+        if payload.items is not None:
+            _save_template_items(con, int(template_id), payload.items, ts)
+
+        backup_id = None
+        if bool(payload.auto_backup):
+            backup_id = _backup_template_form_snapshot(
+                con,
+                template_id=int(template_id),
+                actor_login=str(user.get("login_id") or ""),
+                backup_source="manual_form",
+                ts=ts,
+            )
+        con.commit()
+        out = con.execute("SELECT * FROM inspection_templates WHERE id=? LIMIT 1", (int(template_id),)).fetchone()
+        return {"ok": True, "item": dict(out) if out else {"id": int(template_id)}, "backup_id": backup_id}
+    finally:
+        con.close()
+
+
+@router.delete("/inspection/templates/{template_id}")
+def inspection_templates_delete(template_id: int, request: Request):
+    user, _token = _require_manager_user(request)
+    ts = _now_ts()
+    con = _connect()
+    try:
+        row = con.execute("SELECT * FROM inspection_templates WHERE id=? LIMIT 1", (int(template_id),)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="점검표를 찾을 수 없습니다.")
+        cur = dict(row)
+        _scope_site_code(user, cur.get("site_code"))
+
+        con.execute("UPDATE inspection_templates SET is_active=0, updated_at=? WHERE id=?", (ts, int(template_id)))
+        con.execute("UPDATE inspection_template_items SET is_active=0, updated_at=? WHERE template_id=?", (ts, int(template_id)))
+        con.commit()
+        return {"ok": True, "deleted": True, "template_id": int(template_id)}
     finally:
         con.close()
 

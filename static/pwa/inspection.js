@@ -6,6 +6,8 @@
     user: null,
     siteCode: "",
     bootstrapUser: null,
+    targets: [],
+    templates: [],
     runs: [],
     selectedRunId: 0,
     selectedRun: null,
@@ -48,6 +50,11 @@
   async function apiPatch(path, payload = {}) {
     if (!window.KAAuth) throw new Error("auth.js가 로드되지 않았습니다.");
     return await window.KAAuth.requestJson(path, { method: "PATCH", body: JSON.stringify(payload || {}) });
+  }
+
+  async function apiDelete(path) {
+    if (!window.KAAuth) throw new Error("auth.js가 로드되지 않았습니다.");
+    return await window.KAAuth.requestJson(path, { method: "DELETE" });
   }
 
   async function uploadPhoto(runId, itemId, file) {
@@ -293,6 +300,8 @@
     const data = await apiGet(`/api/inspection/bootstrap${q ? `?${q}` : ""}`);
     state.siteCode = String(data.site_code || "").trim().toUpperCase();
     state.bootstrapUser = data.user || null;
+    state.targets = Array.isArray(data.targets) ? data.targets : [];
+    state.templates = Array.isArray(data.templates) ? data.templates : [];
 
     const userLine = $("#userLine");
     if (userLine) {
@@ -369,6 +378,85 @@
       div.querySelector("button")?.addEventListener("click", () => openRun(Number(r.id || 0)));
       wrap.appendChild(div);
     }
+  }
+
+  function getSelectedTarget() {
+    const id = Number($("#targetId")?.value || 0);
+    if (id <= 0) return null;
+    return state.targets.find((x) => Number(x.id || 0) === id) || null;
+  }
+
+  function getSelectedTemplate() {
+    const id = Number($("#templateId")?.value || 0);
+    if (id <= 0) return null;
+    return state.templates.find((x) => Number(x.id || 0) === id) || null;
+  }
+
+  async function editSelectedTarget() {
+    if (!isManagerUser()) {
+      msg("최고/운영관리자 또는 단지대표자 권한에서만 수정할 수 있습니다.", true);
+      return;
+    }
+    const cur = getSelectedTarget();
+    if (!cur) {
+      msg("수정할 점검대상을 먼저 선택해 주세요.", true);
+      return;
+    }
+    const name = window.prompt("점검대상 이름", String(cur.name || "")); if (name === null) return;
+    const location = window.prompt("점검대상 위치(선택)", String(cur.location || "")); if (location === null) return;
+    const description = window.prompt("점검대상 설명(선택)", String(cur.description || "")); if (description === null) return;
+    await apiPatch(`/api/inspection/targets/${Number(cur.id)}`, { name, location, description, is_active: true });
+    await loadBootstrap();
+    msg("점검대상 수정 완료");
+  }
+
+  async function deleteSelectedTarget() {
+    if (!isManagerUser()) {
+      msg("최고/운영관리자 또는 단지대표자 권한에서만 삭제할 수 있습니다.", true);
+      return;
+    }
+    const cur = getSelectedTarget();
+    if (!cur) {
+      msg("삭제할 점검대상을 먼저 선택해 주세요.", true);
+      return;
+    }
+    if (!window.confirm(`점검대상 '${cur.name}' 을(를) 삭제(비활성)할까요?`)) return;
+    await apiDelete(`/api/inspection/targets/${Number(cur.id)}`);
+    await loadBootstrap();
+    msg("점검대상 삭제 완료");
+  }
+
+  async function editSelectedTemplate() {
+    if (!isManagerUser()) {
+      msg("최고/운영관리자 또는 단지대표자 권한에서만 수정할 수 있습니다.", true);
+      return;
+    }
+    const cur = getSelectedTemplate();
+    if (!cur) {
+      msg("수정할 점검표를 먼저 선택해 주세요.", true);
+      return;
+    }
+    const name = window.prompt("점검표 이름", String(cur.name || "")); if (name === null) return;
+    const period = window.prompt("주기(DAILY/WEEKLY/MONTHLY/QUARTERLY/YEARLY)", String(cur.period || "MONTHLY")); if (period === null) return;
+    await apiPatch(`/api/inspection/templates/${Number(cur.id)}`, { name, period: String(period).trim().toUpperCase(), is_active: true, auto_backup: true });
+    await loadBootstrap();
+    msg("점검표 수정 완료");
+  }
+
+  async function deleteSelectedTemplate() {
+    if (!isManagerUser()) {
+      msg("최고/운영관리자 또는 단지대표자 권한에서만 삭제할 수 있습니다.", true);
+      return;
+    }
+    const cur = getSelectedTemplate();
+    if (!cur) {
+      msg("삭제할 점검표를 먼저 선택해 주세요.", true);
+      return;
+    }
+    if (!window.confirm(`점검표 '${cur.name}' 을(를) 삭제(비활성)할까요?`)) return;
+    await apiDelete(`/api/inspection/templates/${Number(cur.id)}`);
+    await loadBootstrap();
+    msg("점검표 삭제 완료");
   }
 
   async function loadRuns() {
@@ -641,8 +729,12 @@
       $("#btnOpenPdf")?.addEventListener("click", openArchivePdf);
       $("#btnQuickSetup")?.addEventListener("click", () => quickSetup().catch((e) => msg(e.message || e, true)));
       $("#btnBuildDetailItems")?.addEventListener("click", () => {
-        buildDetailItemInputs(Number($("#detailItemCount")?.value || 5));
+        buildDetailItemInputs(Number($("#detailItemCount")?.value || 1));
       });
+      $("#btnEditTarget")?.addEventListener("click", () => editSelectedTarget().catch((e) => msg(e.message || e, true)));
+      $("#btnDeleteTarget")?.addEventListener("click", () => deleteSelectedTarget().catch((e) => msg(e.message || e, true)));
+      $("#btnEditTemplate")?.addEventListener("click", () => editSelectedTemplate().catch((e) => msg(e.message || e, true)));
+      $("#btnDeleteTemplate")?.addEventListener("click", () => deleteSelectedTemplate().catch((e) => msg(e.message || e, true)));
 
       await loadBootstrap();
       await loadRuns();
