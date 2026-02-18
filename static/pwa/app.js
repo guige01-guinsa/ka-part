@@ -319,15 +319,10 @@
   function setTabRunStatus(tabTitle = "", isRunning = false) {
     const el = $("#tabRunStatus");
     if (!el) return;
-    if (isRunning && tabTitle) {
-      el.textContent = `실행여부: ${tabTitle} 실행중`;
-      el.classList.add("running");
-      el.classList.remove("idle");
-      return;
-    }
-    el.textContent = "실행여부: 대기";
-    el.classList.remove("running");
-    el.classList.add("idle");
+    // UI policy: hide run-status indicator completely.
+    el.textContent = "";
+    el.classList.add("hidden");
+    el.setAttribute("aria-hidden", "true");
   }
 
   function isNarrowViewport() {

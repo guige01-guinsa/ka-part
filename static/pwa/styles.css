@@ -282,6 +282,11 @@ body {
   background: color-mix(in srgb, var(--bg-soft) 78%, black 22%);
 }
 
+/* Hide run-status indicator (kept in DOM for backward compatibility) */
+#tabRunStatus {
+  display: none !important;
+}
+
 .tab-run-status.running {
   color: #d8e7ff;
   border-color: color-mix(in srgb, var(--primary) 70%, var(--line));
