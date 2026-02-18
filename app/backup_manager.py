@@ -343,6 +343,18 @@ def _query_by_site_names(con: sqlite3.Connection, table: str, site_names: List[s
     return _rows_to_dicts(rows)
 
 
+def _query_by_int_ids(con: sqlite3.Connection, table: str, id_col: str, ids: List[int]) -> List[Dict[str, Any]]:
+    if not ids or not _table_exists(con, table):
+        return []
+    norm_ids = [int(x) for x in ids if int(x or 0) > 0]
+    if not norm_ids:
+        return []
+    ph = ",".join(["?"] * len(norm_ids))
+    sql = f"SELECT * FROM {table} WHERE {id_col} IN ({ph})"
+    rows = con.execute(sql, tuple(norm_ids)).fetchall()
+    return _rows_to_dicts(rows)
+
+
 def _collect_site_names(con: sqlite3.Connection, site_code: str, fallback_site_name: str = "") -> List[str]:
     names: set[str] = set()
     queries = [
@@ -441,6 +453,64 @@ def _export_facility_site_data(site_code: str, site_name: str = "") -> Dict[str,
             "facility_subtasks",
         ]:
             tables[tab_table] = _query_by_site_names(con, tab_table, names)
+
+        # Safety inspection module tables (site-scoped backup)
+        inspection_targets = _query_all(
+            con,
+            "SELECT * FROM inspection_targets WHERE site_code=?",
+            (site_code,),
+        ) if _table_exists(con, "inspection_targets") else []
+        tables["inspection_targets"] = inspection_targets
+        target_ids = [int(r.get("id") or 0) for r in inspection_targets if int(r.get("id") or 0) > 0]
+
+        inspection_regulations = _query_by_int_ids(con, "inspection_regulations", "target_id", target_ids)
+        tables["inspection_regulations"] = inspection_regulations
+
+        inspection_templates = _query_all(
+            con,
+            "SELECT * FROM inspection_templates WHERE site_code=?",
+            (site_code,),
+        ) if _table_exists(con, "inspection_templates") else []
+        tables["inspection_templates"] = inspection_templates
+        template_ids = [int(r.get("id") or 0) for r in inspection_templates if int(r.get("id") or 0) > 0]
+
+        tables["inspection_template_items"] = _query_by_int_ids(
+            con,
+            "inspection_template_items",
+            "template_id",
+            template_ids,
+        )
+        tables["inspection_template_backups"] = _query_all(
+            con,
+            "SELECT * FROM inspection_template_backups WHERE site_code=?",
+            (site_code,),
+        ) if _table_exists(con, "inspection_template_backups") else []
+
+        inspection_runs = _query_all(
+            con,
+            "SELECT * FROM inspection_runs WHERE site_code=?",
+            (site_code,),
+        ) if _table_exists(con, "inspection_runs") else []
+        tables["inspection_runs"] = inspection_runs
+        run_ids = [int(r.get("id") or 0) for r in inspection_runs if int(r.get("id") or 0) > 0]
+
+        tables["inspection_run_items"] = _query_by_int_ids(
+            con,
+            "inspection_run_items",
+            "run_id",
+            run_ids,
+        )
+        tables["inspection_approvals"] = _query_by_int_ids(
+            con,
+            "inspection_approvals",
+            "run_id",
+            run_ids,
+        )
+        tables["inspection_archives"] = _query_all(
+            con,
+            "SELECT * FROM inspection_archives WHERE site_code=?",
+            (site_code,),
+        ) if _table_exists(con, "inspection_archives") else []
 
         row_counts: Dict[str, int] = {}
         total_rows = 0
