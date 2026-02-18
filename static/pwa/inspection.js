@@ -771,6 +771,31 @@
     return rows;
   }
 
+  function _loginLower(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function canEditCurrentRun(runDetail) {
+    const run = runDetail?.run || {};
+    const status = String(run.status || "").trim().toUpperCase();
+    if (!(status === "DRAFT" || status === "REJECTED")) return false;
+    const u = state.bootstrapUser || {};
+    if (u.is_admin || u.is_site_admin) return true;
+    return _loginLower(u.login_id) === _loginLower(run.inspector_login);
+  }
+
+  function canDecideCurrentRun(runDetail) {
+    const run = runDetail?.run || {};
+    if (String(run.status || "").trim().toUpperCase() !== "SUBMITTED") return false;
+    const u = state.bootstrapUser || {};
+    if (u.is_admin) return true;
+    const pending = Array.isArray(runDetail?.approvals)
+      ? runDetail.approvals.find((x) => String(x.decision || "").trim().toUpperCase() === "PENDING")
+      : null;
+    if (!pending) return false;
+    return _loginLower(u.login_id) === _loginLower(pending.approver_login);
+  }
+
   function renderRunDetail() {
     const run = state.selectedRun;
     const card = $("#detailCard");
@@ -842,6 +867,17 @@
         approvalsWrap.appendChild(div);
       }
     }
+
+    const editable = canEditCurrentRun(run);
+    const decidable = canDecideCurrentRun(run);
+    const btnSave = $("#btnSaveItems");
+    const btnSubmit = $("#btnSubmitRun");
+    const btnApprove = $("#btnApproveRun");
+    const btnReject = $("#btnRejectRun");
+    if (btnSave) btnSave.disabled = !editable;
+    if (btnSubmit) btnSubmit.disabled = !editable;
+    if (btnApprove) btnApprove.disabled = !decidable;
+    if (btnReject) btnReject.disabled = !decidable;
   }
 
   async function openRun(runId) {
@@ -856,6 +892,10 @@
   async function saveItems() {
     const runId = Number(state.selectedRunId || 0);
     if (runId <= 0) return;
+    if (!canEditCurrentRun(state.selectedRun)) {
+      msg("작성중/반려 상태의 본인 점검만 저장할 수 있습니다.", true);
+      return;
+    }
     const payload = { items: collectItemPayloads() };
     await apiPatch(`/api/inspection/runs/${runId}/items`, payload);
     msg("점검 항목 저장 완료");
@@ -866,6 +906,10 @@
   async function submitRun() {
     const runId = Number(state.selectedRunId || 0);
     if (runId <= 0) return;
+    if (!canEditCurrentRun(state.selectedRun)) {
+      msg("작성중/반려 상태의 본인 점검만 제출할 수 있습니다.", true);
+      return;
+    }
     await apiPost(`/api/inspection/runs/${runId}/submit`, {});
     msg("점검 제출 완료");
     await openRun(runId);
@@ -875,6 +919,10 @@
   async function approveRun() {
     const runId = Number(state.selectedRunId || 0);
     if (runId <= 0) return;
+    if (!canDecideCurrentRun(state.selectedRun)) {
+      msg("현재 단계 결재 권한이 없습니다.", true);
+      return;
+    }
     const comment = window.prompt("승인 코멘트(선택)", "") || "";
     await apiPost(`/api/inspection/runs/${runId}/approve`, { comment });
     msg("승인 처리 완료");
@@ -885,6 +933,10 @@
   async function rejectRun() {
     const runId = Number(state.selectedRunId || 0);
     if (runId <= 0) return;
+    if (!canDecideCurrentRun(state.selectedRun)) {
+      msg("현재 단계 결재 권한이 없습니다.", true);
+      return;
+    }
     const comment = window.prompt("반려 사유", "") || "";
     await apiPost(`/api/inspection/runs/${runId}/reject`, { comment });
     msg("반려 처리 완료");
