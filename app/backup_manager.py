@@ -334,11 +334,37 @@ def _query_all(con: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) 
     return _rows_to_dicts(rows)
 
 
+def _preferred_existing_col(con: sqlite3.Connection, table: str, candidates: List[str]) -> str:
+    cols = _table_columns_set(con, table)
+    for name in candidates:
+        key = str(name or "").strip()
+        if key and key in cols:
+            return key
+    return ""
+
+
+def _query_by_site_code(con: sqlite3.Connection, table: str, site_code: str) -> List[Dict[str, Any]]:
+    if not _table_exists(con, table):
+        return []
+    clean = str(site_code or "").strip().upper()
+    if not clean:
+        return []
+    code_col = _preferred_existing_col(con, table, ["site_code", "code"])
+    if not code_col:
+        return []
+    sql = f"SELECT * FROM {table} WHERE {code_col}=?"
+    rows = con.execute(sql, (clean,)).fetchall()
+    return _rows_to_dicts(rows)
+
+
 def _query_by_site_names(con: sqlite3.Connection, table: str, site_names: List[str]) -> List[Dict[str, Any]]:
     if not site_names or not _table_exists(con, table):
         return []
+    name_col = _preferred_existing_col(con, table, ["site_name", "name"])
+    if not name_col:
+        return []
     ph = ",".join(["?"] * len(site_names))
-    sql = f"SELECT * FROM {table} WHERE site_name IN ({ph})"
+    sql = f"SELECT * FROM {table} WHERE {name_col} IN ({ph})"
     rows = con.execute(sql, tuple(site_names)).fetchall()
     return _rows_to_dicts(rows)
 
@@ -372,10 +398,10 @@ def _table_columns_set(con: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _exec_delete_by_site_code(con: sqlite3.Connection, table: str, site_code: str) -> int:
-    cols = _table_columns_set(con, table)
-    if "site_code" not in cols:
+    code_col = _preferred_existing_col(con, table, ["site_code", "code"])
+    if not code_col:
         return 0
-    cur = con.execute(f"DELETE FROM {table} WHERE site_code=?", (str(site_code or "").strip().upper(),))
+    cur = con.execute(f"DELETE FROM {table} WHERE {code_col}=?", (str(site_code or "").strip().upper(),))
     return int(cur.rowcount or 0)
 
 
@@ -383,11 +409,11 @@ def _exec_delete_by_site_names(con: sqlite3.Connection, table: str, site_names: 
     names = [str(x or "").strip() for x in site_names if str(x or "").strip()]
     if not names:
         return 0
-    cols = _table_columns_set(con, table)
-    if "site_name" not in cols:
+    name_col = _preferred_existing_col(con, table, ["site_name", "name"])
+    if not name_col:
         return 0
     ph = ",".join(["?"] * len(names))
-    cur = con.execute(f"DELETE FROM {table} WHERE site_name IN ({ph})", tuple(names))
+    cur = con.execute(f"DELETE FROM {table} WHERE {name_col} IN ({ph})", tuple(names))
     return int(cur.rowcount or 0)
 
 
@@ -426,15 +452,15 @@ def _exec_upsert_rows(con: sqlite3.Connection, table: str, rows: List[Dict[str, 
 
 def _collect_site_names(con: sqlite3.Connection, site_code: str, fallback_site_name: str = "") -> List[str]:
     names: set[str] = set()
-    queries = [
-        ("site_registry", "SELECT site_name FROM site_registry WHERE site_code=?"),
-        ("staff_users", "SELECT site_name FROM staff_users WHERE site_code=?"),
-        ("site_env_configs", "SELECT site_name FROM site_env_configs WHERE site_code=?"),
-    ]
-    for table, sql in queries:
+    clean_code = str(site_code or "").strip().upper()
+    for table in ["site_registry", "staff_users", "site_env_configs"]:
         if not _table_exists(con, table):
             continue
-        rows = con.execute(sql, (site_code,)).fetchall()
+        code_col = _preferred_existing_col(con, table, ["site_code", "code"])
+        name_col = _preferred_existing_col(con, table, ["site_name", "name"])
+        if not code_col or not name_col:
+            continue
+        rows = con.execute(f"SELECT {name_col} FROM {table} WHERE {code_col}=?", (clean_code,)).fetchall()
         for row in rows:
             value = str(row[0] or "").strip()
             if value:
@@ -468,20 +494,9 @@ def _export_facility_site_data(site_code: str, site_name: str = "") -> Dict[str,
         out["site_names"] = names
 
         tables: Dict[str, Any] = {}
-        if _table_exists(con, "site_registry"):
-            tables["site_registry"] = _query_all(
-                con, "SELECT * FROM site_registry WHERE site_code=?", (site_code,)
-            )
-        if _table_exists(con, "site_env_configs"):
-            tables["site_env_configs"] = _query_all(
-                con, "SELECT * FROM site_env_configs WHERE site_code=?", (site_code,)
-            )
-        if _table_exists(con, "staff_users"):
-            tables["staff_users"] = _query_all(
-                con,
-                "SELECT * FROM staff_users WHERE site_code=?",
-                (site_code,),
-            )
+        tables["site_registry"] = _query_by_site_code(con, "site_registry", site_code)
+        tables["site_env_configs"] = _query_by_site_code(con, "site_env_configs", site_code)
+        tables["staff_users"] = _query_by_site_code(con, "staff_users", site_code)
 
         sites_rows: List[Dict[str, Any]] = []
         if names and _table_exists(con, "sites"):
@@ -524,22 +539,14 @@ def _export_facility_site_data(site_code: str, site_name: str = "") -> Dict[str,
             tables[tab_table] = _query_by_site_names(con, tab_table, names)
 
         # Safety inspection module tables (site-scoped backup)
-        inspection_targets = _query_all(
-            con,
-            "SELECT * FROM inspection_targets WHERE site_code=?",
-            (site_code,),
-        ) if _table_exists(con, "inspection_targets") else []
+        inspection_targets = _query_by_site_code(con, "inspection_targets", site_code)
         tables["inspection_targets"] = inspection_targets
         target_ids = [int(r.get("id") or 0) for r in inspection_targets if int(r.get("id") or 0) > 0]
 
         inspection_regulations = _query_by_int_ids(con, "inspection_regulations", "target_id", target_ids)
         tables["inspection_regulations"] = inspection_regulations
 
-        inspection_templates = _query_all(
-            con,
-            "SELECT * FROM inspection_templates WHERE site_code=?",
-            (site_code,),
-        ) if _table_exists(con, "inspection_templates") else []
+        inspection_templates = _query_by_site_code(con, "inspection_templates", site_code)
         tables["inspection_templates"] = inspection_templates
         template_ids = [int(r.get("id") or 0) for r in inspection_templates if int(r.get("id") or 0) > 0]
 
@@ -549,17 +556,9 @@ def _export_facility_site_data(site_code: str, site_name: str = "") -> Dict[str,
             "template_id",
             template_ids,
         )
-        tables["inspection_template_backups"] = _query_all(
-            con,
-            "SELECT * FROM inspection_template_backups WHERE site_code=?",
-            (site_code,),
-        ) if _table_exists(con, "inspection_template_backups") else []
+        tables["inspection_template_backups"] = _query_by_site_code(con, "inspection_template_backups", site_code)
 
-        inspection_runs = _query_all(
-            con,
-            "SELECT * FROM inspection_runs WHERE site_code=?",
-            (site_code,),
-        ) if _table_exists(con, "inspection_runs") else []
+        inspection_runs = _query_by_site_code(con, "inspection_runs", site_code)
         tables["inspection_runs"] = inspection_runs
         run_ids = [int(r.get("id") or 0) for r in inspection_runs if int(r.get("id") or 0) > 0]
 
@@ -575,18 +574,10 @@ def _export_facility_site_data(site_code: str, site_name: str = "") -> Dict[str,
             "run_id",
             run_ids,
         )
-        tables["inspection_archives"] = _query_all(
-            con,
-            "SELECT * FROM inspection_archives WHERE site_code=?",
-            (site_code,),
-        ) if _table_exists(con, "inspection_archives") else []
+        tables["inspection_archives"] = _query_by_site_code(con, "inspection_archives", site_code)
 
         # Complaints module tables (site-scoped backup)
-        complaint_rows = _query_all(
-            con,
-            "SELECT * FROM complaints WHERE site_code=?",
-            (site_code,),
-        ) if _table_exists(con, "complaints") else []
+        complaint_rows = _query_by_site_code(con, "complaints", site_code)
         tables["complaints"] = complaint_rows
         complaint_ids = [int(r.get("id") or 0) for r in complaint_rows if int(r.get("id") or 0) > 0]
 
@@ -679,17 +670,13 @@ def _export_parking_site_data(site_code: str, site_name: str = "") -> Dict[str, 
     try:
         tables: Dict[str, Any] = {}
         if _table_exists(con, "vehicles"):
-            tables["vehicles"] = _query_all(
-                con,
-                "SELECT * FROM vehicles WHERE site_code=? ORDER BY plate ASC",
-                (site_code,),
-            )
+            rows = _query_by_site_code(con, "vehicles", site_code)
+            rows.sort(key=lambda x: str(x.get("plate") or ""))
+            tables["vehicles"] = rows
         if _table_exists(con, "violations"):
-            tables["violations"] = _query_all(
-                con,
-                "SELECT * FROM violations WHERE site_code=? ORDER BY created_at DESC, id DESC",
-                (site_code,),
-            )
+            rows = _query_by_site_code(con, "violations", site_code)
+            rows.sort(key=lambda x: (str(x.get("created_at") or ""), int(x.get("id") or 0)), reverse=True)
+            tables["violations"] = rows
         row_counts: Dict[str, int] = {}
         total_rows = 0
         for name, rows in tables.items():
@@ -1074,32 +1061,16 @@ def _restore_facility_site_payload(site_code: str, payload: Dict[str, Any]) -> D
         live_entries = _query_by_int_ids(con, "entries", "site_id", live_site_ids)
         live_entry_ids = _rows_int_ids(live_entries, "id")
 
-        live_targets = (
-            _query_all(con, "SELECT id FROM inspection_targets WHERE site_code=?", (clean_site_code,))
-            if _table_exists(con, "inspection_targets")
-            else []
-        )
+        live_targets = _query_by_site_code(con, "inspection_targets", clean_site_code)
         live_target_ids = _rows_int_ids(live_targets, "id")
 
-        live_templates = (
-            _query_all(con, "SELECT id FROM inspection_templates WHERE site_code=?", (clean_site_code,))
-            if _table_exists(con, "inspection_templates")
-            else []
-        )
+        live_templates = _query_by_site_code(con, "inspection_templates", clean_site_code)
         live_template_ids = _rows_int_ids(live_templates, "id")
 
-        live_runs = (
-            _query_all(con, "SELECT id FROM inspection_runs WHERE site_code=?", (clean_site_code,))
-            if _table_exists(con, "inspection_runs")
-            else []
-        )
+        live_runs = _query_by_site_code(con, "inspection_runs", clean_site_code)
         live_run_ids = _rows_int_ids(live_runs, "id")
 
-        live_complaints = (
-            _query_all(con, "SELECT id FROM complaints WHERE site_code=?", (clean_site_code,))
-            if _table_exists(con, "complaints")
-            else []
-        )
+        live_complaints = _query_by_site_code(con, "complaints", clean_site_code)
         live_complaint_ids = _rows_int_ids(live_complaints, "id")
 
         _add_count(deleted, "entry_values", _exec_delete_by_int_ids(con, "entry_values", "entry_id", live_entry_ids))
