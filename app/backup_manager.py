@@ -355,6 +355,75 @@ def _query_by_int_ids(con: sqlite3.Connection, table: str, id_col: str, ids: Lis
     return _rows_to_dicts(rows)
 
 
+def _table_columns_set(con: sqlite3.Connection, table: str) -> set[str]:
+    if not _table_exists(con, table):
+        return set()
+    rows = con.execute(f"PRAGMA table_info({table})").fetchall()
+    cols: set[str] = set()
+    for row in rows:
+        try:
+            cols.add(str(row["name"]))
+        except Exception:
+            try:
+                cols.add(str(row[1]))
+            except Exception:
+                continue
+    return cols
+
+
+def _exec_delete_by_site_code(con: sqlite3.Connection, table: str, site_code: str) -> int:
+    cols = _table_columns_set(con, table)
+    if "site_code" not in cols:
+        return 0
+    cur = con.execute(f"DELETE FROM {table} WHERE site_code=?", (str(site_code or "").strip().upper(),))
+    return int(cur.rowcount or 0)
+
+
+def _exec_delete_by_site_names(con: sqlite3.Connection, table: str, site_names: List[str]) -> int:
+    names = [str(x or "").strip() for x in site_names if str(x or "").strip()]
+    if not names:
+        return 0
+    cols = _table_columns_set(con, table)
+    if "site_name" not in cols:
+        return 0
+    ph = ",".join(["?"] * len(names))
+    cur = con.execute(f"DELETE FROM {table} WHERE site_name IN ({ph})", tuple(names))
+    return int(cur.rowcount or 0)
+
+
+def _exec_delete_by_int_ids(con: sqlite3.Connection, table: str, id_col: str, ids: List[int]) -> int:
+    norm_ids = [int(x) for x in ids if int(x or 0) > 0]
+    if not norm_ids or not _table_exists(con, table):
+        return 0
+    cols = _table_columns_set(con, table)
+    if id_col not in cols:
+        return 0
+    ph = ",".join(["?"] * len(norm_ids))
+    cur = con.execute(f"DELETE FROM {table} WHERE {id_col} IN ({ph})", tuple(norm_ids))
+    return int(cur.rowcount or 0)
+
+
+def _exec_upsert_rows(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]]) -> int:
+    if not rows or not _table_exists(con, table):
+        return 0
+    cols = _table_columns_set(con, table)
+    if not cols:
+        return 0
+    inserted = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        keys = [k for k in row.keys() if k in cols]
+        if not keys:
+            continue
+        placeholders = ",".join(["?"] * len(keys))
+        col_sql = ",".join(keys)
+        values = [row.get(k) for k in keys]
+        con.execute(f"INSERT OR REPLACE INTO {table} ({col_sql}) VALUES ({placeholders})", tuple(values))
+        inserted += 1
+    return inserted
+
+
 def _collect_site_names(con: sqlite3.Connection, site_code: str, fallback_site_name: str = "") -> List[str]:
     names: set[str] = set()
     queries = [
@@ -936,6 +1005,249 @@ def _sqlite_restore_copy(src_path: Path, dst_path: Path) -> None:
         src.close()
 
 
+def _payload_table_rows(payload: Dict[str, Any], table: str) -> List[Dict[str, Any]]:
+    tables = payload.get("tables")
+    if not isinstance(tables, dict):
+        return []
+    rows = tables.get(str(table))
+    if not isinstance(rows, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if isinstance(row, dict):
+            out.append(dict(row))
+    return out
+
+
+def _rows_int_ids(rows: Iterable[Dict[str, Any]], key: str = "id") -> List[int]:
+    out: List[int] = []
+    for row in rows:
+        try:
+            value = int((row or {}).get(key) or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            out.append(value)
+    return sorted(set(out))
+
+
+def _restore_facility_site_payload(site_code: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    db_path = Path(FACILITY_DB_PATH).resolve()
+    if not db_path.exists():
+        raise FileNotFoundError(f"시설관리 DB 파일이 없습니다: {db_path}")
+
+    clean_site_code = str(site_code or "").strip().upper()
+    if not clean_site_code:
+        raise ValueError("site restore requires site_code")
+
+    payload_site_code = str(payload.get("site_code") or "").strip().upper()
+    if payload_site_code and payload_site_code != clean_site_code:
+        raise ValueError(f"site_code mismatch: backup={payload_site_code} request={clean_site_code}")
+
+    payload_site_name = str(payload.get("site_name") or "").strip()
+    payload_site_names = [
+        str(x or "").strip()
+        for x in (payload.get("site_names") or [])
+        if str(x or "").strip()
+    ]
+
+    deleted: Dict[str, int] = {}
+    inserted: Dict[str, int] = {}
+
+    def _add_count(bucket: Dict[str, int], table: str, count: int) -> None:
+        n = int(count or 0)
+        if n <= 0:
+            return
+        bucket[str(table)] = int(bucket.get(str(table), 0)) + n
+
+    con = sqlite3.connect(str(db_path))
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA busy_timeout=30000")
+        con.execute("BEGIN IMMEDIATE")
+
+        live_site_names = _collect_site_names(con, clean_site_code, payload_site_name)
+        scoped_site_names = sorted(set(live_site_names + payload_site_names + ([payload_site_name] if payload_site_name else [])))
+
+        live_sites = _query_by_site_names(con, "sites", scoped_site_names)
+        live_site_ids = _rows_int_ids(live_sites, "id")
+        live_entries = _query_by_int_ids(con, "entries", "site_id", live_site_ids)
+        live_entry_ids = _rows_int_ids(live_entries, "id")
+
+        live_targets = (
+            _query_all(con, "SELECT id FROM inspection_targets WHERE site_code=?", (clean_site_code,))
+            if _table_exists(con, "inspection_targets")
+            else []
+        )
+        live_target_ids = _rows_int_ids(live_targets, "id")
+
+        live_templates = (
+            _query_all(con, "SELECT id FROM inspection_templates WHERE site_code=?", (clean_site_code,))
+            if _table_exists(con, "inspection_templates")
+            else []
+        )
+        live_template_ids = _rows_int_ids(live_templates, "id")
+
+        live_runs = (
+            _query_all(con, "SELECT id FROM inspection_runs WHERE site_code=?", (clean_site_code,))
+            if _table_exists(con, "inspection_runs")
+            else []
+        )
+        live_run_ids = _rows_int_ids(live_runs, "id")
+
+        live_complaints = (
+            _query_all(con, "SELECT id FROM complaints WHERE site_code=?", (clean_site_code,))
+            if _table_exists(con, "complaints")
+            else []
+        )
+        live_complaint_ids = _rows_int_ids(live_complaints, "id")
+
+        _add_count(deleted, "entry_values", _exec_delete_by_int_ids(con, "entry_values", "entry_id", live_entry_ids))
+        _add_count(deleted, "inspection_regulations", _exec_delete_by_int_ids(con, "inspection_regulations", "target_id", live_target_ids))
+        _add_count(deleted, "inspection_template_items", _exec_delete_by_int_ids(con, "inspection_template_items", "template_id", live_template_ids))
+        _add_count(deleted, "inspection_run_items", _exec_delete_by_int_ids(con, "inspection_run_items", "run_id", live_run_ids))
+        _add_count(deleted, "inspection_approvals", _exec_delete_by_int_ids(con, "inspection_approvals", "run_id", live_run_ids))
+        _add_count(deleted, "complaint_attachments", _exec_delete_by_int_ids(con, "complaint_attachments", "complaint_id", live_complaint_ids))
+        _add_count(deleted, "complaint_status_history", _exec_delete_by_int_ids(con, "complaint_status_history", "complaint_id", live_complaint_ids))
+        _add_count(deleted, "complaint_comments", _exec_delete_by_int_ids(con, "complaint_comments", "complaint_id", live_complaint_ids))
+        _add_count(deleted, "complaint_work_orders", _exec_delete_by_int_ids(con, "complaint_work_orders", "complaint_id", live_complaint_ids))
+        _add_count(deleted, "complaint_visit_logs", _exec_delete_by_int_ids(con, "complaint_visit_logs", "complaint_id", live_complaint_ids))
+
+        for table in [
+            "transformer_450_reads",
+            "transformer_400_reads",
+            "power_meter_reads",
+            "facility_checks",
+            "facility_subtasks",
+        ]:
+            _add_count(deleted, table, _exec_delete_by_site_names(con, table, scoped_site_names))
+
+        _add_count(deleted, "entries", _exec_delete_by_int_ids(con, "entries", "site_id", live_site_ids))
+        _add_count(deleted, "sites", _exec_delete_by_site_names(con, "sites", scoped_site_names))
+
+        for table in [
+            "inspection_archives",
+            "inspection_runs",
+            "inspection_template_backups",
+            "inspection_templates",
+            "inspection_targets",
+            "complaints",
+            "staff_users",
+            "site_env_configs",
+            "site_registry",
+        ]:
+            _add_count(deleted, table, _exec_delete_by_site_code(con, table, clean_site_code))
+
+        for table in [
+            "site_registry",
+            "site_env_configs",
+            "staff_users",
+            "sites",
+            "entries",
+            "entry_values",
+            "transformer_450_reads",
+            "transformer_400_reads",
+            "power_meter_reads",
+            "facility_checks",
+            "facility_subtasks",
+            "inspection_targets",
+            "inspection_regulations",
+            "inspection_templates",
+            "inspection_template_items",
+            "inspection_template_backups",
+            "inspection_runs",
+            "inspection_run_items",
+            "inspection_approvals",
+            "inspection_archives",
+            "complaints",
+            "complaint_attachments",
+            "complaint_status_history",
+            "complaint_comments",
+            "complaint_work_orders",
+            "complaint_visit_logs",
+            # Shared lookup tables are upsert-only (no scoped delete)
+            "complaint_categories",
+            "complaint_guidance_templates",
+            "complaint_notices",
+            "complaint_faqs",
+        ]:
+            rows = _payload_table_rows(payload, table)
+            _add_count(inserted, table, _exec_upsert_rows(con, table, rows))
+
+        con.commit()
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        con.close()
+
+    return {
+        "db_key": "facility",
+        "site_code": clean_site_code,
+        "deleted_rows": sum(int(v or 0) for v in deleted.values()),
+        "inserted_rows": sum(int(v or 0) for v in inserted.values()),
+        "deleted_by_table": deleted,
+        "inserted_by_table": inserted,
+    }
+
+
+def _restore_parking_site_payload(site_code: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    db_path = _resolve_parking_db_path()
+    if not db_path.exists():
+        raise FileNotFoundError(f"주차관리 DB 파일이 없습니다: {db_path}")
+
+    clean_site_code = str(site_code or "").strip().upper()
+    if not clean_site_code:
+        raise ValueError("site restore requires site_code")
+
+    payload_site_code = str(payload.get("site_code") or "").strip().upper()
+    if payload_site_code and payload_site_code != clean_site_code:
+        raise ValueError(f"site_code mismatch: backup={payload_site_code} request={clean_site_code}")
+
+    deleted: Dict[str, int] = {}
+    inserted: Dict[str, int] = {}
+
+    def _add_count(bucket: Dict[str, int], table: str, count: int) -> None:
+        n = int(count or 0)
+        if n <= 0:
+            return
+        bucket[str(table)] = int(bucket.get(str(table), 0)) + n
+
+    con = sqlite3.connect(str(db_path))
+    try:
+        con.execute("PRAGMA busy_timeout=30000")
+        con.execute("BEGIN IMMEDIATE")
+
+        for table in ["violations", "vehicles"]:
+            _add_count(deleted, table, _exec_delete_by_site_code(con, table, clean_site_code))
+
+        for table in ["vehicles", "violations"]:
+            rows = _payload_table_rows(payload, table)
+            _add_count(inserted, table, _exec_upsert_rows(con, table, rows))
+
+        con.commit()
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        con.close()
+
+    return {
+        "db_key": "parking",
+        "site_code": clean_site_code,
+        "deleted_rows": sum(int(v or 0) for v in deleted.values()),
+        "inserted_rows": sum(int(v or 0) for v in inserted.values()),
+        "deleted_by_table": deleted,
+        "inserted_by_table": inserted,
+    }
+
+
 def restore_backup_zip(
     *,
     actor: str,
@@ -946,8 +1258,8 @@ def restore_backup_zip(
     zip_path = resolve_backup_file(relative_path)
     manifest = _read_manifest_from_zip(zip_path)
     scope = str(manifest.get("scope") or "").strip().lower()
-    if scope and scope != "full":
-        raise ValueError("전체 시스템 백업(full) 파일만 복구할 수 있습니다.")
+    if scope and scope not in {"full", "site"}:
+        raise ValueError("지원하지 않는 백업 범위입니다.")
 
     catalog = _targets_by_key()
     available_keys = [str(k) for k in catalog.keys()]
@@ -957,26 +1269,41 @@ def restore_backup_zip(
         if isinstance(m_keys, list) and m_keys:
             selected_keys = [str(x or "").strip().lower() for x in m_keys if str(x or "").strip()]
     if not selected_keys:
-        selected_keys = list(available_keys)
+        if scope == "site":
+            selected_keys = [k for k, v in catalog.items() if bool(v.get("site_scoped"))]
+        else:
+            selected_keys = list(available_keys)
 
     invalid = [k for k in selected_keys if k not in available_keys]
     if invalid:
         raise ValueError(f"invalid target_keys: {', '.join(invalid)}")
+    if scope == "site":
+        not_scoped = [k for k in selected_keys if not bool(catalog.get(k, {}).get("site_scoped"))]
+        if not_scoped:
+            raise ValueError(f"site 복구에서 지원하지 않는 대상입니다: {', '.join(not_scoped)}")
+
+    site_code = str(manifest.get("site_code") or "").strip().upper() if scope == "site" else ""
+    site_name = str(manifest.get("site_name") or "").strip() if scope == "site" else ""
+    if scope == "site" and not site_code:
+        raise ValueError("site 백업 복구에는 manifest.site_code가 필요합니다.")
 
     acquired = _RUN_LOCK.acquire(blocking=False)
     if not acquired:
         raise RuntimeError("이미 다른 백업/복구 작업이 실행 중입니다.")
 
     ts = _now().strftime("%Y%m%d_%H%M%S")
-    rollback_dir = FULL_BACKUP_DIR / _now().strftime("%Y%m%d")
+    rollback_base = SITE_BACKUP_DIR if scope == "site" else FULL_BACKUP_DIR
+    rollback_dir = rollback_base / _now().strftime("%Y%m%d")
     rollback_dir.mkdir(parents=True, exist_ok=True)
-    rollback_zip = rollback_dir / f"pre_restore_{ts}.zip"
+    rollback_name = f"pre_restore_site_{site_code}_{ts}.zip" if scope == "site" else f"pre_restore_{ts}.zip"
+    rollback_zip = rollback_dir / rollback_name
     tmp_dir = TMP_BACKUP_DIR / f"restore_{ts}_{uuid.uuid4().hex[:8]}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     meta: Dict[str, Any] = {
         "ok": True,
         "operation": "restore",
+        "scope": scope or "full",
         "timezone": backup_timezone_name(),
         "source_relative_path": str(relative_path or "").replace("\\", "/"),
         "source_file_name": zip_path.name,
@@ -989,77 +1316,155 @@ def restore_backup_zip(
         "notes": [],
         "rollback_relative_path": "",
     }
+    if scope == "site":
+        meta["site_code"] = site_code
+        meta["site_name"] = site_name
 
     maintenance_released = False
     if with_maintenance:
         set_maintenance_mode(
             active=True,
-            message="서버 점검 중입니다. DB 복구가 진행 중입니다. 잠시 후 자동 복구됩니다.",
+            message=(
+                "서버 점검 중입니다. 단지코드 DB 복구가 진행 중입니다. 잠시 후 자동 복구됩니다."
+                if scope == "site"
+                else "서버 점검 중입니다. DB 복구가 진행 중입니다. 잠시 후 자동 복구됩니다."
+            ),
             reason="db_restore",
             updated_by=meta["actor"],
         )
 
     try:
-        staged: Dict[str, Path] = {}
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            members = set(zf.namelist())
+        if scope == "site":
+            staged_payloads: Dict[str, Dict[str, Any]] = {}
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                members = set(zf.namelist())
+                for key in selected_keys:
+                    member = f"site_data/{key}.json"
+                    if member not in members:
+                        raise ValueError(f"백업 파일에 '{member}' 항목이 없습니다.")
+                    with zf.open(member, "r") as src_fp:
+                        raw = json.loads(src_fp.read().decode("utf-8", errors="ignore"))
+                    if not isinstance(raw, dict):
+                        raise ValueError(f"{member} 형식이 올바르지 않습니다.")
+                    staged_site_code = str(raw.get("site_code") or "").strip().upper()
+                    if staged_site_code and staged_site_code != site_code:
+                        raise ValueError(f"{key} site_code 불일치: {staged_site_code} != {site_code}")
+                    staged_payloads[key] = raw
+                    meta["checks"].append(
+                        {
+                            "key": key,
+                            "label": str(catalog[key]["label"]),
+                            "stage": "staged",
+                            "ok": True,
+                            "detail": "ok",
+                            "rows": int(raw.get("total_rows") or 0),
+                        }
+                    )
+
+            with zipfile.ZipFile(rollback_zip, "w", compression=zipfile.ZIP_DEFLATED) as rb:
+                rb_meta = {
+                    "ok": True,
+                    "operation": "pre_restore_snapshot",
+                    "scope": "site",
+                    "created_at": _now_iso(),
+                    "timezone": backup_timezone_name(),
+                    "actor": meta["actor"],
+                    "site_code": site_code,
+                    "site_name": site_name,
+                    "source_restore_file": meta["source_relative_path"],
+                    "target_keys": list(selected_keys),
+                }
+                for key in selected_keys:
+                    if key == "facility":
+                        snap = _export_facility_site_data(site_code, site_name)
+                    elif key == "parking":
+                        snap = _export_parking_site_data(site_code, site_name)
+                    else:
+                        continue
+                    rb.writestr(f"site_data/{key}.json", json.dumps(snap, ensure_ascii=False, indent=2))
+                rb.writestr("manifest.json", json.dumps(rb_meta, ensure_ascii=False, indent=2))
+
             for key in selected_keys:
-                member = f"db/{key}.db"
-                if member not in members:
-                    raise ValueError(f"백업 파일에 '{key}' DB가 없습니다.")
-                out = tmp_dir / f"restore_{key}.db"
-                with zf.open(member, "r") as src_fp, open(out, "wb") as dst_fp:
-                    shutil.copyfileobj(src_fp, dst_fp)
-                check = _sqlite_quick_check(out)
+                if key == "facility":
+                    summary = _restore_facility_site_payload(site_code, staged_payloads.get(key, {}))
+                elif key == "parking":
+                    summary = _restore_parking_site_payload(site_code, staged_payloads.get(key, {}))
+                else:
+                    continue
+                meta["checks"].append(
+                    {
+                        "key": key,
+                        "label": str(catalog[key]["label"]),
+                        "stage": "restored",
+                        "ok": True,
+                        "detail": "ok",
+                        "deleted_rows": int(summary.get("deleted_rows") or 0),
+                        "inserted_rows": int(summary.get("inserted_rows") or 0),
+                    }
+                )
+        else:
+            staged: Dict[str, Path] = {}
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                members = set(zf.namelist())
+                for key in selected_keys:
+                    member = f"db/{key}.db"
+                    if member not in members:
+                        raise ValueError(f"백업 파일에 '{key}' DB가 없습니다.")
+                    out = tmp_dir / f"restore_{key}.db"
+                    with zf.open(member, "r") as src_fp, open(out, "wb") as dst_fp:
+                        shutil.copyfileobj(src_fp, dst_fp)
+                    check = _sqlite_quick_check(out)
+                    chk = {
+                        "key": key,
+                        "label": str(catalog[key]["label"]),
+                        "stage": "staged",
+                        "ok": bool(check["ok"]),
+                        "detail": str(check["detail"]),
+                    }
+                    meta["checks"].append(chk)
+                    if not chk["ok"]:
+                        raise RuntimeError(f"{chk['label']} 복구본 점검 실패: {chk['detail']}")
+                    staged[key] = out
+
+            # Keep a rollback snapshot before overwrite.
+            with zipfile.ZipFile(rollback_zip, "w", compression=zipfile.ZIP_DEFLATED) as rb:
+                rb_meta = {
+                    "ok": True,
+                    "operation": "pre_restore_snapshot",
+                    "scope": "full",
+                    "created_at": _now_iso(),
+                    "timezone": backup_timezone_name(),
+                    "actor": meta["actor"],
+                    "source_restore_file": meta["source_relative_path"],
+                    "target_keys": list(selected_keys),
+                }
+                for key in selected_keys:
+                    dst_db = Path(str(catalog[key]["path"]))
+                    if not dst_db.exists():
+                        continue
+                    snap = tmp_dir / f"before_{key}.db"
+                    _sqlite_backup_copy(dst_db, snap)
+                    rb.write(snap, arcname=f"db/{key}.db")
+                rb.writestr("manifest.json", json.dumps(rb_meta, ensure_ascii=False, indent=2))
+
+            for key in selected_keys:
+                src_db = staged[key]
+                dst_db = Path(str(catalog[key]["path"]))
+                _sqlite_restore_copy(src_db, dst_db)
+                check = _sqlite_quick_check(dst_db)
                 chk = {
                     "key": key,
                     "label": str(catalog[key]["label"]),
-                    "stage": "staged",
+                    "stage": "restored",
                     "ok": bool(check["ok"]),
                     "detail": str(check["detail"]),
                 }
                 meta["checks"].append(chk)
                 if not chk["ok"]:
-                    raise RuntimeError(f"{chk['label']} 복구본 점검 실패: {chk['detail']}")
-                staged[key] = out
+                    raise RuntimeError(f"{chk['label']} 복구 후 점검 실패: {chk['detail']}")
 
-        # Keep a rollback snapshot before overwrite.
-        with zipfile.ZipFile(rollback_zip, "w", compression=zipfile.ZIP_DEFLATED) as rb:
-            rb_meta = {
-                "ok": True,
-                "operation": "pre_restore_snapshot",
-                "created_at": _now_iso(),
-                "timezone": backup_timezone_name(),
-                "actor": meta["actor"],
-                "source_restore_file": meta["source_relative_path"],
-                "target_keys": list(selected_keys),
-            }
-            for key in selected_keys:
-                dst_db = Path(str(catalog[key]["path"]))
-                if not dst_db.exists():
-                    continue
-                snap = tmp_dir / f"before_{key}.db"
-                _sqlite_backup_copy(dst_db, snap)
-                rb.write(snap, arcname=f"db/{key}.db")
-            rb.writestr("manifest.json", json.dumps(rb_meta, ensure_ascii=False, indent=2))
         rb_relative = str(rollback_zip.relative_to(BACKUP_ROOT)).replace("\\", "/")
         meta["rollback_relative_path"] = rb_relative
-
-        for key in selected_keys:
-            src_db = staged[key]
-            dst_db = Path(str(catalog[key]["path"]))
-            _sqlite_restore_copy(src_db, dst_db)
-            check = _sqlite_quick_check(dst_db)
-            chk = {
-                "key": key,
-                "label": str(catalog[key]["label"]),
-                "stage": "restored",
-                "ok": bool(check["ok"]),
-                "detail": str(check["detail"]),
-            }
-            meta["checks"].append(chk)
-            if not chk["ok"]:
-                raise RuntimeError(f"{chk['label']} 복구 후 점검 실패: {chk['detail']}")
 
         live_checks = run_live_db_checks()
         meta["post_restore_live_checks"] = live_checks

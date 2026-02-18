@@ -202,7 +202,7 @@
 
     applySiteIdentityVisibility();
     if (!canViewSiteIdentity(me)) stripSiteIdentityFromUrl();
-    $("#restoreUploadWrap")?.classList.toggle("hidden", !isAdmin(me));
+    $("#restoreUploadWrap")?.classList.toggle("hidden", !canManageBackup(me));
   }
 
   function renderScheduleInfo(schedules) {
@@ -321,9 +321,14 @@
     const sitePart = canViewSiteIdentity(me) && item.site_code ? ` · 단지코드 ${escapeHtml(item.site_code)}` : "";
     const rel = escapeHtml(item.relative_path || "");
     const size = prettyBytes(item.file_size_bytes);
-    const rawScope = String(item.scope || "").trim().toLowerCase();
-    const restoreBtn = isAdmin(me) && rawScope === "full"
-      ? `<button class="btn danger" type="button" data-restore="${rel}">복구</button>`
+    const rawScope = String(item.scope || "").trim().toLowerCase() || "full";
+    const mySiteCode = String(me?.site_code || "").trim().toUpperCase();
+    const itemSiteCode = String(item.site_code || "").trim().toUpperCase();
+    const canRestoreItem = isAdmin(me)
+      ? (rawScope === "full" || rawScope === "site")
+      : (rawScope === "site" && mySiteCode && itemSiteCode === mySiteCode);
+    const restoreBtn = canRestoreItem
+      ? `<button class="btn danger" type="button" data-restore="${rel}" data-restore-scope="${escapeHtml(rawScope)}">복구</button>`
       : "";
     return `
       <div class="history-item">
@@ -420,15 +425,17 @@
     }
   }
 
-  async function restoreBackup(path) {
+  async function restoreBackup(path, scope = "") {
     const safePath = String(path || "").trim();
     if (!safePath) {
       setMsg("복구할 백업 파일 경로가 없습니다.", true);
       return;
     }
+    const cleanScope = String(scope || "").trim().toLowerCase();
+    const isSiteRestore = cleanScope === "site";
     const ok = confirm(
-      "선택한 백업으로 DB를 복구할까요?\n" +
-      "- 전체 시스템 점검모드가 잠시 활성화됩니다.\n" +
+      `선택한 백업(${isSiteRestore ? "단지코드 범위" : "전체 시스템"})으로 DB를 복구할까요?\n` +
+      `- ${isSiteRestore ? "단지코드 데이터가 복구됩니다." : "전체 시스템 점검모드가 잠시 활성화됩니다."}\n` +
       "- 복구 전 현재 DB 스냅샷(pre_restore)이 자동 생성됩니다."
     );
     if (!ok) return;
@@ -438,7 +445,7 @@
       method: "POST",
       body: JSON.stringify({
         path: safePath,
-        with_maintenance: true,
+        with_maintenance: !isSiteRestore,
       }),
     });
     const result = data && data.result ? data.result : {};
@@ -450,9 +457,12 @@
   }
 
   async function restoreBackupFromFile() {
-    if (!isAdmin(me)) {
-      setMsg("백업파일 복구는 최고/운영관리자만 가능합니다.", true);
+    if (!canManageBackup(me)) {
+      setMsg("백업파일 복구 권한이 없습니다.", true);
       return;
+    }
+    if (!isAdmin(me)) {
+      setMsg("단지관리자는 본인 단지코드(site) 백업 파일만 복구할 수 있습니다.");
     }
     const fileEl = $("#restoreFile");
     const file = fileEl?.files?.[0];
@@ -464,7 +474,7 @@
 
     const ok = confirm(
       `선택한 파일(${name})로 DB를 복구할까요?\n` +
-      "- 전체 시스템 점검모드가 잠시 활성화됩니다.\n" +
+      "- 파일 범위(full/site)는 서버에서 자동 판별합니다.\n" +
       "- 복구 전 현재 DB 스냅샷(pre_restore)이 자동 생성됩니다."
     );
     if (!ok) return;
@@ -474,7 +484,7 @@
     if (token) headers.Authorization = `Bearer ${token}`;
     const fd = new FormData();
     fd.append("backup_file", file, name);
-    fd.append("with_maintenance", "true");
+    fd.append("with_maintenance", isAdmin(me) ? "true" : "false");
 
     setMsg("업로드 복구 실행 중입니다...");
     const res = await fetch("/api/backup/restore/upload", {
@@ -561,8 +571,9 @@
       const restoreBtn = e.target.closest("button[data-restore]");
       if (!restoreBtn) return;
       const path = String(restoreBtn.dataset.restore || "").trim();
+      const scope = String(restoreBtn.dataset.restoreScope || "").trim().toLowerCase();
       if (!path) return;
-      restoreBackup(path).catch((err) => setMsg(err.message || String(err), true));
+      restoreBackup(path, scope).catch((err) => setMsg(err.message || String(err), true));
     });
   }
 

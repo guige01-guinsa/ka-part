@@ -1991,24 +1991,66 @@ def _validate_uploaded_restore_backup(relative_path: str) -> Dict[str, Any]:
     if not isinstance(manifest, dict):
         raise HTTPException(status_code=400, detail="manifest 형식이 올바르지 않습니다.")
     scope = str(manifest.get("scope") or "").strip().lower()
-    if scope and scope != "full":
-        raise HTTPException(status_code=400, detail="전체 시스템 백업(full) 파일만 복구할 수 있습니다.")
+    if scope not in {"", "full", "site"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 백업 범위(scope)입니다.")
+    if not scope:
+        if any(name.startswith("site_data/") and name.lower().endswith(".json") for name in names):
+            scope = "site"
+        else:
+            scope = "full"
+    manifest["scope"] = scope
 
     target_keys = [
         str(x or "").strip().lower()
         for x in (manifest.get("target_keys") or [])
         if str(x or "").strip()
     ]
-    if target_keys:
-        missing = [k for k in target_keys if f"db/{k}.db" not in names]
-        if missing:
-            raise HTTPException(status_code=400, detail=f"복구 파일에 DB 항목이 없습니다: {', '.join(missing)}")
+    if scope == "full":
+        if target_keys:
+            missing = [k for k in target_keys if f"db/{k}.db" not in names]
+            if missing:
+                raise HTTPException(status_code=400, detail=f"복구 파일에 DB 항목이 없습니다: {', '.join(missing)}")
+        else:
+            db_members = [x for x in names if x.startswith("db/") and x.lower().endswith(".db")]
+            if not db_members:
+                raise HTTPException(status_code=400, detail="복구 가능한 DB 파일(db/*.db)이 없습니다.")
     else:
-        db_members = [x for x in names if x.startswith("db/") and x.lower().endswith(".db")]
-        if not db_members:
-            raise HTTPException(status_code=400, detail="복구 가능한 DB 파일(db/*.db)이 없습니다.")
+        site_code = _clean_site_code(manifest.get("site_code"), required=False)
+        if not site_code:
+            raise HTTPException(status_code=400, detail="단지코드(site_code)가 없는 site 백업 파일입니다.")
+        if target_keys:
+            missing = [k for k in target_keys if f"site_data/{k}.json" not in names]
+            if missing:
+                raise HTTPException(status_code=400, detail=f"복구 파일에 site_data 항목이 없습니다: {', '.join(missing)}")
+        else:
+            site_members = [x for x in names if x.startswith("site_data/") and x.lower().endswith(".json")]
+            if not site_members:
+                raise HTTPException(status_code=400, detail="복구 가능한 site_data 파일이 없습니다.")
 
     return manifest
+
+
+def _enforce_restore_permission(user: Dict[str, Any], manifest: Dict[str, Any]) -> None:
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+
+    is_admin = int(user.get("is_admin") or 0) == 1
+    if is_admin:
+        return
+
+    scope = str(manifest.get("scope") or "").strip().lower() or "full"
+    if scope != "site":
+        raise HTTPException(status_code=403, detail="단지관리자는 단지코드(site) 백업만 복구할 수 있습니다.")
+
+    assigned_code = _clean_site_code(user.get("site_code"), required=False)
+    if not assigned_code:
+        raise HTTPException(status_code=403, detail="소속 단지코드가 없어 복구할 수 없습니다.")
+
+    backup_code = _clean_site_code(manifest.get("site_code"), required=False)
+    if not backup_code:
+        raise HTTPException(status_code=400, detail="복구 파일에 단지코드(site_code)가 없습니다.")
+    if backup_code != assigned_code:
+        raise HTTPException(status_code=403, detail="소속 단지코드 백업파일만 복구할 수 있습니다.")
 
 
 def _home_only_site_env_config() -> Dict[str, Any]:
@@ -3586,10 +3628,16 @@ def api_backup_download(request: Request, path: str = Query(...)):
 
 @router.post("/backup/restore")
 def api_backup_restore(request: Request, payload: Dict[str, Any] = Body(default={})):
-    user, _token = _require_admin(request)
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+
     path = str(payload.get("path") or "").strip()
     if not path:
         raise HTTPException(status_code=400, detail="path is required")
+
+    manifest = _validate_uploaded_restore_backup(path)
+    _enforce_restore_permission(user, manifest)
 
     target_payload = payload.get("target_keys", payload.get("targets", []))
     if isinstance(target_payload, str):
@@ -3626,9 +3674,14 @@ async def api_backup_restore_upload(
     backup_file: UploadFile = File(...),
     with_maintenance: str = Form("true"),
 ):
-    user, _token = _require_admin(request)
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+
     actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
     saved = _store_uploaded_restore_backup(backup_file, actor_login=actor_login)
+    manifest = _validate_uploaded_restore_backup(str(saved.get("relative_path") or ""))
+    _enforce_restore_permission(user, manifest)
 
     try:
         result = restore_backup_zip(
