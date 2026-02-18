@@ -1148,53 +1148,168 @@ def inspection_runs_detail(run_id: int, request: Request):
     user, _token = _require_inspection_user(request)
     con = _connect()
     try:
-        run_row = con.execute(
-            """
-            SELECT r.*, t.name AS target_name, tp.name AS template_name
-            FROM inspection_runs r
-            LEFT JOIN inspection_targets t ON t.id=r.target_id
-            LEFT JOIN inspection_templates tp ON tp.id=r.template_id
-            WHERE r.id=?
-            LIMIT 1
-            """,
-            (int(run_id),),
-        ).fetchone()
-        if not run_row:
-            raise HTTPException(status_code=404, detail="점검 실행내역을 찾을 수 없습니다.")
-        run = dict(run_row)
-        _run_scope_check(user, run)
-        items = [
-            dict(x)
-            for x in con.execute(
-                """
-                SELECT id, item_key, item_text, category, severity, requires_photo, requires_note,
-                       result, note, photo_path, photo_name, updated_at
-                FROM inspection_run_items
-                WHERE run_id=?
-                ORDER BY id ASC
-                """,
-                (int(run_id),),
-            ).fetchall()
-        ]
-        approvals = [
-            dict(x)
-            for x in con.execute(
-                """
-                SELECT step_no, approver_login, approver_name, decision, comment, decided_at, created_at
-                FROM inspection_approvals
-                WHERE run_id=?
-                ORDER BY step_no ASC
-                """,
-                (int(run_id),),
-            ).fetchall()
-        ]
-        archive = con.execute(
-            "SELECT run_id, pdf_relpath, checksum, archived_by, archived_at FROM inspection_archives WHERE run_id=? LIMIT 1",
-            (int(run_id),),
-        ).fetchone()
-        return {"ok": True, "run": run, "items": items, "approvals": approvals, "archive": dict(archive) if archive else None}
+        detail = _query_run_detail_data(con=con, user=user, run_id=run_id)
+        return {"ok": True, **detail}
     finally:
         con.close()
+
+
+def _query_run_detail_data(*, con, user: Dict[str, Any], run_id: int) -> Dict[str, Any]:
+    run_row = con.execute(
+        """
+        SELECT r.*, t.name AS target_name, tp.name AS template_name
+        FROM inspection_runs r
+        LEFT JOIN inspection_targets t ON t.id=r.target_id
+        LEFT JOIN inspection_templates tp ON tp.id=r.template_id
+        WHERE r.id=?
+        LIMIT 1
+        """,
+        (int(run_id),),
+    ).fetchone()
+    if not run_row:
+        raise HTTPException(status_code=404, detail="점검 실행내역을 찾을 수 없습니다.")
+    run = dict(run_row)
+    _run_scope_check(user, run)
+    items = [
+        dict(x)
+        for x in con.execute(
+            """
+            SELECT id, item_key, item_text, category, severity, requires_photo, requires_note,
+                   result, note, photo_path, photo_name, updated_at
+            FROM inspection_run_items
+            WHERE run_id=?
+            ORDER BY id ASC
+            """,
+            (int(run_id),),
+        ).fetchall()
+    ]
+    approvals = [
+        dict(x)
+        for x in con.execute(
+            """
+            SELECT step_no, approver_login, approver_name, decision, comment, decided_at, created_at
+            FROM inspection_approvals
+            WHERE run_id=?
+            ORDER BY step_no ASC
+            """,
+            (int(run_id),),
+        ).fetchall()
+    ]
+    archive = con.execute(
+        "SELECT run_id, pdf_relpath, checksum, archived_by, archived_at FROM inspection_archives WHERE run_id=? LIMIT 1",
+        (int(run_id),),
+    ).fetchone()
+    return {"run": run, "items": items, "approvals": approvals, "archive": dict(archive) if archive else None}
+
+
+@router.get("/inspection/runs/{run_id}/export.xlsx")
+def inspection_runs_detail_export_xlsx(run_id: int, request: Request):
+    user, _token = _require_inspection_user(request)
+    con = _connect()
+    try:
+        detail = _query_run_detail_data(con=con, user=user, run_id=run_id)
+    finally:
+        con.close()
+
+    run = detail.get("run") or {}
+    items = detail.get("items") or []
+    approvals = detail.get("approvals") or []
+    archive = detail.get("archive") or {}
+
+    wb = Workbook()
+    ws_meta = wb.active
+    ws_meta.title = "점검개요"
+    ws_meta.append(["항목", "값"])
+    ws_meta_rows = [
+        ("점검ID", int(run.get("id") or 0)),
+        ("점검코드", str(run.get("run_code") or "")),
+        ("단지코드", str(run.get("site_code") or "")),
+        ("점검일자", str(run.get("run_date") or "")),
+        ("상태", _run_status_label(run.get("status"))),
+        ("점검대상", str(run.get("target_name") or "")),
+        ("점검표", str(run.get("template_name") or "")),
+        ("점검자ID", str(run.get("inspector_login") or "")),
+        ("점검자명", str(run.get("inspector_name") or "")),
+        ("메모", str(run.get("note") or "")),
+        ("생성일", str(run.get("created_at") or "")),
+        ("갱신일", str(run.get("updated_at") or "")),
+        ("완료일", str(run.get("completed_at") or "")),
+    ]
+    for key, value in ws_meta_rows:
+        ws_meta.append([key, value])
+    ws_meta.column_dimensions["A"].width = 18
+    ws_meta.column_dimensions["B"].width = 52
+
+    ws_items = wb.create_sheet("점검항목")
+    item_headers = ["ID", "분류", "항목", "결과", "메모", "사진파일", "갱신일"]
+    ws_items.append(item_headers)
+    for row in items:
+        ws_items.append(
+            [
+                int(row.get("id") or 0),
+                str(row.get("category") or ""),
+                str(row.get("item_text") or row.get("item_key") or ""),
+                _result_label(row.get("result") or "NA"),
+                str(row.get("note") or ""),
+                str(row.get("photo_name") or ""),
+                str(row.get("updated_at") or ""),
+            ]
+        )
+    for col_idx, header in enumerate(item_headers, start=1):
+        max_len = len(str(header))
+        for row in ws_items.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+            value = row[0].value
+            if value is None:
+                continue
+            max_len = max(max_len, len(str(value)))
+        ws_items.column_dimensions[get_column_letter(col_idx)].width = max(10, min(42, max_len + 2))
+    ws_items.freeze_panes = "A2"
+
+    ws_approvals = wb.create_sheet("결재이력")
+    approval_headers = ["단계", "결재자ID", "결재자명", "결정", "코멘트", "결정시각", "생성시각"]
+    ws_approvals.append(approval_headers)
+    for row in approvals:
+        ws_approvals.append(
+            [
+                int(row.get("step_no") or 0),
+                str(row.get("approver_login") or ""),
+                str(row.get("approver_name") or ""),
+                str(row.get("decision") or "PENDING"),
+                str(row.get("comment") or ""),
+                str(row.get("decided_at") or ""),
+                str(row.get("created_at") or ""),
+            ]
+        )
+    for col_idx, header in enumerate(approval_headers, start=1):
+        max_len = len(str(header))
+        for row in ws_approvals.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+            value = row[0].value
+            if value is None:
+                continue
+            max_len = max(max_len, len(str(value)))
+        ws_approvals.column_dimensions[get_column_letter(col_idx)].width = max(10, min(38, max_len + 2))
+    ws_approvals.freeze_panes = "A2"
+
+    if archive:
+        ws_archive = wb.create_sheet("보관정보")
+        ws_archive.append(["항목", "값"])
+        ws_archive.append(["PDF 경로", str(archive.get("pdf_relpath") or "")])
+        ws_archive.append(["체크섬", str(archive.get("checksum") or "")])
+        ws_archive.append(["보관자", str(archive.get("archived_by") or "")])
+        ws_archive.append(["보관시각", str(archive.get("archived_at") or "")])
+        ws_archive.column_dimensions["A"].width = 18
+        ws_archive.column_dimensions["B"].width = 60
+
+    bio = BytesIO()
+    wb.save(bio)
+    run_code = str(run.get("run_code") or f"run_{int(run_id)}")
+    safe_run_code = re.sub(r"[^A-Za-z0-9._-]+", "_", run_code)
+    file_name = f"inspection_run_{safe_run_code}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=bio.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+    )
 
 
 @router.patch("/inspection/runs/{run_id}/items")

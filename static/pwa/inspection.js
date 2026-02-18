@@ -1049,6 +1049,55 @@
     window.open(`/api/inspection/archives/${runId}/pdf`, "_blank");
   }
 
+  async function exportRunDetailExcel() {
+    const runId = Number(state.selectedRunId || 0);
+    if (runId <= 0) {
+      msg("점검 목록에서 상세 내역을 먼저 선택해 주세요.", true);
+      return;
+    }
+    const token = getToken();
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/inspection/runs/${runId}/export.xlsx`, {
+      method: "GET",
+      headers,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let detail = text;
+      try {
+        const body = JSON.parse(text);
+        detail = body?.detail || text;
+      } catch (_e) {
+        // keep original text
+      }
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    let fileName = `inspection_run_${runId}.xlsx`;
+    const cd = String(res.headers.get("content-disposition") || "");
+    const m = cd.match(/filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
+    if (m) {
+      const raw = m[1] || m[2] || "";
+      if (raw) {
+        try {
+          fileName = decodeURIComponent(raw);
+        } catch (_e) {
+          fileName = raw;
+        }
+      }
+    }
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    msg("점검 상세 엑셀 다운로드 완료");
+  }
+
   async function init() {
     try {
       if (!window.KAAuth) throw new Error("auth.js가 로드되지 않았습니다.");
@@ -1065,6 +1114,7 @@
       $("#btnIssueApprovalCode")?.addEventListener("click", () => issueApprovalCode().catch((e) => msg(e.message || e, true)));
       $("#btnApproveRun")?.addEventListener("click", () => approveRun().catch((e) => msg(e.message || e, true)));
       $("#btnRejectRun")?.addEventListener("click", () => rejectRun().catch((e) => msg(e.message || e, true)));
+      $("#btnExportRunExcel")?.addEventListener("click", () => exportRunDetailExcel().catch((e) => msg(e.message || e, true)));
       $("#btnVerifyArchive")?.addEventListener("click", () => verifyArchive().catch((e) => verifyMsg(e.message || e, true)));
       $("#btnOpenPdf")?.addEventListener("click", openArchivePdf);
       $("#btnQuickSetup")?.addEventListener("click", () => quickSetup().catch((e) => msg(e.message || e, true)));
