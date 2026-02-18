@@ -128,11 +128,6 @@
 
     if (!setupCard || !setupHint) return;
 
-    if (hasTargets && hasTemplates) {
-      setupCard.hidden = true;
-      return;
-    }
-
     const manager = isManagerUser();
     if (!manager) {
       setupCard.hidden = true;
@@ -141,7 +136,9 @@
     }
 
     setupCard.hidden = false;
-    if (!hasTargets && !hasTemplates) {
+    if (hasTargets && hasTemplates) {
+      setupHint.textContent = "새 점검대상/점검표를 추가로 만들 수 있습니다. 항목 수를 정하고 세부리스트를 입력해 주세요.";
+    } else if (!hasTargets && !hasTemplates) {
       setupHint.textContent = "현재 단지에 점검대상과 점검표가 없습니다. 아래 버튼으로 기본 구성을 생성해 주세요.";
     } else if (!hasTargets) {
       setupHint.textContent = "점검대상이 없습니다. 점검대상을 먼저 생성해 주세요.";
