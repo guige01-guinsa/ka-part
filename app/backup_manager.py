@@ -471,7 +471,7 @@ def _collect_site_names(con: sqlite3.Connection, site_code: str, fallback_site_n
     return sorted(names)
 
 
-def _export_facility_site_data(site_code: str, site_name: str = "") -> Dict[str, Any]:
+def _export_facility_site_data(site_code: str, site_name: str = "", include_user_tables: bool = True) -> Dict[str, Any]:
     db_path = Path(FACILITY_DB_PATH).resolve()
     out: Dict[str, Any] = {
         "db_key": "facility",
@@ -496,7 +496,8 @@ def _export_facility_site_data(site_code: str, site_name: str = "") -> Dict[str,
         tables: Dict[str, Any] = {}
         tables["site_registry"] = _query_by_site_code(con, "site_registry", site_code)
         tables["site_env_configs"] = _query_by_site_code(con, "site_env_configs", site_code)
-        tables["staff_users"] = _query_by_site_code(con, "staff_users", site_code)
+        if include_user_tables:
+            tables["staff_users"] = _query_by_site_code(con, "staff_users", site_code)
 
         sites_rows: List[Dict[str, Any]] = []
         if names and _table_exists(con, "sites"):
@@ -722,6 +723,7 @@ def _metadata_base(
     site_code: str = "",
     site_name: str = "",
     maintenance_enabled: bool = False,
+    contains_user_data: bool = False,
 ) -> Dict[str, Any]:
     created_at = _now_iso()
     return {
@@ -738,6 +740,7 @@ def _metadata_base(
         "target_keys": [str(x["key"]) for x in target_items],
         "target_labels": [str(x["label"]) for x in target_items],
         "maintenance_enabled": bool(maintenance_enabled),
+        "contains_user_data": bool(contains_user_data),
         "notes": [],
         "checks": [],
     }
@@ -773,6 +776,7 @@ def _run_full_backup(
         actor=actor,
         target_items=target_items,
         maintenance_enabled=maintenance_enabled,
+        contains_user_data=True,
     )
     maintenance_released = False
     if maintenance_enabled:
@@ -864,6 +868,7 @@ def _run_site_backup(
     actor: str,
     site_code: str,
     site_name: str,
+    include_user_tables: bool,
 ) -> Dict[str, Any]:
     ts = _now().strftime("%Y%m%d_%H%M%S")
     safe_trigger = _sanitize_token(trigger, default="manual")
@@ -881,13 +886,14 @@ def _run_site_backup(
         site_code=clean_code,
         site_name=clean_name,
         maintenance_enabled=False,
+        contains_user_data=bool(include_user_tables and any(str(x.get("key") or "") == "facility" for x in target_items)),
     )
 
     payloads: Dict[str, Dict[str, Any]] = {}
     for item in target_items:
         key = str(item.get("key") or "")
         if key == "facility":
-            payloads[key] = _export_facility_site_data(clean_code, clean_name)
+            payloads[key] = _export_facility_site_data(clean_code, clean_name, include_user_tables=include_user_tables)
         elif key == "parking":
             payloads[key] = _export_parking_site_data(clean_code, clean_name)
 
@@ -926,6 +932,7 @@ def run_manual_backup(
     site_code: str = "",
     site_name: str = "",
     with_maintenance: bool = False,
+    include_user_tables: bool = True,
 ) -> Dict[str, Any]:
     clean_scope = str(scope or "").strip().lower()
     if clean_scope not in {"full", "site"}:
@@ -958,6 +965,7 @@ def run_manual_backup(
             actor=actor,
             site_code=clean_site_code,
             site_name=str(site_name or "").strip(),
+            include_user_tables=bool(include_user_tables),
         )
     finally:
         _RUN_LOCK.release()
@@ -1018,7 +1026,7 @@ def _rows_int_ids(rows: Iterable[Dict[str, Any]], key: str = "id") -> List[int]:
     return sorted(set(out))
 
 
-def _restore_facility_site_payload(site_code: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _restore_facility_site_payload(site_code: str, payload: Dict[str, Any], include_user_tables: bool = True) -> Dict[str, Any]:
     db_path = Path(FACILITY_DB_PATH).resolve()
     if not db_path.exists():
         raise FileNotFoundError(f"시설관리 DB 파일이 없습니다: {db_path}")
@@ -1103,16 +1111,16 @@ def _restore_facility_site_payload(site_code: str, payload: Dict[str, Any]) -> D
             "inspection_templates",
             "inspection_targets",
             "complaints",
-            "staff_users",
             "site_env_configs",
             "site_registry",
         ]:
             _add_count(deleted, table, _exec_delete_by_site_code(con, table, clean_site_code))
+        if include_user_tables:
+            _add_count(deleted, "staff_users", _exec_delete_by_site_code(con, "staff_users", clean_site_code))
 
         for table in [
             "site_registry",
             "site_env_configs",
-            "staff_users",
             "sites",
             "entries",
             "entry_values",
@@ -1144,6 +1152,9 @@ def _restore_facility_site_payload(site_code: str, payload: Dict[str, Any]) -> D
         ]:
             rows = _payload_table_rows(payload, table)
             _add_count(inserted, table, _exec_upsert_rows(con, table, rows))
+        if include_user_tables:
+            rows = _payload_table_rows(payload, "staff_users")
+            _add_count(inserted, "staff_users", _exec_upsert_rows(con, "staff_users", rows))
 
         con.commit()
     except Exception:
@@ -1225,6 +1236,7 @@ def restore_backup_zip(
     relative_path: str,
     target_keys: Iterable[str] | None = None,
     with_maintenance: bool = True,
+    include_user_tables: bool = True,
 ) -> Dict[str, Any]:
     zip_path = resolve_backup_file(relative_path)
     manifest = _read_manifest_from_zip(zip_path)
@@ -1283,6 +1295,7 @@ def restore_backup_zip(
         "target_keys": list(selected_keys),
         "target_labels": [str(catalog[k]["label"]) for k in selected_keys],
         "with_maintenance": bool(with_maintenance),
+        "include_user_tables": bool(include_user_tables),
         "checks": [],
         "notes": [],
         "rollback_relative_path": "",
@@ -1347,7 +1360,7 @@ def restore_backup_zip(
                 }
                 for key in selected_keys:
                     if key == "facility":
-                        snap = _export_facility_site_data(site_code, site_name)
+                        snap = _export_facility_site_data(site_code, site_name, include_user_tables=bool(include_user_tables))
                     elif key == "parking":
                         snap = _export_parking_site_data(site_code, site_name)
                     else:
@@ -1357,7 +1370,11 @@ def restore_backup_zip(
 
             for key in selected_keys:
                 if key == "facility":
-                    summary = _restore_facility_site_payload(site_code, staged_payloads.get(key, {}))
+                    summary = _restore_facility_site_payload(
+                        site_code,
+                        staged_payloads.get(key, {}),
+                        include_user_tables=bool(include_user_tables),
+                    )
                 elif key == "parking":
                     summary = _restore_parking_site_payload(site_code, staged_payloads.get(key, {}))
                 else:
@@ -1675,6 +1692,7 @@ def run_scheduled_backups(now: datetime | None = None) -> Dict[str, Any]:
                     site_code=str(site.get("site_code") or "").strip().upper(),
                     site_name=str(site.get("site_name") or "").strip(),
                     with_maintenance=False,
+                    include_user_tables=False,
                 )
             state["site_last_week"] = week_key
             changed = True

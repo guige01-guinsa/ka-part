@@ -322,21 +322,28 @@
     const rel = escapeHtml(item.relative_path || "");
     const size = prettyBytes(item.file_size_bytes);
     const rawScope = String(item.scope || "").trim().toLowerCase() || "full";
+    const hasUserData = !!item.contains_user_data;
     const mySiteCode = String(me?.site_code || "").trim().toUpperCase();
     const itemSiteCode = String(item.site_code || "").trim().toUpperCase();
+    const canDownloadItem = isAdmin(me) || !hasUserData;
     const canRestoreItem = isAdmin(me)
       ? (rawScope === "full" || rawScope === "site")
-      : (rawScope === "site" && mySiteCode && itemSiteCode === mySiteCode);
+      : (!hasUserData && rawScope === "site" && mySiteCode && itemSiteCode === mySiteCode);
+    const downloadBtn = canDownloadItem
+      ? `<button class="btn" type="button" data-download="${rel}">다운로드</button>`
+      : "";
     const restoreBtn = canRestoreItem
       ? `<button class="btn danger" type="button" data-restore="${rel}" data-restore-scope="${escapeHtml(rawScope)}">복구</button>`
       : "";
+    const userDataTag = hasUserData ? `<span class="tag">사용자정보 포함(관리자 전용)</span>` : "";
     return `
       <div class="history-item">
         <div class="line">
           <div class="file">${fileName}</div>
           <div>
             <span class="tag">${scope}</span>
-            <button class="btn" type="button" data-download="${rel}">다운로드</button>
+            ${userDataTag}
+            ${downloadBtn}
             ${restoreBtn}
           </div>
         </div>

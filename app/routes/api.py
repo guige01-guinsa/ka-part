@@ -1999,6 +1999,7 @@ def _validate_uploaded_restore_backup(relative_path: str) -> Dict[str, Any]:
         else:
             scope = "full"
     manifest["scope"] = scope
+    contains_user_data = bool(manifest.get("contains_user_data"))
 
     target_keys = [
         str(x or "").strip().lower()
@@ -2018,6 +2019,17 @@ def _validate_uploaded_restore_backup(relative_path: str) -> Dict[str, Any]:
         site_code = _clean_site_code(manifest.get("site_code"), required=False)
         if not site_code:
             raise HTTPException(status_code=400, detail="단지코드(site_code)가 없는 site 백업 파일입니다.")
+        if not contains_user_data and "site_data/facility.json" in names:
+            try:
+                with zipfile.ZipFile(zip_path, "r") as inspect_zip:
+                    with inspect_zip.open("site_data/facility.json", "r") as fp:
+                        facility_payload = json.loads(fp.read().decode("utf-8", errors="ignore"))
+                tables = facility_payload.get("tables") if isinstance(facility_payload, dict) else {}
+                if isinstance(tables, dict) and "staff_users" in tables:
+                    contains_user_data = True
+            except Exception:
+                # keep previous detection result
+                pass
         if target_keys:
             missing = [k for k in target_keys if f"site_data/{k}.json" not in names]
             if missing:
@@ -2027,6 +2039,7 @@ def _validate_uploaded_restore_backup(relative_path: str) -> Dict[str, Any]:
             if not site_members:
                 raise HTTPException(status_code=400, detail="복구 가능한 site_data 파일이 없습니다.")
 
+    manifest["contains_user_data"] = bool(contains_user_data)
     return manifest
 
 
@@ -2041,6 +2054,8 @@ def _enforce_restore_permission(user: Dict[str, Any], manifest: Dict[str, Any]) 
     scope = str(manifest.get("scope") or "").strip().lower() or "full"
     if scope != "site":
         raise HTTPException(status_code=403, detail="단지관리자는 단지코드(site) 백업만 복구할 수 있습니다.")
+    if bool(manifest.get("contains_user_data")):
+        raise HTTPException(status_code=403, detail="사용자정보 포함 백업파일은 최고/운영관리자만 복구할 수 있습니다.")
 
     assigned_code = _clean_site_code(user.get("site_code"), required=False)
     if not assigned_code:
@@ -3548,6 +3563,7 @@ def api_backup_run(request: Request, payload: Dict[str, Any] = Body(default={}))
             site_code=site_code,
             site_name=site_name,
             with_maintenance=(scope == "full"),
+            include_user_tables=bool(is_admin),
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
@@ -3588,6 +3604,25 @@ def api_backup_history(
         scope=clean_scope,
         site_code=clean_site_code,
     )
+    if not is_admin:
+        filtered: List[Dict[str, Any]] = []
+        for item in items:
+            scope_value = str(item.get("scope") or "").strip().lower()
+            if scope_value != "site":
+                continue
+            rel = str(item.get("relative_path") or "").strip()
+            if not rel:
+                continue
+            try:
+                manifest = _validate_uploaded_restore_backup(rel)
+            except Exception:
+                continue
+            if bool(manifest.get("contains_user_data")):
+                continue
+            merged = dict(item)
+            merged["contains_user_data"] = bool(manifest.get("contains_user_data"))
+            filtered.append(merged)
+        items = filtered
     return {"ok": True, "count": len(items), "items": items}
 
 
@@ -3610,6 +3645,9 @@ def api_backup_download(request: Request, path: str = Query(...)):
             raise HTTPException(status_code=403, detail="소속 단지코드가 없어 다운로드할 수 없습니다.")
         if item_scope != "site" or item_code != assigned_code:
             raise HTTPException(status_code=403, detail="소속 단지코드 백업파일만 다운로드할 수 있습니다.")
+        manifest = _validate_uploaded_restore_backup(str(item.get("relative_path") or path))
+        if bool(manifest.get("contains_user_data")):
+            raise HTTPException(status_code=403, detail="사용자정보 포함 백업파일은 최고/운영관리자만 다운로드할 수 있습니다.")
 
     try:
         target = resolve_backup_file(str(item.get("relative_path") or path))
@@ -3649,12 +3687,14 @@ def api_backup_restore(request: Request, payload: Dict[str, Any] = Body(default=
 
     with_maintenance = _clean_bool(payload.get("with_maintenance"), default=True)
     actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
+    is_admin = int(user.get("is_admin") or 0) == 1
     try:
         result = restore_backup_zip(
             actor=actor_login,
             relative_path=path,
             target_keys=target_keys,
             with_maintenance=with_maintenance,
+            include_user_tables=bool(is_admin),
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
@@ -3682,6 +3722,7 @@ async def api_backup_restore_upload(
     saved = _store_uploaded_restore_backup(backup_file, actor_login=actor_login)
     manifest = _validate_uploaded_restore_backup(str(saved.get("relative_path") or ""))
     _enforce_restore_permission(user, manifest)
+    is_admin = int(user.get("is_admin") or 0) == 1
 
     try:
         result = restore_backup_zip(
@@ -3689,6 +3730,7 @@ async def api_backup_restore_upload(
             relative_path=str(saved.get("relative_path") or ""),
             target_keys=[],
             with_maintenance=_clean_bool(with_maintenance, default=True),
+            include_user_tables=bool(is_admin),
         )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
