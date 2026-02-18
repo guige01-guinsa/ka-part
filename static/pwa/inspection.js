@@ -105,7 +105,7 @@
     const u = state.bootstrapUser || {};
     if (typeof u.can_create_run === "boolean") return !!u.can_create_run;
     const role = String(u.role || "").trim();
-    if (role === "최고/운영관리자" || role === "최고관리자" || role === "운영관리자" || role === "단지대표자" || role === "단지관리자") {
+    if (role === "최고/운영관리자" || role === "최고관리자" || role === "운영관리자" || role === "단지대표자" || role === "단지관리자" || role === "사용자") {
       return true;
     }
     return !!u.is_admin || !!u.is_site_admin;
@@ -638,7 +638,7 @@
 
   async function createRun() {
     if (!canCreateRun()) {
-      msg("점검 생성 권한은 최고/운영관리자와 단지대표자만 가능합니다.", true);
+      msg("점검 생성 권한이 없습니다.", true);
       return;
     }
     const targetId = Number($("#targetId")?.value || 0);
