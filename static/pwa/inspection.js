@@ -150,62 +150,140 @@
   function buildDetailItemInputs(count) {
     const wrap = $("#detailItems");
     if (!wrap) return;
-    const cleanCount = Math.max(1, Math.min(50, Number(count || 0) || 1));
+    const cleanCount = Math.max(1, Math.min(10, Number(count || 0) || 1));
     wrap.innerHTML = "";
+    for (let i = 1; i <= cleanCount; i += 1) wrap.appendChild(buildMajorCard(i));
+  }
+
+  function _clampTreeCount(value) {
+    return Math.max(1, Math.min(10, Number(value || 0) || 1));
+  }
+
+  function buildMajorCard(majorIdx) {
+    const card = document.createElement("div");
+    card.className = "detail-major-card";
+    card.dataset.majorIdx = String(majorIdx);
+    card.innerHTML = `
+      <div class="detail-major-head">
+        <label class="field">
+          <span>대분류 ${majorIdx}</span>
+          <input data-role="major-name" type="text" maxlength="120" placeholder="예: 전기" />
+        </label>
+        <label class="field">
+          <span>중분류 개수(1~10)</span>
+          <input data-role="middle-count" type="number" min="1" max="10" step="1" value="1" />
+        </label>
+        <button data-role="build-middle" class="btn" type="button">중분류 입력폼 만들기</button>
+      </div>
+      <div class="detail-middle-list" data-role="middle-list"></div>
+    `;
+    const btn = card.querySelector("button[data-role='build-middle']");
+    const cnt = card.querySelector("input[data-role='middle-count']");
+    const list = card.querySelector("div[data-role='middle-list']");
+    const rebuild = () => renderMiddleRows(list, _clampTreeCount(cnt?.value));
+    btn?.addEventListener("click", rebuild);
+    rebuild();
+    return card;
+  }
+
+  function renderMiddleRows(listEl, count) {
+    if (!listEl) return;
+    listEl.innerHTML = "";
+    const cleanCount = _clampTreeCount(count);
     for (let i = 1; i <= cleanCount; i += 1) {
       const row = document.createElement("div");
-      row.className = "detail-item-row";
+      row.className = "detail-middle-row";
+      row.dataset.middleIdx = String(i);
       row.innerHTML = `
-        <div class="detail-item-grid">
+        <div class="detail-middle-head">
           <label class="field">
-            <span>세부리스트 ${i} - 대분류</span>
-            <input data-role="detail-major" type="text" maxlength="120" placeholder="예: 전기" />
+            <span>중분류 ${i}</span>
+            <input data-role="middle-name" type="text" maxlength="120" placeholder="예: 수전설비" />
           </label>
           <label class="field">
-            <span>세부리스트 ${i} - 중분류(선택)</span>
-            <input data-role="detail-middle" type="text" maxlength="120" placeholder="예: 수전설비" />
+            <span>소분류 개수(1~10)</span>
+            <input data-role="minor-count" type="number" min="1" max="10" step="1" value="1" />
           </label>
-          <label class="field">
-            <span>세부리스트 ${i} - 소분류(선택)</span>
-            <input data-role="detail-minor" type="text" maxlength="120" placeholder="예: 차단기 상태 확인" />
-          </label>
+          <button data-role="build-minor" class="btn" type="button">소분류 입력폼 만들기</button>
         </div>
+        <div class="detail-minor-grid" data-role="minor-list"></div>
       `;
-      wrap.appendChild(row);
+      const btn = row.querySelector("button[data-role='build-minor']");
+      const cnt = row.querySelector("input[data-role='minor-count']");
+      const minors = row.querySelector("div[data-role='minor-list']");
+      const rebuild = () => renderMinorRows(minors, _clampTreeCount(cnt?.value), i);
+      btn?.addEventListener("click", rebuild);
+      rebuild();
+      listEl.appendChild(row);
+    }
+  }
+
+  function renderMinorRows(listEl, count, middleIdx) {
+    if (!listEl) return;
+    listEl.innerHTML = "";
+    const cleanCount = _clampTreeCount(count);
+    for (let i = 1; i <= cleanCount; i += 1) {
+      const label = document.createElement("label");
+      label.className = "field";
+      label.innerHTML = `
+        <span>소분류 ${middleIdx}-${i}</span>
+        <input data-role="minor-name" type="text" maxlength="120" placeholder="예: 차단기 상태 확인" />
+      `;
+      listEl.appendChild(label);
     }
   }
 
   function collectDetailItemsFromForm() {
-    const rows = Array.from(document.querySelectorAll("#detailItems .detail-item-row"));
-    if (!rows.length) return defaultTemplateItems();
+    const majorCards = Array.from(document.querySelectorAll("#detailItems .detail-major-card"));
+    if (!majorCards.length) return defaultTemplateItems();
 
     const items = [];
     const missing = [];
-    rows.forEach((row, idx) => {
-      const major = String(row.querySelector("input[data-role='detail-major']")?.value || "").trim();
-      const middle = String(row.querySelector("input[data-role='detail-middle']")?.value || "").trim();
-      const minor = String(row.querySelector("input[data-role='detail-minor']")?.value || "").trim();
-      if (!major) {
-        missing.push(idx + 1);
+    let seq = 1;
+    majorCards.forEach((majorCard, majorIdx) => {
+      const majorName = String(majorCard.querySelector("input[data-role='major-name']")?.value || "").trim();
+      if (!majorName) {
+        missing.push(`대분류 ${majorIdx + 1}`);
         return;
       }
-      const detailTextParts = [];
-      if (middle) detailTextParts.push(middle);
-      if (minor) detailTextParts.push(minor);
-      const itemText = detailTextParts.length ? detailTextParts.join(" / ") : major;
-      items.push({
-        item_key: `item_${String(idx + 1).padStart(2, "0")}`,
-        item_text: itemText,
-        category: major,
-        severity: 1,
-        sort_order: (idx + 1) * 10,
-        requires_photo: false,
-        requires_note: false,
-        is_active: true,
+      const middleRows = Array.from(majorCard.querySelectorAll(".detail-middle-row"));
+      if (!middleRows.length) {
+        missing.push(`대분류 ${majorIdx + 1}의 중분류`);
+        return;
+      }
+      middleRows.forEach((middleRow, middleIdx) => {
+        const middleName = String(middleRow.querySelector("input[data-role='middle-name']")?.value || "").trim();
+        if (!middleName) {
+          missing.push(`대분류 ${majorIdx + 1} - 중분류 ${middleIdx + 1}`);
+          return;
+        }
+        const minorInputs = Array.from(middleRow.querySelectorAll("input[data-role='minor-name']"));
+        if (!minorInputs.length) {
+          missing.push(`대분류 ${majorIdx + 1} - 중분류 ${middleIdx + 1}의 소분류`);
+          return;
+        }
+        minorInputs.forEach((minorInput, minorIdx) => {
+          const minorName = String(minorInput.value || "").trim();
+          if (!minorName) {
+            missing.push(`대분류 ${majorIdx + 1} - 중분류 ${middleIdx + 1} - 소분류 ${minorIdx + 1}`);
+            return;
+          }
+          items.push({
+            item_key: `item_${String(seq).padStart(3, "0")}`,
+            item_text: `${middleName} / ${minorName}`,
+            category: majorName,
+            severity: 1,
+            sort_order: seq * 10,
+            requires_photo: false,
+            requires_note: false,
+            is_active: true,
+          });
+          seq += 1;
+        });
       });
     });
     if (missing.length) {
-      throw new Error(`세부리스트 항목의 대분류를 입력해 주세요: ${missing.join(", ")}번`);
+      throw new Error(`트리 항목 입력을 확인해 주세요: ${missing.join(", ")}`);
     }
     return items;
   }
@@ -262,8 +340,8 @@
     if ($("#quickTemplateName") && !$("#quickTemplateName").value.trim()) {
       $("#quickTemplateName").value = "월간 안전점검표";
     }
-    if ($("#detailItems") && !document.querySelector("#detailItems .detail-item-row")) {
-      buildDetailItemInputs(Number($("#detailItemCount")?.value || 5));
+    if ($("#detailItems") && !document.querySelector("#detailItems .detail-major-card")) {
+      buildDetailItemInputs(Number($("#detailItemCount")?.value || 1));
     }
   }
 

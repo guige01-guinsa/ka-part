@@ -76,14 +76,14 @@
       </div>
       <div class="row">
         <label class="field">
-          <span>세부리스트 항목수</span>
-          <input id="detailItemCount" type="number" min="1" max="50" step="1" value="5" />
+          <span>대분류 개수</span>
+          <input id="detailItemCount" type="number" min="1" max="10" step="1" value="1" />
         </label>
-        <button id="btnBuildDetailItems" class="btn" type="button">세부리스트 입력폼 만들기</button>
+        <button id="btnBuildDetailItems" class="btn" type="button">트리 입력폼 만들기</button>
         <button id="btnQuickSetup" class="btn primary" type="button">리스트 폼 자동 생성</button>
       </div>
       <div id="detailItems" class="detail-items"></div>
-      <div class="muted small">세부리스트 1항목은 대분류/중분류/소분류 3열 입력이며, 대분류는 필수/중·소분류는 선택입니다.</div>
+      <div class="muted small">대분류별 중분류 1~10개, 중분류별 소분류 1~10개 트리 구조로 입력합니다.</div>
       <div class="muted small">최고/운영관리자 또는 단지대표자 권한에서만 생성할 수 있습니다.</div>
     </section>
 
@@ -131,6 +131,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260218a"></script>
-  <script src="/pwa/inspection.js?v=20260218h"></script>
+  <script src="/pwa/inspection.js?v=20260218i"></script>
 </body>
 </html>
