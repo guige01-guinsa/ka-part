@@ -112,6 +112,19 @@ textarea { width: 100%; min-height: 68px; resize: vertical; }
   flex-wrap: wrap;
 }
 
+.detail-items {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.detail-item-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0a1a33;
+  padding: 10px;
+}
+
 @media (max-width: 760px) {
   .item-grid { grid-template-columns: 1fr; }
 }

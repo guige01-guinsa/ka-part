@@ -86,6 +86,20 @@
 
   function isManagerUser() {
     const u = state.bootstrapUser || {};
+    const role = String(u.role || "").trim();
+    if (role === "최고/운영관리자" || role === "최고관리자" || role === "운영관리자" || role === "단지대표자" || role === "단지관리자") {
+      return true;
+    }
+    return !!u.is_admin || !!u.is_site_admin;
+  }
+
+  function canCreateRun() {
+    const u = state.bootstrapUser || {};
+    if (typeof u.can_create_run === "boolean") return !!u.can_create_run;
+    const role = String(u.role || "").trim();
+    if (role === "최고/운영관리자" || role === "최고관리자" || role === "운영관리자" || role === "단지대표자" || role === "단지관리자") {
+      return true;
+    }
     return !!u.is_admin || !!u.is_site_admin;
   }
 
@@ -109,7 +123,8 @@
     const setupHint = $("#setupHint");
     const createBtn = $("#btnCreateRun");
 
-    if (createBtn) createBtn.disabled = !(hasTargets && hasTemplates);
+    const canRunCreate = canCreateRun();
+    if (createBtn) createBtn.disabled = !(hasTargets && hasTemplates && canRunCreate);
 
     if (!setupCard || !setupHint) return;
 
@@ -133,6 +148,53 @@
     } else {
       setupHint.textContent = "점검표가 없습니다. 점검표를 생성해야 점검을 만들 수 있습니다.";
     }
+  }
+
+  function buildDetailItemInputs(count) {
+    const wrap = $("#detailItems");
+    if (!wrap) return;
+    const cleanCount = Math.max(1, Math.min(50, Number(count || 0) || 1));
+    wrap.innerHTML = "";
+    for (let i = 1; i <= cleanCount; i += 1) {
+      const row = document.createElement("div");
+      row.className = "detail-item-row";
+      row.innerHTML = `
+        <label class="field">
+          <span>세부리스트 항목 ${i}</span>
+          <input data-role="detail-item-text" type="text" maxlength="300" placeholder="예: ${i}번 점검항목 내용을 입력하세요." />
+        </label>
+      `;
+      wrap.appendChild(row);
+    }
+  }
+
+  function collectDetailItemsFromForm() {
+    const rows = Array.from(document.querySelectorAll("#detailItems .detail-item-row input[data-role='detail-item-text']"));
+    if (!rows.length) return defaultTemplateItems();
+
+    const items = [];
+    const missing = [];
+    rows.forEach((input, idx) => {
+      const text = String(input.value || "").trim();
+      if (!text) {
+        missing.push(idx + 1);
+        return;
+      }
+      items.push({
+        item_key: `item_${String(idx + 1).padStart(2, "0")}`,
+        item_text: text,
+        category: "",
+        severity: 1,
+        sort_order: (idx + 1) * 10,
+        requires_photo: false,
+        requires_note: false,
+        is_active: true,
+      });
+    });
+    if (missing.length) {
+      throw new Error(`세부리스트 항목 내용을 입력해 주세요: ${missing.join(", ")}번`);
+    }
+    return items;
   }
 
   async function loadBootstrap() {
@@ -187,6 +249,9 @@
     if ($("#quickTemplateName") && !$("#quickTemplateName").value.trim()) {
       $("#quickTemplateName").value = "월간 안전점검표";
     }
+    if ($("#detailItems") && !document.querySelector("#detailItems .detail-item-row")) {
+      buildDetailItemInputs(Number($("#detailItemCount")?.value || 5));
+    }
   }
 
   function renderRuns() {
@@ -231,6 +296,10 @@
   }
 
   async function createRun() {
+    if (!canCreateRun()) {
+      msg("점검 생성 권한은 최고/운영관리자와 단지대표자만 가능합니다.", true);
+      return;
+    }
     const targetId = Number($("#targetId")?.value || 0);
     const templateId = Number($("#templateId")?.value || 0);
     const runDate = ($("#runDate")?.value || "").trim() || todayYmd();
@@ -266,12 +335,13 @@
 
   async function quickSetup() {
     if (!isManagerUser()) {
-      msg("관리자/운영관리자 계정에서만 기초정보를 생성할 수 있습니다.", true);
+      msg("최고/운영관리자 또는 단지대표자 권한에서만 기초정보를 생성할 수 있습니다.", true);
       return;
     }
     const targetName = ($("#quickTargetName")?.value || "").trim() || "공용시설 기본 점검대상";
     const templateName = ($("#quickTemplateName")?.value || "").trim() || "월간 안전점검표";
     const period = String($("#quickTemplatePeriod")?.value || "MONTHLY").trim().toUpperCase();
+    const items = collectDetailItemsFromForm();
 
     let targetId = Number($("#targetId")?.value || 0);
     if (targetId <= 0) {
@@ -296,7 +366,7 @@
         name: templateName,
         period,
         is_active: true,
-        items: defaultTemplateItems(),
+        items,
       });
       templateId = Number(templateOut?.item?.id || 0);
       if (templateId <= 0) {
@@ -477,6 +547,9 @@
       $("#btnVerifyArchive")?.addEventListener("click", () => verifyArchive().catch((e) => verifyMsg(e.message || e, true)));
       $("#btnOpenPdf")?.addEventListener("click", openArchivePdf);
       $("#btnQuickSetup")?.addEventListener("click", () => quickSetup().catch((e) => msg(e.message || e, true)));
+      $("#btnBuildDetailItems")?.addEventListener("click", () => {
+        buildDetailItemInputs(Number($("#detailItemCount")?.value || 5));
+      });
 
       await loadBootstrap();
       await loadRuns();

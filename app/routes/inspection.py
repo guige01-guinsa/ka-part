@@ -23,6 +23,7 @@ AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").st
 ALLOW_QUERY_ACCESS_TOKEN = (os.getenv("KA_ALLOW_QUERY_ACCESS_TOKEN") or "").strip().lower() in {"1", "true", "yes", "on"}
 SECURITY_ROLE_KEYWORDS = ("보안", "경비")
 PUBLIC_ACCESS_LOGIN_ID = ((os.getenv("KA_PUBLIC_FULL_ACCESS_LOGIN_ID") or "public_guest").strip().lower() or "public_guest")
+RUN_CREATOR_ROLE_SET = {"최고/운영관리자", "최고관리자", "운영관리자", "단지대표자", "단지관리자"}
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 UPLOAD_ROOT = (ROOT_DIR / "uploads" / "inspection").resolve()
@@ -149,6 +150,13 @@ def _is_site_admin(user: Dict[str, Any]) -> bool:
     return int(user.get("is_site_admin") or 0) == 1
 
 
+def _is_run_creator(user: Dict[str, Any]) -> bool:
+    if _is_admin(user) or _is_site_admin(user):
+        return True
+    role = _normalize_role_text(user.get("role"))
+    return role in RUN_CREATOR_ROLE_SET
+
+
 def _extract_access_token(request: Request) -> str:
     auth = (request.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
@@ -188,6 +196,13 @@ def _require_manager_user(request: Request) -> Tuple[Dict[str, Any], str]:
     user, token = _require_inspection_user(request)
     if not (_is_admin(user) or _is_site_admin(user)):
         raise HTTPException(status_code=403, detail="점검 모듈 관리자 권한이 필요합니다.")
+    return user, token
+
+
+def _require_run_creator_user(request: Request) -> Tuple[Dict[str, Any], str]:
+    user, token = _require_inspection_user(request)
+    if not _is_run_creator(user):
+        raise HTTPException(status_code=403, detail="점검 생성 권한은 최고/운영관리자와 단지대표자만 가능합니다.")
     return user, token
 
 
@@ -327,6 +342,7 @@ def inspection_bootstrap(request: Request, site_code: str = Query(default="")):
                 "role": user.get("role"),
                 "is_admin": bool(user.get("is_admin")),
                 "is_site_admin": bool(user.get("is_site_admin")),
+                "can_create_run": _is_run_creator(user),
             },
             "targets": targets,
             "templates": templates,
@@ -480,7 +496,7 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
 
 @router.post("/inspection/runs")
 def inspection_runs_create(request: Request, payload: RunCreatePayload = Body(...)):
-    user, _token = _require_inspection_user(request)
+    user, _token = _require_run_creator_user(request)
     scoped_site = _scope_site_code(user, payload.site_code)
     run_date = _safe_date(payload.run_date)
     ts = _now_ts()

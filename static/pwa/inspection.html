@@ -8,7 +8,7 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
-  <link rel="stylesheet" href="/pwa/inspection.css?v=20260218b" />
+  <link rel="stylesheet" href="/pwa/inspection.css?v=20260218c" />
 </head>
 <body>
   <header class="top">
@@ -56,12 +56,12 @@
       <div id="setupHint" class="muted">점검대상/점검표가 없으면 점검을 생성할 수 없습니다.</div>
       <div class="row">
         <label class="field grow">
-          <span>점검대상명</span>
-          <input id="quickTargetName" type="text" placeholder="예: 공용 전기실 월간 점검대상" />
+          <span>점검대상 리스트 제목</span>
+          <input id="quickTargetName" type="text" placeholder="예: 공용시설 전기실 점검대상" />
         </label>
         <label class="field grow">
-          <span>점검표명</span>
-          <input id="quickTemplateName" type="text" placeholder="예: 월간 안전점검표" />
+          <span>점검표 제목</span>
+          <input id="quickTemplateName" type="text" placeholder="예: 월간 안전점검 체크리스트" />
         </label>
         <label class="field">
           <span>주기</span>
@@ -73,9 +73,17 @@
             <option value="YEARLY">YEARLY</option>
           </select>
         </label>
-        <button id="btnQuickSetup" class="btn primary" type="button">기초정보 생성</button>
       </div>
-      <div class="muted small">관리자/운영관리자 계정에서만 생성할 수 있습니다.</div>
+      <div class="row">
+        <label class="field">
+          <span>세부리스트 항목수</span>
+          <input id="detailItemCount" type="number" min="1" max="50" step="1" value="5" />
+        </label>
+        <button id="btnBuildDetailItems" class="btn" type="button">세부리스트 입력폼 만들기</button>
+        <button id="btnQuickSetup" class="btn primary" type="button">리스트 폼 자동 생성</button>
+      </div>
+      <div id="detailItems" class="detail-items"></div>
+      <div class="muted small">최고/운영관리자 또는 단지대표자 권한에서만 생성할 수 있습니다.</div>
     </section>
 
     <section class="card">
@@ -122,6 +130,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260218a"></script>
-  <script src="/pwa/inspection.js?v=20260218b"></script>
+  <script src="/pwa/inspection.js?v=20260218c"></script>
 </body>
 </html>
