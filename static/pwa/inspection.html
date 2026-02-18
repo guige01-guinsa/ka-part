@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>안전점검 모듈</title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
+  />
+  <link rel="stylesheet" href="/pwa/inspection.css?v=20260218a" />
+</head>
+<body>
+  <header class="top">
+    <div class="title">안전점검 모듈</div>
+    <div class="actions">
+      <a class="btn" href="/pwa/">메인으로</a>
+      <button id="btnReload" class="btn" type="button">새로고침</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="card">
+      <h2>접속 정보</h2>
+      <div id="userLine" class="muted">로딩 중...</div>
+      <div id="msg" class="msg"></div>
+    </section>
+
+    <section class="card">
+      <h2>점검 생성</h2>
+      <div class="row">
+        <label class="field grow">
+          <span>점검대상</span>
+          <select id="targetId"></select>
+        </label>
+        <label class="field grow">
+          <span>점검표</span>
+          <select id="templateId"></select>
+        </label>
+      </div>
+      <div class="row">
+        <label class="field">
+          <span>점검일자</span>
+          <input id="runDate" type="date" />
+        </label>
+        <label class="field grow">
+          <span>메모</span>
+          <input id="runNote" type="text" placeholder="예: 월간 정기점검" />
+        </label>
+        <button id="btnCreateRun" class="btn primary" type="button">점검 생성</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>점검 목록</h2>
+      <div class="row">
+        <label class="field">
+          <span>상태</span>
+          <select id="qStatus">
+            <option value="">전체</option>
+            <option value="DRAFT">DRAFT</option>
+            <option value="SUBMITTED">SUBMITTED</option>
+            <option value="REJECTED">REJECTED</option>
+            <option value="ARCHIVED">ARCHIVED</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>시작일</span>
+          <input id="qDateFrom" type="date" />
+        </label>
+        <label class="field">
+          <span>종료일</span>
+          <input id="qDateTo" type="date" />
+        </label>
+        <button id="btnLoadRuns" class="btn" type="button">조회</button>
+      </div>
+      <div id="runs" class="list"></div>
+    </section>
+
+    <section id="detailCard" class="card" hidden>
+      <h2>점검 상세</h2>
+      <div id="runMeta" class="meta"></div>
+      <div id="runActions" class="row">
+        <button id="btnSaveItems" class="btn" type="button">항목 저장</button>
+        <button id="btnSubmitRun" class="btn primary" type="button">제출</button>
+        <button id="btnApproveRun" class="btn" type="button">승인</button>
+        <button id="btnRejectRun" class="btn danger" type="button">반려</button>
+        <button id="btnVerifyArchive" class="btn" type="button">무결성 검증</button>
+        <button id="btnOpenPdf" class="btn" type="button">보관 PDF</button>
+      </div>
+      <div id="verifyMsg" class="msg"></div>
+      <div id="runItems" class="items"></div>
+      <div id="runApprovals" class="approvals"></div>
+    </section>
+  </main>
+
+  <script src="/pwa/auth.js?v=20260218a"></script>
+  <script src="/pwa/inspection.js?v=20260218a"></script>
+</body>
+</html>

@@ -1532,6 +1532,12 @@
       const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/complaints.html?${qs}` : "/pwa/complaints.html";
     });
+    $("#btnInspection")?.addEventListener("click", () => {
+      const site = getSiteName();
+      const siteCode = getSiteCode();
+      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
+      window.location.href = qs ? `/pwa/inspection.html?${qs}` : "/pwa/inspection.html";
+    });
     $("#btnBackup")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();

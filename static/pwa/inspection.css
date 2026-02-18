@@ -1,0 +1,116 @@
+:root {
+  color-scheme: dark;
+  --bg: #071327;
+  --card: #0b1b34;
+  --line: #27456f;
+  --text: #e5efff;
+  --muted: #99b0d4;
+  --accent: #1f6dff;
+  --danger: #d83a55;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(180deg, #08162b 0%, #050e1f 100%);
+  color: var(--text);
+  font-family: "Pretendard", "Noto Sans KR", sans-serif;
+}
+
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #08172e;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+
+.title { font-weight: 800; font-size: 18px; }
+.actions { display: flex; gap: 8px; }
+
+.main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+h2 { margin: 0 0 10px; font-size: 18px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.field { display: grid; gap: 6px; }
+.field > span { font-size: 12px; color: var(--muted); }
+.grow { flex: 1; min-width: 220px; }
+
+input, select, textarea, .btn {
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #0a203f;
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+textarea { width: 100%; min-height: 68px; resize: vertical; }
+
+.btn {
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.btn:hover { filter: brightness(1.08); }
+.btn.primary { background: #0b3f99; border-color: #2c72eb; }
+.btn.danger { background: #442033; border-color: #a53957; }
+
+.muted { color: var(--muted); }
+.msg { margin-top: 10px; font-size: 13px; color: #cfe0ff; white-space: pre-wrap; }
+.list, .items, .approvals { display: grid; gap: 8px; margin-top: 10px; }
+
+.run-item, .item-card, .ap-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0a1a33;
+  padding: 10px;
+}
+
+.run-item .head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.meta { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+.item-grid {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 10px;
+}
+
+.photo-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px) {
+  .item-grid { grid-template-columns: 1fr; }
+}

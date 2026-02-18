@@ -23,6 +23,7 @@ from .ops_diagnostics import (
     stop_ops_diagnostics_scheduler,
 )
 from .routes.api import router as api_router
+from .routes.inspection import router as inspection_router
 from .routes.complaints import router as complaints_router
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -46,6 +47,7 @@ def _shutdown():
     stop_backup_scheduler()
 
 app.include_router(api_router, prefix="/api")
+app.include_router(inspection_router, prefix="/api")
 app.include_router(complaints_router, prefix="/api/v1")
 
 

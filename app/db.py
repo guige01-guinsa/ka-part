@@ -1129,6 +1129,244 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
 
+    # Safety inspection module domain tables.
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inspection_targets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          name TEXT NOT NULL,
+          location TEXT,
+          description TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+          created_by TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_inspection_targets_site_name
+        ON inspection_targets(site_code, name);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_targets_site_active
+        ON inspection_targets(site_code, is_active, updated_at DESC);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inspection_regulations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          target_id INTEGER,
+          title TEXT NOT NULL,
+          version TEXT NOT NULL,
+          content TEXT NOT NULL,
+          effective_date TEXT,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+          created_by TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(target_id) REFERENCES inspection_targets(id) ON DELETE SET NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_regulations_site_active
+        ON inspection_regulations(site_code, is_active, updated_at DESC);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inspection_templates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          target_id INTEGER,
+          regulation_id INTEGER,
+          name TEXT NOT NULL,
+          period TEXT NOT NULL DEFAULT 'MONTHLY',
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+          created_by TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(target_id) REFERENCES inspection_targets(id) ON DELETE SET NULL,
+          FOREIGN KEY(regulation_id) REFERENCES inspection_regulations(id) ON DELETE SET NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_inspection_templates_site_name
+        ON inspection_templates(site_code, name);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_templates_site_active
+        ON inspection_templates(site_code, is_active, updated_at DESC);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inspection_template_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          template_id INTEGER NOT NULL,
+          item_key TEXT NOT NULL,
+          item_text TEXT NOT NULL,
+          category TEXT,
+          severity INTEGER NOT NULL DEFAULT 1,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          requires_photo INTEGER NOT NULL DEFAULT 0 CHECK(requires_photo IN (0,1)),
+          requires_note INTEGER NOT NULL DEFAULT 0 CHECK(requires_note IN (0,1)),
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(template_id) REFERENCES inspection_templates(id) ON DELETE CASCADE
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_inspection_template_items_key
+        ON inspection_template_items(template_id, item_key);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_template_items_template
+        ON inspection_template_items(template_id, is_active, sort_order, id);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inspection_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_code TEXT NOT NULL UNIQUE,
+          site_code TEXT NOT NULL,
+          target_id INTEGER NOT NULL,
+          template_id INTEGER NOT NULL,
+          inspector_user_id INTEGER,
+          inspector_login TEXT NOT NULL,
+          inspector_name TEXT,
+          run_date TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'DRAFT',
+          note TEXT,
+          submitted_at TEXT,
+          completed_at TEXT,
+          approval_step INTEGER,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(target_id) REFERENCES inspection_targets(id) ON DELETE RESTRICT,
+          FOREIGN KEY(template_id) REFERENCES inspection_templates(id) ON DELETE RESTRICT
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_runs_site_date
+        ON inspection_runs(site_code, run_date DESC, id DESC);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_runs_status
+        ON inspection_runs(status, updated_at DESC);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inspection_run_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id INTEGER NOT NULL,
+          template_item_id INTEGER,
+          item_key TEXT NOT NULL,
+          item_text TEXT NOT NULL,
+          category TEXT,
+          severity INTEGER NOT NULL DEFAULT 1,
+          requires_photo INTEGER NOT NULL DEFAULT 0 CHECK(requires_photo IN (0,1)),
+          requires_note INTEGER NOT NULL DEFAULT 0 CHECK(requires_note IN (0,1)),
+          result TEXT NOT NULL DEFAULT 'NA',
+          note TEXT,
+          photo_path TEXT,
+          photo_name TEXT,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(run_id) REFERENCES inspection_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(template_item_id) REFERENCES inspection_template_items(id) ON DELETE SET NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_run_items_run
+        ON inspection_run_items(run_id, id);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inspection_approvals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id INTEGER NOT NULL,
+          step_no INTEGER NOT NULL,
+          approver_user_id INTEGER,
+          approver_login TEXT NOT NULL,
+          approver_name TEXT,
+          decision TEXT NOT NULL DEFAULT 'PENDING',
+          comment TEXT,
+          decided_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(run_id) REFERENCES inspection_runs(id) ON DELETE CASCADE
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_inspection_approvals_run_step
+        ON inspection_approvals(run_id, step_no);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_approvals_pending
+        ON inspection_approvals(approver_login, decision, updated_at DESC);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inspection_archives (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id INTEGER NOT NULL UNIQUE,
+          site_code TEXT NOT NULL,
+          pdf_relpath TEXT,
+          snapshot_json TEXT NOT NULL,
+          checksum TEXT NOT NULL,
+          archived_by TEXT,
+          archived_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(run_id) REFERENCES inspection_runs(id) ON DELETE CASCADE
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_inspection_archives_site_date
+        ON inspection_archives(site_code, archived_at DESC, id DESC);
+        """
+    )
+
 
 def _index_columns(con: sqlite3.Connection, index_name: str) -> List[str]:
     rows = con.execute(f"PRAGMA index_info({index_name})").fetchall()
@@ -1175,14 +1413,17 @@ def _normalize_entries_work_type(con: sqlite3.Connection) -> None:
     con.execute(
         f"""
         UPDATE entries
-        SET work_type = (
-            SELECT TRIM(COALESCE(ev.{value_col}, ''))
-            FROM entry_values ev
-            WHERE ev.entry_id = entries.id
-              AND ev.tab_key = 'home'
-              AND ev.field_key = 'work_type'
-            ORDER BY ev.id DESC
-            LIMIT 1
+        SET work_type = COALESCE(
+            (
+                SELECT TRIM(COALESCE(ev.{value_col}, ''))
+                FROM entry_values ev
+                WHERE ev.entry_id = entries.id
+                  AND ev.tab_key = 'home'
+                  AND ev.field_key = 'work_type'
+                ORDER BY ev.id DESC
+                LIMIT 1
+            ),
+            ''
         )
         WHERE (work_type IS NULL OR TRIM(work_type) = '');
         """

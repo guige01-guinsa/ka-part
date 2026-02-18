@@ -32,5 +32,7 @@ CREATE TABLE IF NOT EXISTS entry_values (
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(entry_date);
-CREATE INDEX IF NOT EXISTS idx_entries_site_date_work_type ON entries(site_id, entry_date, work_type);
+-- Keep bootstrap schema compatible with legacy DBs that may not have work_type yet.
+-- The db migration path later upgrades/rebuilds to the work_type-aware index.
+CREATE INDEX IF NOT EXISTS idx_entries_site_date ON entries(site_id, entry_date);
 CREATE INDEX IF NOT EXISTS idx_values_tab ON entry_values(tab_key);
