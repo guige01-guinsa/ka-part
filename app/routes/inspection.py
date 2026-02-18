@@ -4,8 +4,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -30,6 +31,9 @@ UPLOAD_ROOT = (ROOT_DIR / "uploads" / "inspection").resolve()
 PHOTO_ROOT = (UPLOAD_ROOT / "photos").resolve()
 ARCHIVE_ROOT = (UPLOAD_ROOT / "archives").resolve()
 PHOTO_MAX_FILE_BYTES = int(os.getenv("KA_INSPECTION_PHOTO_MAX_BYTES") or str(8 * 1024 * 1024))
+APPROVAL_CODE_TTL_MINUTES = max(1, int(str(os.getenv("KA_INSPECTION_APPROVAL_CODE_TTL_MINUTES") or "10").strip() or "10"))
+APPROVAL_CODE_DIGITS = max(4, min(8, int(str(os.getenv("KA_INSPECTION_APPROVAL_CODE_DIGITS") or "6").strip() or "6")))
+APPROVAL_CODE_SECRET = str(os.getenv("KA_INSPECTION_APPROVAL_CODE_SECRET") or "inspection-approval-code").strip() or "inspection-approval-code"
 
 
 class TargetPayload(BaseModel):
@@ -99,6 +103,7 @@ class RunItemsPatchRequest(BaseModel):
 
 class DecisionPayload(BaseModel):
     comment: str = ""
+    approval_code: str = ""
 
 
 def _now_ts() -> str:
@@ -142,6 +147,21 @@ def _result_label(value: Any) -> str:
     if code == "NONCOMPLIANT":
         return "부적합"
     return "해당없음"
+
+
+def _normalize_approval_code(value: Any) -> str:
+    return re.sub(r"\D+", "", str(value or "").strip())
+
+
+def _issue_random_approval_code() -> str:
+    minimum = 10 ** (APPROVAL_CODE_DIGITS - 1)
+    maximum = (10 ** APPROVAL_CODE_DIGITS) - 1
+    return str(secrets.randbelow(maximum - minimum + 1) + minimum)
+
+
+def _approval_code_hash(*, run_id: int, step_no: int, actor_login: str, code: str) -> str:
+    raw = f"{int(run_id)}|{int(step_no)}|{str(actor_login or '').strip().lower()}|{_normalize_approval_code(code)}|{APPROVAL_CODE_SECRET}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _normalize_role_text(value: Any) -> str:
@@ -1376,7 +1396,7 @@ def inspection_runs_submit(run_id: int, request: Request):
         con.close()
 
 
-def _decide_run(run_id: int, user: Dict[str, Any], comment: str, decision: str) -> Dict[str, Any]:
+def _decide_run(run_id: int, user: Dict[str, Any], comment: str, decision: str, approval_code: str) -> Dict[str, Any]:
     decision = str(decision or "").strip().upper()
     if decision not in {"APPROVED", "REJECTED"}:
         raise HTTPException(status_code=400, detail="invalid decision")
@@ -1400,9 +1420,56 @@ def _decide_run(run_id: int, user: Dict[str, Any], comment: str, decision: str) 
         actor_login = str(user.get("login_id") or "").strip().lower()
         if (not _is_admin(user)) and actor_login != str(p.get("approver_login") or "").strip().lower():
             raise HTTPException(status_code=403, detail="현재 단계 결재 권한이 없습니다.")
+
+        # required code check (issued by /approval-code endpoint)
+        expected_hash = str(p.get("approval_code_hash") or "").strip()
+        expected_actor = str(p.get("approval_code_actor_login") or "").strip().lower()
+        expected_expires = str(p.get("approval_code_expires_at") or "").strip()
+        used_at = str(p.get("approval_code_used_at") or "").strip()
+        if not expected_hash or not expected_expires:
+            raise HTTPException(status_code=409, detail="승인코드를 먼저 발급해 주세요.")
+        if used_at:
+            raise HTTPException(status_code=409, detail="이미 사용된 승인코드입니다. 다시 발급해 주세요.")
+        if expected_expires < ts:
+            raise HTTPException(status_code=409, detail="승인코드가 만료되었습니다. 다시 발급해 주세요.")
+        if expected_actor and expected_actor != actor_login:
+            raise HTTPException(status_code=403, detail="해당 승인코드는 다른 결재자에게 발급되었습니다.")
+
+        input_code = _normalize_approval_code(approval_code)
+        if not input_code:
+            raise HTTPException(status_code=400, detail="승인코드를 입력해 주세요.")
+        actual_hash = _approval_code_hash(
+            run_id=int(run_id),
+            step_no=int(p.get("step_no") or 0),
+            actor_login=actor_login,
+            code=input_code,
+        )
+        if actual_hash != expected_hash:
+            attempts = int(p.get("approval_code_attempts") or 0) + 1
+            con.execute(
+                """
+                UPDATE inspection_approvals
+                SET approval_code_attempts=?, updated_at=?,
+                    approval_code_hash=CASE WHEN ?>=5 THEN NULL ELSE approval_code_hash END,
+                    approval_code_actor_login=CASE WHEN ?>=5 THEN NULL ELSE approval_code_actor_login END,
+                    approval_code_expires_at=CASE WHEN ?>=5 THEN NULL ELSE approval_code_expires_at END
+                WHERE id=?
+                """,
+                (attempts, ts, attempts, attempts, attempts, int(p["id"])),
+            )
+            con.commit()
+            if attempts >= 5:
+                raise HTTPException(status_code=409, detail="승인코드 입력 오류가 누적되었습니다. 코드를 다시 발급해 주세요.")
+            raise HTTPException(status_code=400, detail="승인코드가 일치하지 않습니다.")
+
         con.execute(
-            "UPDATE inspection_approvals SET decision=?, comment=?, decided_at=?, updated_at=? WHERE id=?",
-            (decision, str(comment or "").strip(), ts, ts, int(p["id"])),
+            """
+            UPDATE inspection_approvals
+            SET decision=?, comment=?, decided_at=?, updated_at=?,
+                approval_code_used_at=?, approval_code_attempts=0
+            WHERE id=?
+            """,
+            (decision, str(comment or "").strip(), ts, ts, ts, int(p["id"])),
         )
         if decision == "REJECTED":
             con.execute("UPDATE inspection_runs SET status='REJECTED', approval_step=NULL, updated_at=? WHERE id=?", (ts, ts, int(run_id)))
@@ -1429,13 +1496,68 @@ def _decide_run(run_id: int, user: Dict[str, Any], comment: str, decision: str) 
 @router.post("/inspection/runs/{run_id}/approve")
 def inspection_runs_approve(run_id: int, request: Request, payload: DecisionPayload = Body(default={"comment": ""})):
     user, _token = _require_inspection_user(request)
-    return _decide_run(int(run_id), user, str(payload.comment or ""), "APPROVED")
+    return _decide_run(int(run_id), user, str(payload.comment or ""), "APPROVED", str(payload.approval_code or ""))
 
 
 @router.post("/inspection/runs/{run_id}/reject")
 def inspection_runs_reject(run_id: int, request: Request, payload: DecisionPayload = Body(default={"comment": ""})):
     user, _token = _require_inspection_user(request)
-    return _decide_run(int(run_id), user, str(payload.comment or ""), "REJECTED")
+    return _decide_run(int(run_id), user, str(payload.comment or ""), "REJECTED", str(payload.approval_code or ""))
+
+
+@router.post("/inspection/runs/{run_id}/approval-code")
+def inspection_runs_issue_approval_code(run_id: int, request: Request):
+    user, _token = _require_inspection_user(request)
+    ts = _now_ts()
+    actor_login = str(user.get("login_id") or "").strip().lower()
+    con = _connect()
+    try:
+        run_row = con.execute("SELECT * FROM inspection_runs WHERE id=? LIMIT 1", (int(run_id),)).fetchone()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="점검 실행내역을 찾을 수 없습니다.")
+        run = dict(run_row)
+        _run_scope_check(user, run)
+        if str(run.get("status") or "").upper() != "SUBMITTED":
+            raise HTTPException(status_code=409, detail="제출 상태에서만 승인코드를 발급할 수 있습니다.")
+
+        pending = con.execute(
+            "SELECT * FROM inspection_approvals WHERE run_id=? AND decision='PENDING' ORDER BY step_no ASC LIMIT 1",
+            (int(run_id),),
+        ).fetchone()
+        if not pending:
+            raise HTTPException(status_code=409, detail="대기 중인 결재 단계가 없습니다.")
+        p = dict(pending)
+        if (not _is_admin(user)) and actor_login != str(p.get("approver_login") or "").strip().lower():
+            raise HTTPException(status_code=403, detail="현재 단계 결재 권한이 없습니다.")
+
+        code = _issue_random_approval_code()
+        expires_at = (datetime.now() + timedelta(minutes=APPROVAL_CODE_TTL_MINUTES)).replace(microsecond=0).isoformat(sep=" ")
+        code_hash = _approval_code_hash(
+            run_id=int(run_id),
+            step_no=int(p.get("step_no") or 0),
+            actor_login=actor_login,
+            code=code,
+        )
+        con.execute(
+            """
+            UPDATE inspection_approvals
+            SET approval_code_hash=?, approval_code_actor_login=?, approval_code_expires_at=?,
+                approval_code_used_at=NULL, approval_code_attempts=0, approval_code_last_issued_at=?, updated_at=?
+            WHERE id=?
+            """,
+            (code_hash, actor_login, expires_at, ts, ts, int(p["id"])),
+        )
+        con.commit()
+        return {
+            "ok": True,
+            "run_id": int(run_id),
+            "step_no": int(p.get("step_no") or 0),
+            "approval_code": code,
+            "expires_at": expires_at,
+            "ttl_minutes": int(APPROVAL_CODE_TTL_MINUTES),
+        }
+    finally:
+        con.close()
 
 
 @router.get("/inspection/archives")

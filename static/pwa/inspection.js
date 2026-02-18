@@ -775,6 +775,12 @@
     return String(value || "").trim().toLowerCase();
   }
 
+  function pendingApproval(runDetail) {
+    return Array.isArray(runDetail?.approvals)
+      ? runDetail.approvals.find((x) => String(x.decision || "").trim().toUpperCase() === "PENDING")
+      : null;
+  }
+
   function canEditCurrentRun(runDetail) {
     const run = runDetail?.run || {};
     const status = String(run.status || "").trim().toUpperCase();
@@ -789,9 +795,7 @@
     if (String(run.status || "").trim().toUpperCase() !== "SUBMITTED") return false;
     const u = state.bootstrapUser || {};
     if (u.is_admin) return true;
-    const pending = Array.isArray(runDetail?.approvals)
-      ? runDetail.approvals.find((x) => String(x.decision || "").trim().toUpperCase() === "PENDING")
-      : null;
+    const pending = pendingApproval(runDetail);
     if (!pending) return false;
     return _loginLower(u.login_id) === _loginLower(pending.approver_login);
   }
@@ -874,10 +878,14 @@
     const btnSubmit = $("#btnSubmitRun");
     const btnApprove = $("#btnApproveRun");
     const btnReject = $("#btnRejectRun");
+    const btnIssueCode = $("#btnIssueApprovalCode");
+    const approvalCodeInput = $("#approvalCode");
     if (btnSave) btnSave.disabled = !editable;
     if (btnSubmit) btnSubmit.disabled = !editable;
     if (btnApprove) btnApprove.disabled = !decidable;
     if (btnReject) btnReject.disabled = !decidable;
+    if (btnIssueCode) btnIssueCode.disabled = !decidable;
+    if (approvalCodeInput) approvalCodeInput.disabled = !decidable;
   }
 
   async function openRun(runId) {
@@ -916,6 +924,22 @@
     await loadRuns();
   }
 
+  async function issueApprovalCode() {
+    const runId = Number(state.selectedRunId || 0);
+    if (runId <= 0) return;
+    if (!canDecideCurrentRun(state.selectedRun)) {
+      msg("현재 단계 결재 권한이 없습니다.", true);
+      return;
+    }
+    const out = await apiPost(`/api/inspection/runs/${runId}/approval-code`, {});
+    const code = String(out.approval_code || "").trim();
+    const expiresAt = String(out.expires_at || "").trim();
+    const input = $("#approvalCode");
+    if (input) input.value = code;
+    window.alert(`승인코드: ${code}\n만료시각: ${expiresAt}`);
+    msg("승인코드가 발급되었습니다. 코드 입력 후 승인/반려를 진행하세요.");
+  }
+
   async function approveRun() {
     const runId = Number(state.selectedRunId || 0);
     if (runId <= 0) return;
@@ -923,8 +947,14 @@
       msg("현재 단계 결재 권한이 없습니다.", true);
       return;
     }
+    const approvalCode = String($("#approvalCode")?.value || "").trim();
+    if (!approvalCode) {
+      msg("승인코드를 먼저 발급/입력해 주세요.", true);
+      return;
+    }
     const comment = window.prompt("승인 코멘트(선택)", "") || "";
-    await apiPost(`/api/inspection/runs/${runId}/approve`, { comment });
+    await apiPost(`/api/inspection/runs/${runId}/approve`, { comment, approval_code: approvalCode });
+    if ($("#approvalCode")) $("#approvalCode").value = "";
     msg("승인 처리 완료");
     await openRun(runId);
     await loadRuns();
@@ -937,8 +967,14 @@
       msg("현재 단계 결재 권한이 없습니다.", true);
       return;
     }
+    const approvalCode = String($("#approvalCode")?.value || "").trim();
+    if (!approvalCode) {
+      msg("승인코드를 먼저 발급/입력해 주세요.", true);
+      return;
+    }
     const comment = window.prompt("반려 사유", "") || "";
-    await apiPost(`/api/inspection/runs/${runId}/reject`, { comment });
+    await apiPost(`/api/inspection/runs/${runId}/reject`, { comment, approval_code: approvalCode });
+    if ($("#approvalCode")) $("#approvalCode").value = "";
     msg("반려 처리 완료");
     await openRun(runId);
     await loadRuns();
@@ -973,6 +1009,7 @@
       $("#btnLoadRuns")?.addEventListener("click", () => loadRuns().catch((e) => msg(e.message || e, true)));
       $("#btnSaveItems")?.addEventListener("click", () => saveItems().catch((e) => msg(e.message || e, true)));
       $("#btnSubmitRun")?.addEventListener("click", () => submitRun().catch((e) => msg(e.message || e, true)));
+      $("#btnIssueApprovalCode")?.addEventListener("click", () => issueApprovalCode().catch((e) => msg(e.message || e, true)));
       $("#btnApproveRun")?.addEventListener("click", () => approveRun().catch((e) => msg(e.message || e, true)));
       $("#btnRejectRun")?.addEventListener("click", () => rejectRun().catch((e) => msg(e.message || e, true)));
       $("#btnVerifyArchive")?.addEventListener("click", () => verifyArchive().catch((e) => verifyMsg(e.message || e, true)));

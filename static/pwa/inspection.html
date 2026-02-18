@@ -8,7 +8,7 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
-  <link rel="stylesheet" href="/pwa/inspection.css?v=20260218c" />
+  <link rel="stylesheet" href="/pwa/inspection.css?v=20260218d" />
 </head>
 <body>
   <header class="top">
@@ -126,6 +126,11 @@
       <div id="runActions" class="row">
         <button id="btnSaveItems" class="btn" type="button">항목 저장</button>
         <button id="btnSubmitRun" class="btn primary" type="button">제출</button>
+        <label class="field inline">
+          <span>승인코드</span>
+          <input id="approvalCode" type="text" inputmode="numeric" maxlength="8" placeholder="코드 입력" />
+        </label>
+        <button id="btnIssueApprovalCode" class="btn" type="button">승인코드 발급</button>
         <button id="btnApproveRun" class="btn" type="button">승인</button>
         <button id="btnRejectRun" class="btn danger" type="button">반려</button>
         <button id="btnVerifyArchive" class="btn" type="button">무결성 검증</button>
@@ -138,6 +143,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260218a"></script>
-  <script src="/pwa/inspection.js?v=20260218n"></script>
+  <script src="/pwa/inspection.js?v=20260218o"></script>
 </body>
 </html>

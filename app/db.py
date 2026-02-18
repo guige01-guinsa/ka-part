@@ -1323,6 +1323,12 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
           approver_name TEXT,
           decision TEXT NOT NULL DEFAULT 'PENDING',
           comment TEXT,
+          approval_code_hash TEXT,
+          approval_code_actor_login TEXT,
+          approval_code_expires_at TEXT,
+          approval_code_used_at TEXT,
+          approval_code_attempts INTEGER NOT NULL DEFAULT 0,
+          approval_code_last_issued_at TEXT,
           decided_at TEXT,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
@@ -1330,6 +1336,12 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "inspection_approvals", "approval_code_hash TEXT")
+    _ensure_column(con, "inspection_approvals", "approval_code_actor_login TEXT")
+    _ensure_column(con, "inspection_approvals", "approval_code_expires_at TEXT")
+    _ensure_column(con, "inspection_approvals", "approval_code_used_at TEXT")
+    _ensure_column(con, "inspection_approvals", "approval_code_attempts INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(con, "inspection_approvals", "approval_code_last_issued_at TEXT")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_inspection_approvals_run_step
