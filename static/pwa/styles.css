@@ -514,3 +514,62 @@ body {
     font-size: 16px;
   }
 }
+
+/* PC: align facility main page to parking admin module frame */
+@media (min-width: 981px) {
+  body.parking-like-pc.home-page {
+    background: radial-gradient(circle at top, #173a4e, #0a1a23 58%);
+  }
+
+  body.parking-like-pc.home-page .top,
+  body.parking-like-pc.home-page .tabs,
+  body.parking-like-pc.home-page .panels {
+    width: min(1100px, calc(100% - 32px));
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  body.parking-like-pc.home-page .top {
+    top: 8px;
+    margin-top: 12px;
+    border: 1px solid #27465a;
+    border-radius: 14px;
+    background: rgba(17, 39, 53, 0.94);
+    box-shadow: 0 9px 24px rgba(0, 0, 0, 0.2);
+    padding: 14px;
+    backdrop-filter: none;
+  }
+
+  body.parking-like-pc.home-page .title {
+    font-size: 22px;
+    margin-bottom: 10px;
+  }
+
+  body.parking-like-pc.home-page .quickbar,
+  body.parking-like-pc.home-page .context-line {
+    border-color: #27465a;
+    background: #0f2431;
+  }
+
+  body.parking-like-pc.home-page .tabs {
+    top: calc(var(--tabs-top, 154px) + 8px);
+    margin-top: 10px;
+    border: 1px solid #27465a;
+    border-radius: 12px;
+    background: rgba(17, 39, 53, 0.94);
+    padding: 10px;
+  }
+
+  body.parking-like-pc.home-page .panels {
+    margin-top: 10px;
+    padding: 0 0 calc(24px + env(safe-area-inset-bottom));
+  }
+
+  body.parking-like-pc.home-page .panel.active {
+    border-color: #27465a;
+    border-radius: 14px;
+    background: rgba(17, 39, 53, 0.94);
+    box-shadow: 0 9px 24px rgba(0, 0, 0, 0.2);
+    padding: 14px;
+  }
+}
