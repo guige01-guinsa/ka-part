@@ -6,12 +6,15 @@ import os
 import re
 import secrets
 import uuid
+from io import BytesIO
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 from pydantic import BaseModel, Field
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -958,6 +961,36 @@ def inspection_runs_list(
     limit: int = Query(default=100, ge=1, le=500),
 ):
     user, _token = _require_inspection_user(request)
+    con = _connect()
+    try:
+        rows = _query_runs_rows(
+            con=con,
+            user=user,
+            site_code=site_code,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            target_id=target_id,
+            template_id=template_id,
+            limit=limit,
+        )
+        return {"ok": True, "items": rows}
+    finally:
+        con.close()
+
+
+def _query_runs_rows(
+    *,
+    con,
+    user: Dict[str, Any],
+    site_code: str,
+    date_from: str,
+    date_to: str,
+    status: str,
+    target_id: int,
+    template_id: int,
+    limit: int,
+) -> List[Dict[str, Any]]:
     scoped_site = _scope_site_code(user, site_code)
     clauses = ["r.site_code=?"]
     params: List[Any] = [scoped_site]
@@ -980,35 +1013,134 @@ def inspection_runs_list(
         clauses.append("lower(r.inspector_login)=?")
         params.append(str(user.get("login_id") or "").strip().lower())
     where_sql = " AND ".join(clauses)
+    rows = con.execute(
+        f"""
+        SELECT r.*,
+               t.name AS target_name,
+               tp.name AS template_name,
+               COALESCE(s.item_count, 0) AS item_count,
+               COALESCE(s.non_count, 0) AS noncompliant_count
+        FROM inspection_runs r
+        LEFT JOIN inspection_targets t ON t.id=r.target_id
+        LEFT JOIN inspection_templates tp ON tp.id=r.template_id
+        LEFT JOIN (
+          SELECT run_id,
+                 COUNT(*) AS item_count,
+                 SUM(CASE WHEN upper(result)='NONCOMPLIANT' THEN 1 ELSE 0 END) AS non_count
+          FROM inspection_run_items
+          GROUP BY run_id
+        ) s ON s.run_id=r.id
+        WHERE {where_sql}
+        ORDER BY r.run_date DESC, r.id DESC
+        LIMIT ?
+        """,
+        tuple(params + [int(limit)]),
+    ).fetchall()
+    return [dict(x) for x in rows]
 
+
+def _run_status_label(value: Any) -> str:
+    raw = str(value or "").strip().upper()
+    if raw == "DRAFT":
+        return "작성중"
+    if raw == "SUBMITTED":
+        return "제출"
+    if raw == "REJECTED":
+        return "반려"
+    if raw == "ARCHIVED":
+        return "보관"
+    return raw or "-"
+
+
+@router.get("/inspection/runs/export.xlsx")
+def inspection_runs_export_xlsx(
+    request: Request,
+    site_code: str = Query(default=""),
+    date_from: str = Query(default=""),
+    date_to: str = Query(default=""),
+    status: str = Query(default=""),
+    target_id: int = Query(default=0, ge=0),
+    template_id: int = Query(default=0, ge=0),
+    limit: int = Query(default=2000, ge=1, le=10000),
+):
+    user, _token = _require_inspection_user(request)
     con = _connect()
     try:
-        rows = con.execute(
-            f"""
-            SELECT r.*,
-                   t.name AS target_name,
-                   tp.name AS template_name,
-                   COALESCE(s.item_count, 0) AS item_count,
-                   COALESCE(s.non_count, 0) AS noncompliant_count
-            FROM inspection_runs r
-            LEFT JOIN inspection_targets t ON t.id=r.target_id
-            LEFT JOIN inspection_templates tp ON tp.id=r.template_id
-            LEFT JOIN (
-              SELECT run_id,
-                     COUNT(*) AS item_count,
-                     SUM(CASE WHEN upper(result)='NONCOMPLIANT' THEN 1 ELSE 0 END) AS non_count
-              FROM inspection_run_items
-              GROUP BY run_id
-            ) s ON s.run_id=r.id
-            WHERE {where_sql}
-            ORDER BY r.run_date DESC, r.id DESC
-            LIMIT ?
-            """,
-            tuple(params + [int(limit)]),
-        ).fetchall()
-        return {"ok": True, "items": [dict(x) for x in rows]}
+        rows = _query_runs_rows(
+            con=con,
+            user=user,
+            site_code=site_code,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            target_id=target_id,
+            template_id=template_id,
+            limit=limit,
+        )
     finally:
         con.close()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "점검목록"
+    headers = [
+        "점검ID",
+        "점검코드",
+        "단지코드",
+        "점검일자",
+        "상태",
+        "점검대상",
+        "점검표",
+        "점검자ID",
+        "점검자명",
+        "항목수",
+        "부적합건수",
+        "메모",
+        "생성일",
+        "갱신일",
+        "완료일",
+    ]
+    ws.append(headers)
+
+    for r in rows:
+        ws.append(
+            [
+                int(r.get("id") or 0),
+                str(r.get("run_code") or ""),
+                str(r.get("site_code") or ""),
+                str(r.get("run_date") or ""),
+                _run_status_label(r.get("status")),
+                str(r.get("target_name") or ""),
+                str(r.get("template_name") or ""),
+                str(r.get("inspector_login") or ""),
+                str(r.get("inspector_name") or ""),
+                int(r.get("item_count") or 0),
+                int(r.get("noncompliant_count") or 0),
+                str(r.get("note") or ""),
+                str(r.get("created_at") or ""),
+                str(r.get("updated_at") or ""),
+                str(r.get("completed_at") or ""),
+            ]
+        )
+
+    for col_idx, header in enumerate(headers, start=1):
+        max_len = len(str(header))
+        for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+            value = row[0].value
+            if value is None:
+                continue
+            max_len = max(max_len, len(str(value)))
+        ws.column_dimensions[get_column_letter(col_idx)].width = max(10, min(42, max_len + 2))
+    ws.freeze_panes = "A2"
+
+    bio = BytesIO()
+    wb.save(bio)
+    file_name = f"inspection_runs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=bio.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+    )
 
 
 @router.get("/inspection/runs/{run_id}")

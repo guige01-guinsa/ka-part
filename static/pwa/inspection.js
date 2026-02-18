@@ -623,6 +623,13 @@
 
   async function loadRuns() {
     msg("");
+    const params = buildRunQueryParams();
+    const data = await apiGet(`/api/inspection/runs?${params.toString()}`);
+    state.runs = Array.isArray(data.items) ? data.items : [];
+    renderRuns();
+  }
+
+  function buildRunQueryParams() {
     const params = new URLSearchParams();
     if (state.siteCode) params.set("site_code", state.siteCode);
     const st = ($("#qStatus")?.value || "").trim();
@@ -631,9 +638,54 @@
     if (df) params.set("date_from", df);
     const dt = ($("#qDateTo")?.value || "").trim();
     if (dt) params.set("date_to", dt);
-    const data = await apiGet(`/api/inspection/runs?${params.toString()}`);
-    state.runs = Array.isArray(data.items) ? data.items : [];
-    renderRuns();
+    return params;
+  }
+
+  async function exportRunsExcel() {
+    msg("");
+    const params = buildRunQueryParams();
+    params.set("limit", "10000");
+    const token = getToken();
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/inspection/runs/export.xlsx?${params.toString()}`, {
+      method: "GET",
+      headers,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let detail = text;
+      try {
+        const body = JSON.parse(text);
+        detail = body?.detail || text;
+      } catch (_e) {
+        // keep original text
+      }
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    let fileName = `inspection_runs_${todayYmd().replaceAll("-", "")}.xlsx`;
+    const cd = String(res.headers.get("content-disposition") || "");
+    const m = cd.match(/filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
+    if (m) {
+      const raw = m[1] || m[2] || "";
+      if (raw) {
+        try {
+          fileName = decodeURIComponent(raw);
+        } catch (_e) {
+          fileName = raw;
+        }
+      }
+    }
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    msg("점검 목록 엑셀 다운로드 완료");
   }
 
   async function createRun() {
@@ -1007,6 +1059,7 @@
       });
       $("#btnCreateRun")?.addEventListener("click", () => createRun().catch((e) => msg(e.message || e, true)));
       $("#btnLoadRuns")?.addEventListener("click", () => loadRuns().catch((e) => msg(e.message || e, true)));
+      $("#btnExportRunsExcel")?.addEventListener("click", () => exportRunsExcel().catch((e) => msg(e.message || e, true)));
       $("#btnSaveItems")?.addEventListener("click", () => saveItems().catch((e) => msg(e.message || e, true)));
       $("#btnSubmitRun")?.addEventListener("click", () => submitRun().catch((e) => msg(e.message || e, true)));
       $("#btnIssueApprovalCode")?.addEventListener("click", () => issueApprovalCode().catch((e) => msg(e.message || e, true)));
