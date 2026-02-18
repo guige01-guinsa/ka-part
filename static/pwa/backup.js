@@ -460,11 +460,7 @@
       setMsg("복구할 ZIP 파일을 선택하세요.", true);
       return;
     }
-    const name = String(file.name || "").trim();
-    if (!name.toLowerCase().endsWith(".zip")) {
-      setMsg("ZIP 파일만 복구할 수 있습니다.", true);
-      return;
-    }
+    const name = String(file.name || "mobile-backup.zip").trim() || "mobile-backup.zip";
 
     const ok = confirm(
       `선택한 파일(${name})로 DB를 복구할까요?\n` +

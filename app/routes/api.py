@@ -13,6 +13,7 @@ import time
 import urllib.parse
 import urllib.error
 import urllib.request
+import zipfile
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
@@ -1906,9 +1907,7 @@ def _store_uploaded_restore_backup(upload: UploadFile, actor_login: str) -> Dict
     raw_name = str(getattr(upload, "filename", "") or "").strip()
     safe_name = Path(raw_name).name.strip()
     if not safe_name:
-        raise HTTPException(status_code=400, detail="backup file name is required")
-    if not safe_name.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="zip 파일만 복구할 수 있습니다.")
+        safe_name = "mobile_upload"
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     token = secrets.token_hex(4)
@@ -1919,12 +1918,15 @@ def _store_uploaded_restore_backup(upload: UploadFile, actor_login: str) -> Dict
     out_path = (out_dir / out_name).resolve()
 
     total = 0
+    signature = b""
     try:
         with open(out_path, "wb") as fp:
             while True:
                 chunk = upload.file.read(1024 * 1024)
                 if not chunk:
                     break
+                if not signature:
+                    signature = bytes(chunk[:4])
                 total += len(chunk)
                 if total > BACKUP_RESTORE_UPLOAD_MAX_BYTES:
                     raise HTTPException(
@@ -1932,6 +1934,11 @@ def _store_uploaded_restore_backup(upload: UploadFile, actor_login: str) -> Dict
                         detail=f"복구 업로드 파일이 너무 큽니다. 최대 {BACKUP_RESTORE_UPLOAD_MAX_BYTES} bytes",
                     )
                 fp.write(chunk)
+        if total <= 0:
+            raise HTTPException(status_code=400, detail="빈 파일은 복구할 수 없습니다.")
+        valid_sig = signature.startswith(b"PK\x03\x04") or signature.startswith(b"PK\x05\x06") or signature.startswith(b"PK\x07\x08")
+        if not valid_sig:
+            raise HTTPException(status_code=400, detail="ZIP 형식 파일만 복구할 수 있습니다.")
     except HTTPException:
         try:
             out_path.unlink(missing_ok=True)
@@ -1957,6 +1964,51 @@ def _store_uploaded_restore_backup(upload: UploadFile, actor_login: str) -> Dict
         "size_bytes": total,
         "original_name": safe_name,
     }
+
+
+def _validate_uploaded_restore_backup(relative_path: str) -> Dict[str, Any]:
+    try:
+        zip_path = resolve_backup_file(relative_path)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = set(zf.namelist())
+            if "manifest.json" not in names:
+                raise HTTPException(status_code=400, detail="manifest.json 이 없는 복구 파일입니다.")
+            with zf.open("manifest.json", "r") as fp:
+                manifest = json.loads(fp.read().decode("utf-8", errors="ignore"))
+    except HTTPException:
+        raise
+    except zipfile.BadZipFile as e:
+        raise HTTPException(status_code=400, detail=f"손상된 zip 파일입니다: {e}") from e
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"복구 파일 검증 실패: {e}") from e
+
+    if not isinstance(manifest, dict):
+        raise HTTPException(status_code=400, detail="manifest 형식이 올바르지 않습니다.")
+    scope = str(manifest.get("scope") or "").strip().lower()
+    if scope and scope != "full":
+        raise HTTPException(status_code=400, detail="전체 시스템 백업(full) 파일만 복구할 수 있습니다.")
+
+    target_keys = [
+        str(x or "").strip().lower()
+        for x in (manifest.get("target_keys") or [])
+        if str(x or "").strip()
+    ]
+    if target_keys:
+        missing = [k for k in target_keys if f"db/{k}.db" not in names]
+        if missing:
+            raise HTTPException(status_code=400, detail=f"복구 파일에 DB 항목이 없습니다: {', '.join(missing)}")
+    else:
+        db_members = [x for x in names if x.startswith("db/") and x.lower().endswith(".db")]
+        if not db_members:
+            raise HTTPException(status_code=400, detail="복구 가능한 DB 파일(db/*.db)이 없습니다.")
+
+    return manifest
 
 
 def _home_only_site_env_config() -> Dict[str, Any]:
