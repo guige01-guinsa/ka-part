@@ -8,6 +8,7 @@
     bootstrapUser: null,
     targets: [],
     templates: [],
+    templateCatalogById: {},
     runs: [],
     selectedRunId: 0,
     selectedRun: null,
@@ -119,6 +120,114 @@
       { item_key: "housekeeping", item_text: "정리정돈 및 위험물 방치 여부 확인", category: "일반", severity: 1, requires_photo: false, requires_note: false },
     ];
     return base.map((x, idx) => ({ ...x, sort_order: (idx + 1) * 10, is_active: true }));
+  }
+
+  function normalizeTemplateTreeFromItems(items) {
+    const rows = Array.isArray(items) ? items : [];
+    const majorOrder = [];
+    const majorMap = new Map();
+
+    const ensureMajor = (majorName) => {
+      const key = String(majorName || "").trim() || "기본 대분류";
+      if (!majorMap.has(key)) {
+        majorOrder.push(key);
+        majorMap.set(key, { middleOrder: [], middleMap: new Map() });
+      }
+      return majorMap.get(key);
+    };
+
+    const ensureMiddle = (majorNode, middleName) => {
+      const key = String(middleName || "").trim();
+      if (!majorNode.middleMap.has(key)) {
+        majorNode.middleOrder.push(key);
+        majorNode.middleMap.set(key, { minors: [] });
+      }
+      return majorNode.middleMap.get(key);
+    };
+
+    for (const row of rows) {
+      const majorName = String(row?.category || "").trim() || "기본 대분류";
+      const itemText = String(row?.item_text || row?.item_key || "").trim();
+      const majorNode = ensureMajor(majorName);
+
+      if (!itemText || itemText === majorName) {
+        ensureMiddle(majorNode, "");
+        continue;
+      }
+
+      const split = itemText.split("/").map((v) => String(v || "").trim()).filter((v) => !!v);
+      if (split.length >= 2) {
+        const middleName = split[0];
+        const minorName = split.slice(1).join(" / ");
+        const middleNode = ensureMiddle(majorNode, middleName);
+        if (minorName && !middleNode.minors.includes(minorName)) middleNode.minors.push(minorName);
+        continue;
+      }
+
+      ensureMiddle(majorNode, itemText);
+    }
+
+    if (!majorOrder.length) return [];
+    return majorOrder.slice(0, 10).map((majorName) => {
+      const majorNode = majorMap.get(majorName);
+      const middleRows = (majorNode?.middleOrder || [""]).slice(0, 10).map((middleName) => {
+        const middleNode = majorNode.middleMap.get(middleName);
+        const minors = Array.isArray(middleNode?.minors) ? middleNode.minors.slice(0, 10) : [];
+        return {
+          middle: String(middleName || ""),
+          minors: minors.length ? minors : [""],
+        };
+      });
+      return { major: majorName, middles: middleRows.length ? middleRows : [{ middle: "", minors: [""] }] };
+    });
+  }
+
+  function fillTreeFormFromTemplateItems(items) {
+    const tree = normalizeTemplateTreeFromItems(items);
+    const wrap = $("#detailItems");
+    if (!wrap) return;
+    if (!tree.length) {
+      buildDetailItemInputs(Number($("#detailItemCount")?.value || 1));
+      return;
+    }
+
+    const majorCount = Math.max(1, Math.min(10, tree.length));
+    const countInput = $("#detailItemCount");
+    if (countInput) countInput.value = String(majorCount);
+    wrap.innerHTML = "";
+
+    for (let majorIdx = 0; majorIdx < majorCount; majorIdx += 1) {
+      const majorData = tree[majorIdx] || { major: `대분류 ${majorIdx + 1}`, middles: [{ middle: "", minors: [""] }] };
+      const card = buildMajorCard(majorIdx + 1);
+      wrap.appendChild(card);
+
+      const majorInput = card.querySelector("input[data-role='major-name']");
+      if (majorInput) majorInput.value = String(majorData.major || `대분류 ${majorIdx + 1}`);
+
+      const middleRows = Array.isArray(majorData.middles) && majorData.middles.length ? majorData.middles.slice(0, 10) : [{ middle: "", minors: [""] }];
+      const middleCountInput = card.querySelector("input[data-role='middle-count']");
+      if (middleCountInput) middleCountInput.value = String(Math.max(1, Math.min(10, middleRows.length)));
+      const middleList = card.querySelector("div[data-role='middle-list']");
+      renderMiddleRows(middleList, middleRows.length);
+
+      const middleEls = Array.from(card.querySelectorAll(".detail-middle-row"));
+      for (let middleIdx = 0; middleIdx < middleEls.length; middleIdx += 1) {
+        const middleEl = middleEls[middleIdx];
+        const middleData = middleRows[middleIdx] || { middle: "", minors: [""] };
+        const middleInput = middleEl.querySelector("input[data-role='middle-name']");
+        if (middleInput) middleInput.value = String(middleData.middle || "");
+
+        const minors = Array.isArray(middleData.minors) && middleData.minors.length ? middleData.minors.slice(0, 10) : [""];
+        const minorCountInput = middleEl.querySelector("input[data-role='minor-count']");
+        if (minorCountInput) minorCountInput.value = String(Math.max(1, Math.min(10, minors.length)));
+        const minorList = middleEl.querySelector("div[data-role='minor-list']");
+        renderMinorRows(minorList, minors.length, middleIdx + 1);
+        const minorInputs = Array.from(middleEl.querySelectorAll("input[data-role='minor-name']"));
+        for (let minorIdx = 0; minorIdx < minorInputs.length; minorIdx += 1) {
+          minorInputs[minorIdx].value = String(minors[minorIdx] || "");
+        }
+      }
+    }
   }
 
   function updateSetupState(data) {
@@ -341,6 +450,20 @@
     state.bootstrapUser = data.user || null;
     state.targets = Array.isArray(data.targets) ? data.targets : [];
     state.templates = Array.isArray(data.templates) ? data.templates : [];
+    state.templateCatalogById = {};
+
+    try {
+      const params = new URLSearchParams();
+      if (state.siteCode) params.set("site_code", state.siteCode);
+      params.set("active", "1");
+      params.set("include_items", "1");
+      const templateData = await apiGet(`/api/inspection/templates?${params.toString()}`);
+      for (const row of (templateData?.items || [])) {
+        state.templateCatalogById[String(row.id)] = Array.isArray(row.items) ? row.items : [];
+      }
+    } catch (_e) {
+      state.templateCatalogById = {};
+    }
 
     const userLine = $("#userLine");
     if (userLine) {
@@ -549,6 +672,42 @@
     msg(`점검 생성 완료: ${out.run_code || out.run_id}`);
     await loadRuns();
     if (Number(out.run_id || 0) > 0) await openRun(Number(out.run_id || 0));
+  }
+
+  async function loadSelectedQuickSetup() {
+    if (!isManagerUser()) {
+      msg("최고/운영관리자 또는 단지대표자 권한에서만 사용할 수 있습니다.", true);
+      return;
+    }
+    const target = getSelectedTarget();
+    const template = getSelectedTemplate();
+    if (!target || !template) {
+      msg("점검대상과 점검표를 먼저 선택한 후 불러오기를 실행해 주세요.", true);
+      return;
+    }
+
+    if ($("#quickTargetName")) $("#quickTargetName").value = String(target.name || "");
+    if ($("#quickTemplateName")) $("#quickTemplateName").value = String(template.name || "");
+    const periodValue = String(template.period || "MONTHLY").trim().toUpperCase() || "MONTHLY";
+    if ($("#quickTemplatePeriod")) $("#quickTemplatePeriod").value = periodValue;
+
+    const templateId = String(template.id || "");
+    let items = state.templateCatalogById[templateId];
+    if (!Array.isArray(items)) {
+      const params = new URLSearchParams();
+      if (state.siteCode) params.set("site_code", state.siteCode);
+      params.set("active", "1");
+      params.set("include_items", "1");
+      const templateData = await apiGet(`/api/inspection/templates?${params.toString()}`);
+      state.templateCatalogById = {};
+      for (const row of (templateData?.items || [])) {
+        state.templateCatalogById[String(row.id)] = Array.isArray(row.items) ? row.items : [];
+      }
+      items = state.templateCatalogById[templateId] || [];
+    }
+
+    fillTreeFormFromTemplateItems(items);
+    msg(`선택 레코드 불러오기 완료: ${target.name} / ${template.name}. 수정 후 '리스트 폼 자동 생성'으로 새 항목을 추가할 수 있습니다.`);
   }
 
   async function quickSetup() {
@@ -767,6 +926,7 @@
       $("#btnVerifyArchive")?.addEventListener("click", () => verifyArchive().catch((e) => verifyMsg(e.message || e, true)));
       $("#btnOpenPdf")?.addEventListener("click", openArchivePdf);
       $("#btnQuickSetup")?.addEventListener("click", () => quickSetup().catch((e) => msg(e.message || e, true)));
+      $("#btnLoadSelectedQuick")?.addEventListener("click", () => loadSelectedQuickSetup().catch((e) => msg(e.message || e, true)));
       $("#btnBuildDetailItems")?.addEventListener("click", () => {
         buildDetailItemInputs(Number($("#detailItemCount")?.value || 1));
       });
