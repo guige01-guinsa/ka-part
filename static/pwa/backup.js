@@ -202,6 +202,7 @@
 
     applySiteIdentityVisibility();
     if (!canViewSiteIdentity(me)) stripSiteIdentityFromUrl();
+    $("#restoreUploadWrap")?.classList.toggle("hidden", !isAdmin(me));
   }
 
   function renderScheduleInfo(schedules) {
@@ -448,6 +449,66 @@
     await Promise.all([loadHistory(), refreshStatus()]);
   }
 
+  async function restoreBackupFromFile() {
+    if (!isAdmin(me)) {
+      setMsg("백업파일 복구는 최고/운영관리자만 가능합니다.", true);
+      return;
+    }
+    const fileEl = $("#restoreFile");
+    const file = fileEl?.files?.[0];
+    if (!file) {
+      setMsg("복구할 ZIP 파일을 선택하세요.", true);
+      return;
+    }
+    const name = String(file.name || "").trim();
+    if (!name.toLowerCase().endsWith(".zip")) {
+      setMsg("ZIP 파일만 복구할 수 있습니다.", true);
+      return;
+    }
+
+    const ok = confirm(
+      `선택한 파일(${name})로 DB를 복구할까요?\n` +
+      "- 전체 시스템 점검모드가 잠시 활성화됩니다.\n" +
+      "- 복구 전 현재 DB 스냅샷(pre_restore)이 자동 생성됩니다."
+    );
+    if (!ok) return;
+
+    const token = KAAuth.getToken();
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const fd = new FormData();
+    fd.append("backup_file", file, name);
+    fd.append("with_maintenance", "true");
+
+    setMsg("업로드 복구 실행 중입니다...");
+    const res = await fetch("/api/backup/restore/upload", {
+      method: "POST",
+      headers,
+      body: fd,
+    });
+    if (res.status === 401) {
+      KAAuth.clearSession();
+      KAAuth.redirectLogin("/pwa/backup.html");
+      return;
+    }
+    const raw = await res.text().catch(() => "");
+    let body = null;
+    try { body = raw ? JSON.parse(raw) : {}; } catch (_e) {}
+    if (!res.ok) {
+      throw new Error((body && body.detail) || raw || `${res.status}`);
+    }
+    const result = body && body.result ? body.result : {};
+    const targets = Array.isArray(result.target_labels) ? result.target_labels.join(", ") : "-";
+    const rollback = String(result.rollback_relative_path || "").trim();
+    const uploadedRel = String(body?.uploaded?.relative_path || "").trim();
+    const parts = [`업로드 복구 완료 (대상: ${targets})`];
+    if (uploadedRel) parts.push(`업로드 파일: ${uploadedRel}`);
+    if (rollback) parts.push(`복구 전 스냅샷: ${rollback}`);
+    setMsg(parts.join(" / "));
+    if (fileEl) fileEl.value = "";
+    await Promise.all([loadHistory(), refreshStatus()]);
+  }
+
   async function downloadBackup(path) {
     const payload = await fetchBackupBlob(path);
     if (!payload) return;
@@ -469,6 +530,9 @@
     });
     $("#btnRunBackup")?.addEventListener("click", () => {
       runBackup().catch((e) => setMsg(e.message, true));
+    });
+    $("#btnRestoreFile")?.addEventListener("click", () => {
+      restoreBackupFromFile().catch((e) => setMsg(e.message || String(e), true));
     });
     $("#scopeSelect")?.addEventListener("change", () => {
       const scope = getScope();

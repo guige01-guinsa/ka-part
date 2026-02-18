@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+from pathlib import Path
 import re
 import secrets
 import threading
@@ -16,11 +17,12 @@ from collections import deque
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from itsdangerous import URLSafeTimedSerializer
 
 from ..backup_manager import (
+    BACKUP_ROOT,
     backup_timezone_name,
     clear_maintenance_mode,
     get_backup_item,
@@ -181,6 +183,10 @@ AUTH_COOKIE_SAMESITE = (os.getenv("KA_AUTH_COOKIE_SAMESITE") or "lax").strip().l
 if AUTH_COOKIE_SAMESITE not in {"lax", "strict", "none"}:
     AUTH_COOKIE_SAMESITE = "lax"
 BOOTSTRAP_TOKEN = (os.getenv("KA_BOOTSTRAP_TOKEN") or "").strip()
+BACKUP_RESTORE_UPLOAD_MAX_BYTES = max(
+    10 * 1024 * 1024,
+    int(os.getenv("KA_BACKUP_RESTORE_UPLOAD_MAX_BYTES", str(1024 * 1024 * 1024))),
+)
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -1894,6 +1900,65 @@ def _can_manage_backup(user: Dict[str, Any]) -> bool:
     return _permission_level_from_user(user) in {"admin", "site_admin"}
 
 
+def _store_uploaded_restore_backup(upload: UploadFile, actor_login: str) -> Dict[str, Any]:
+    if upload is None:
+        raise HTTPException(status_code=400, detail="backup_file is required")
+    raw_name = str(getattr(upload, "filename", "") or "").strip()
+    safe_name = Path(raw_name).name.strip()
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="backup file name is required")
+    if not safe_name.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="zip 파일만 복구할 수 있습니다.")
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    token = secrets.token_hex(4)
+    safe_actor = re.sub(r"[^a-z0-9_.-]+", "_", str(actor_login or "").strip().lower()) or "admin"
+    out_dir = (Path(BACKUP_ROOT) / "imported" / datetime.now().strftime("%Y%m%d")).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_name = f"uploaded_{safe_actor}_{ts}_{token}.zip"
+    out_path = (out_dir / out_name).resolve()
+
+    total = 0
+    try:
+        with open(out_path, "wb") as fp:
+            while True:
+                chunk = upload.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > BACKUP_RESTORE_UPLOAD_MAX_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"복구 업로드 파일이 너무 큽니다. 최대 {BACKUP_RESTORE_UPLOAD_MAX_BYTES} bytes",
+                    )
+                fp.write(chunk)
+    except HTTPException:
+        try:
+            out_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        try:
+            out_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"복구 업로드 저장 실패: {e}") from e
+    finally:
+        try:
+            upload.file.close()
+        except Exception:
+            pass
+
+    rel = str(out_path.relative_to(Path(BACKUP_ROOT))).replace("\\", "/")
+    return {
+        "relative_path": rel,
+        "file_name": out_name,
+        "size_bytes": total,
+        "original_name": safe_name,
+    }
+
+
 def _home_only_site_env_config() -> Dict[str, Any]:
     visible = set(DEFAULT_INITIAL_VISIBLE_TAB_KEYS)
     hide_tabs = [tab for tab in SCHEMA_TAB_ORDER if tab not in visible]
@@ -3501,6 +3566,40 @@ def api_backup_restore(request: Request, payload: Dict[str, Any] = Body(default=
         raise HTTPException(status_code=500, detail=f"restore failed: {e}") from e
 
     return {"ok": True, "result": result, "maintenance": get_maintenance_status()}
+
+
+@router.post("/backup/restore/upload")
+async def api_backup_restore_upload(
+    request: Request,
+    backup_file: UploadFile = File(...),
+    with_maintenance: str = Form("true"),
+):
+    user, _token = _require_admin(request)
+    actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
+    saved = _store_uploaded_restore_backup(backup_file, actor_login=actor_login)
+
+    try:
+        result = restore_backup_zip(
+            actor=actor_login,
+            relative_path=str(saved.get("relative_path") or ""),
+            target_keys=[],
+            with_maintenance=_clean_bool(with_maintenance, default=True),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"restore failed: {e}") from e
+
+    return {
+        "ok": True,
+        "uploaded": saved,
+        "result": result,
+        "maintenance": get_maintenance_status(),
+    }
 
 
 @router.post("/backup/maintenance/clear")

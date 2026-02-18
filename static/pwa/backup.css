@@ -165,6 +165,14 @@ h2 {
   gap: 8px;
 }
 
+.restore-upload {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  margin: 10px 0 8px;
+}
+
 .target-item,
 .history-item {
   border: 1px solid var(--line);
@@ -225,8 +233,16 @@ h2 {
   color: #ffb4b4;
 }
 
+.hidden {
+  display: none !important;
+}
+
 @media (max-width: 760px) {
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .restore-upload {
     grid-template-columns: 1fr;
   }
 
