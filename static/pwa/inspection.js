@@ -204,7 +204,7 @@
       row.innerHTML = `
         <div class="detail-middle-head">
           <label class="field">
-            <span>중분류 ${i}</span>
+            <span>중분류 ${i}(선택)</span>
             <input data-role="middle-name" type="text" maxlength="120" placeholder="예: 수전설비" />
           </label>
           <label class="field">
@@ -233,7 +233,7 @@
       const label = document.createElement("label");
       label.className = "field";
       label.innerHTML = `
-        <span>소분류 ${middleIdx}-${i}</span>
+        <span>소분류 ${middleIdx}-${i}(선택)</span>
         <input data-role="minor-name" type="text" maxlength="120" placeholder="예: 차단기 상태 확인" />
       `;
       listEl.appendChild(label);
@@ -260,21 +260,60 @@
       }
       middleRows.forEach((middleRow, middleIdx) => {
         const middleName = String(middleRow.querySelector("input[data-role='middle-name']")?.value || "").trim();
-        if (!middleName) {
-          missing.push(`대분류 ${majorIdx + 1} - 중분류 ${middleIdx + 1}`);
-          return;
-        }
         const minorInputs = Array.from(middleRow.querySelectorAll("input[data-role='minor-name']"));
         if (!minorInputs.length) {
           missing.push(`대분류 ${majorIdx + 1} - 중분류 ${middleIdx + 1}의 소분류`);
           return;
         }
-        minorInputs.forEach((minorInput, minorIdx) => {
-          const minorName = String(minorInput.value || "").trim();
-          if (!minorName) {
-            missing.push(`대분류 ${majorIdx + 1} - 중분류 ${middleIdx + 1} - 소분류 ${minorIdx + 1}`);
+        const minorNames = minorInputs.map((minorInput) => String(minorInput.value || "").trim()).filter((v) => !!v);
+
+        if (!middleName) {
+          if (!minorNames.length) {
+            items.push({
+              item_key: `item_${String(seq).padStart(3, "0")}`,
+              item_text: majorName,
+              category: majorName,
+              severity: 1,
+              sort_order: seq * 10,
+              requires_photo: false,
+              requires_note: false,
+              is_active: true,
+            });
+            seq += 1;
             return;
           }
+          minorNames.forEach((minorName) => {
+            items.push({
+              item_key: `item_${String(seq).padStart(3, "0")}`,
+              item_text: minorName,
+              category: majorName,
+              severity: 1,
+              sort_order: seq * 10,
+              requires_photo: false,
+              requires_note: false,
+              is_active: true,
+            });
+            seq += 1;
+          });
+          return;
+        }
+
+        if (!minorNames.length) {
+          items.push({
+            item_key: `item_${String(seq).padStart(3, "0")}`,
+            item_text: middleName,
+            category: majorName,
+            severity: 1,
+            sort_order: seq * 10,
+            requires_photo: false,
+            requires_note: false,
+            is_active: true,
+          });
+          seq += 1;
+          return;
+        }
+
+        minorNames.forEach((minorName) => {
           items.push({
             item_key: `item_${String(seq).padStart(3, "0")}`,
             item_text: `${middleName} / ${minorName}`,
@@ -290,7 +329,7 @@
       });
     });
     if (missing.length) {
-      throw new Error(`트리 항목 입력을 확인해 주세요: ${missing.join(", ")}`);
+      throw new Error(`대분류는 필수입니다. 입력을 확인해 주세요: ${missing.join(", ")}`);
     }
     return items;
   }
