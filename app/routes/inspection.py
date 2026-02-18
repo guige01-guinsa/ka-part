@@ -389,8 +389,34 @@ def inspection_targets_create(request: Request, payload: TargetPayload = Body(..
     user, _token = _require_manager_user(request)
     scoped_site = _scope_site_code(user, payload.site_code)
     ts = _now_ts()
+    clean_name = str(payload.name).strip()
+    clean_location = str(payload.location or "").strip()
+    clean_description = str(payload.description or "").strip()
     con = _connect()
     try:
+        existing = con.execute(
+            """
+            SELECT id
+            FROM inspection_targets
+            WHERE site_code=? AND name=?
+            LIMIT 1
+            """,
+            (scoped_site, clean_name),
+        ).fetchone()
+        if existing:
+            rid = int(existing["id"])
+            con.execute(
+                """
+                UPDATE inspection_targets
+                SET location=?, description=?, is_active=?, updated_at=?
+                WHERE id=?
+                """,
+                (clean_location, clean_description, 1 if payload.is_active else 0, ts, rid),
+            )
+            con.commit()
+            row = con.execute("SELECT * FROM inspection_targets WHERE id=?", (rid,)).fetchone()
+            return {"ok": True, "item": dict(row) if row else {"id": rid}, "upserted": True}
+
         con.execute(
             """
             INSERT INTO inspection_targets(site_code, name, location, description, is_active, created_by, created_at, updated_at)
@@ -398,9 +424,9 @@ def inspection_targets_create(request: Request, payload: TargetPayload = Body(..
             """,
             (
                 scoped_site,
-                str(payload.name).strip(),
-                str(payload.location or "").strip(),
-                str(payload.description or "").strip(),
+                clean_name,
+                clean_location,
+                clean_description,
                 1 if payload.is_active else 0,
                 str(user.get("login_id") or ""),
                 ts,
@@ -465,6 +491,8 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
     user, _token = _require_manager_user(request)
     scoped_site = _scope_site_code(user, payload.site_code)
     ts = _now_ts()
+    clean_name = str(payload.name).strip()
+    clean_period = _safe_period(payload.period)
     con = _connect()
     try:
         target = con.execute(
@@ -475,6 +503,29 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
             raise HTTPException(status_code=404, detail="점검대상을 찾을 수 없습니다.")
         _scope_site_code(user, target["site_code"])
 
+        existing = con.execute(
+            """
+            SELECT id
+            FROM inspection_templates
+            WHERE site_code=? AND name=?
+            LIMIT 1
+            """,
+            (scoped_site, clean_name),
+        ).fetchone()
+        if existing:
+            template_id = int(existing["id"])
+            con.execute(
+                """
+                UPDATE inspection_templates
+                SET target_id=?, period=?, is_active=?, updated_at=?
+                WHERE id=?
+                """,
+                (int(payload.target_id), clean_period, 1 if payload.is_active else 0, ts, template_id),
+            )
+            _save_template_items(con, template_id, payload.items, ts)
+            con.commit()
+            return {"ok": True, "template_id": template_id, "upserted": True}
+
         con.execute(
             """
             INSERT INTO inspection_templates(site_code, target_id, name, period, is_active, created_by, created_at, updated_at)
@@ -483,8 +534,8 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
             (
                 scoped_site,
                 int(payload.target_id),
-                str(payload.name).strip(),
-                _safe_period(payload.period),
+                clean_name,
+                clean_period,
                 1 if payload.is_active else 0,
                 str(user.get("login_id") or ""),
                 ts,
