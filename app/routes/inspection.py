@@ -1098,6 +1098,30 @@ def _collect_export_issues(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return issues
 
 
+def _split_item_levels(category: Any, item_text: Any, item_key: Any = "") -> Tuple[str, str, str]:
+    major = str(category or "").strip()
+    text = str(item_text or item_key or "").strip()
+    middle = ""
+    minor = ""
+
+    if text:
+        parts = [str(x or "").strip() for x in str(text).split("/") if str(x or "").strip()]
+        if len(parts) >= 2:
+            middle = parts[0]
+            minor = " / ".join(parts[1:])
+        else:
+            if text != major:
+                middle = text
+
+    if not major:
+        if middle:
+            major, middle = middle, ""
+        elif text:
+            major = text
+
+    return major, middle, minor
+
+
 @router.get("/inspection/runs/export.xlsx")
 def inspection_runs_export_xlsx(
     request: Request,
@@ -1288,14 +1312,16 @@ def inspection_runs_detail_export_xlsx(run_id: int, request: Request):
     ws_meta.column_dimensions["B"].width = 52
 
     ws_items = wb.create_sheet("점검항목")
-    item_headers = ["ID", "분류", "항목", "결과", "메모", "사진파일", "갱신일"]
+    item_headers = ["ID", "대분류", "중분류", "소분류", "결과", "메모", "사진파일", "갱신일"]
     ws_items.append(item_headers)
     for row in items:
+        major, middle, minor = _split_item_levels(row.get("category"), row.get("item_text"), row.get("item_key"))
         ws_items.append(
             [
                 int(row.get("id") or 0),
-                str(row.get("category") or ""),
-                str(row.get("item_text") or row.get("item_key") or ""),
+                major,
+                middle,
+                minor,
                 _result_label(row.get("result") or "NA"),
                 str(row.get("note") or ""),
                 str(row.get("photo_name") or ""),
