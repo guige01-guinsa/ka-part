@@ -349,7 +349,7 @@
         description: "빠른 설정으로 생성된 기본 점검대상",
         is_active: true,
       });
-      targetId = Number(targetOut?.item?.id || 0);
+      targetId = Number(targetOut?.item?.id || targetOut?.target_id || 0);
       if (targetId <= 0) {
         throw new Error("점검대상 생성에 실패했습니다.");
       }
@@ -365,7 +365,7 @@
         is_active: true,
         items,
       });
-      templateId = Number(templateOut?.item?.id || 0);
+      templateId = Number(templateOut?.template_id || templateOut?.item?.id || 0);
       if (templateId <= 0) {
         throw new Error("점검표 생성에 실패했습니다.");
       }
