@@ -27,8 +27,8 @@
     <section class="card">
       <h2>백업 권한/대상</h2>
       <div id="targetList" class="target-list"></div>
-      <div class="hint">관리자는 대상 DB를 선택해 전체 또는 단지코드 범위 백업을 실행할 수 있습니다.</div>
-      <div class="hint">단지대표자는 소속 단지코드 범위 백업만 실행/조회/다운로드할 수 있습니다.</div>
+      <div class="hint">최고/운영관리자는 대상 DB를 선택해 전체 또는 단지코드 범위 백업을 실행할 수 있습니다.</div>
+      <div class="hint">단지관리자(단지대표자 포함)는 소속 단지코드 범위 백업만 실행/조회/다운로드할 수 있습니다.</div>
     </section>
 
     <section class="card">
@@ -49,8 +49,16 @@
           <span>단지명</span>
           <input id="siteName" type="text" placeholder="예: OO아파트" />
         </label>
+        <div class="field">
+          <span>단말기 저장</span>
+          <label class="checkline">
+            <input id="saveLocalCopy" type="checkbox" checked />
+            <span>실행 후 이 단말기에 backup_APT 폴더로도 저장</span>
+          </label>
+        </div>
       </div>
       <div id="scheduleInfo" class="hint"></div>
+      <div class="hint">`backup_APT` 폴더가 없으면 안내 후 자동 생성합니다. (브라우저 지원 시)</div>
       <div id="msg" class="msg"></div>
     </section>
 
@@ -63,6 +71,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260218a"></script>
-  <script src="/pwa/backup.js?v=20260216a"></script>
+  <script src="/pwa/backup.js?v=20260218b"></script>
 </body>
 </html>

@@ -8,6 +8,8 @@
   let options = null;
   let pollTimer = null;
   let backupTimezone = "";
+  let clientBackupDirHandle = null;
+  const CLIENT_BACKUP_DIR_NAME = "backup_APT";
 
   function isAdmin(user) {
     return !!(user && user.is_admin);
@@ -80,7 +82,7 @@
   function setMetaLine() {
     const el = $("#metaLine");
     if (!el || !me) return;
-    const level = isAdmin(me) ? "관리자" : "단지대표자";
+    const level = isAdmin(me) ? "최고/운영관리자" : "단지관리자";
     const showSite = canViewSiteIdentity(me);
     const code = (me.site_code || "").trim().toUpperCase();
     const name = (me.site_name || "").trim();
@@ -221,6 +223,76 @@
     return KAAuth.requestJson(url, opts);
   }
 
+  async function fetchBackupBlob(path) {
+    const token = KAAuth.getToken();
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const url = `/api/backup/download?path=${encodeURIComponent(path)}`;
+    const res = await fetch(url, { headers });
+    if (res.status === 401) {
+      KAAuth.clearSession();
+      KAAuth.redirectLogin("/pwa/backup.html");
+      return null;
+    }
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error((txt || `${res.status}`).trim());
+    }
+    const blob = await res.blob();
+    const name = parseFilename(res.headers.get("content-disposition"), "backup.zip");
+    return { blob, name };
+  }
+
+  async function ensureClientBackupFolder() {
+    if (!$("#saveLocalCopy")?.checked) return { ok: false, skipped: true };
+    if (typeof window.showDirectoryPicker !== "function") {
+      return { ok: false, unsupported: true };
+    }
+
+    try {
+      if (clientBackupDirHandle) {
+        const q = await clientBackupDirHandle.queryPermission({ mode: "readwrite" });
+        if (q === "granted") return { ok: true, created: false };
+        const req = await clientBackupDirHandle.requestPermission({ mode: "readwrite" });
+        if (req === "granted") return { ok: true, created: false };
+      }
+    } catch (_e) {}
+
+    try {
+      const rootHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+      let backupDir = null;
+      let created = false;
+      try {
+        backupDir = await rootHandle.getDirectoryHandle(CLIENT_BACKUP_DIR_NAME, { create: false });
+      } catch (e) {
+        if (e && e.name === "NotFoundError") {
+          alert(`선택한 위치에 '${CLIENT_BACKUP_DIR_NAME}' 폴더가 없어 자동 생성합니다.`);
+          backupDir = await rootHandle.getDirectoryHandle(CLIENT_BACKUP_DIR_NAME, { create: true });
+          created = true;
+        } else {
+          throw e;
+        }
+      }
+      clientBackupDirHandle = backupDir;
+      return { ok: true, created };
+    } catch (e) {
+      if (e && e.name === "AbortError") return { ok: false, cancelled: true };
+      return { ok: false, error: e };
+    }
+  }
+
+  async function saveBackupToClientFolder(path, fallbackName = "backup.zip") {
+    if (!clientBackupDirHandle) return { ok: false, reason: "not-prepared" };
+    const payload = await fetchBackupBlob(path);
+    if (!payload) return { ok: false, reason: "no-payload" };
+    const fileName = String(payload.name || fallbackName || "backup.zip").trim() || "backup.zip";
+    const fileHandle = await clientBackupDirHandle.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(payload.blob);
+    await writable.close();
+    return { ok: true, fileName };
+  }
+
   async function refreshStatus() {
     const data = await jfetch("/api/backup/status");
     backupTimezone = String(data.timezone || "").trim();
@@ -302,6 +374,19 @@
       return;
     }
 
+    const wantsLocalCopy = !!$("#saveLocalCopy")?.checked;
+    let localReady = { ok: false, skipped: true };
+    if (wantsLocalCopy) {
+      localReady = await ensureClientBackupFolder();
+      if (localReady.cancelled) {
+        setMsg("단말기 backup_APT 저장이 취소되어 서버 백업만 진행합니다.");
+      } else if (localReady.unsupported) {
+        setMsg("브라우저가 단말기 폴더 저장을 지원하지 않아 서버 백업만 진행합니다.");
+      } else if (localReady.error) {
+        setMsg(`단말기 backup_APT 준비 실패: ${localReady.error?.message || localReady.error}`, true);
+      }
+    }
+
     const runBtn = $("#btnRunBackup");
     if (runBtn) runBtn.disabled = true;
     setMsg("백업 실행 중입니다...");
@@ -311,7 +396,21 @@
         body: JSON.stringify(payload),
       });
       const result = data && data.result ? data.result : {};
-      setMsg(`백업 완료: ${result.file_name || "-"}`);
+      let doneMsg = `백업 완료: ${result.file_name || "-"}`;
+      if (result.server_backup_saved && result.server_backup_relative_path) {
+        doneMsg += ` / 서버 backup_APT 저장: ${result.server_backup_relative_path}`;
+      }
+      if (wantsLocalCopy && localReady.ok && result.relative_path) {
+        try {
+          const local = await saveBackupToClientFolder(result.relative_path, result.file_name || "backup.zip");
+          if (local.ok) {
+            doneMsg += ` / 단말기 backup_APT 저장: ${local.fileName}`;
+          }
+        } catch (e) {
+          doneMsg += " / 단말기 backup_APT 저장 실패(다운로드 버튼으로 수동 저장)";
+        }
+      }
+      setMsg(doneMsg);
       await Promise.all([loadHistory(), refreshStatus()]);
     } catch (e) {
       setMsg(e.message || String(e), true);
@@ -350,24 +449,10 @@
   }
 
   async function downloadBackup(path) {
-    const token = KAAuth.getToken();
-    const headers = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const url = `/api/backup/download?path=${encodeURIComponent(path)}`;
-    const res = await fetch(url, {
-      headers,
-    });
-    if (res.status === 401) {
-      KAAuth.clearSession();
-      KAAuth.redirectLogin("/pwa/backup.html");
-      return;
-    }
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      throw new Error((txt || `${res.status}`).trim());
-    }
-    const blob = await res.blob();
-    const name = parseFilename(res.headers.get("content-disposition"), "backup.zip");
+    const payload = await fetchBackupBlob(path);
+    if (!payload) return;
+    const blob = payload.blob;
+    const name = payload.name;
     const href = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = href;
@@ -424,7 +509,7 @@
   async function init() {
     me = await KAAuth.requireAuth();
     if (!canManageBackup(me)) {
-      alert("관리자/단지대표자만 접근할 수 있습니다.");
+      alert("최고/운영관리자 또는 단지관리자만 접근할 수 있습니다.");
       window.location.href = "/pwa/";
       return;
     }

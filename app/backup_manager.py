@@ -21,6 +21,7 @@ logger = logging.getLogger("ka-part.backup")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 BACKUP_ROOT = Path(os.getenv("KA_BACKUP_DIR", str(PROJECT_ROOT / "backups"))).resolve()
+SERVER_BACKUP_APT_ROOT = Path(os.getenv("KA_BACKUP_APT_DIR", str(PROJECT_ROOT / "backup_APT"))).resolve()
 FULL_BACKUP_DIR = BACKUP_ROOT / "full"
 SITE_BACKUP_DIR = BACKUP_ROOT / "site"
 TMP_BACKUP_DIR = BACKUP_ROOT / ".tmp"
@@ -69,6 +70,7 @@ def _sanitize_token(value: str, *, default: str = "backup") -> str:
 def _ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    SERVER_BACKUP_APT_ROOT.mkdir(parents=True, exist_ok=True)
     FULL_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     SITE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     TMP_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -281,6 +283,38 @@ def _write_sidecar(zip_path: Path, metadata: Dict[str, Any]) -> None:
     payload["file_name"] = zip_path.name
     payload["file_size_bytes"] = int(zip_path.stat().st_size) if zip_path.exists() else 0
     sidecar.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _mirror_backup_to_server_apt(zip_path: Path, metadata: Dict[str, Any]) -> None:
+    if not zip_path.exists():
+        return
+
+    root_created = False
+    if not SERVER_BACKUP_APT_ROOT.exists():
+        SERVER_BACKUP_APT_ROOT.mkdir(parents=True, exist_ok=True)
+        root_created = True
+
+    rel = zip_path.relative_to(BACKUP_ROOT)
+    mirror_zip = (SERVER_BACKUP_APT_ROOT / rel).resolve()
+    mirror_zip.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(zip_path, mirror_zip)
+
+    if root_created:
+        notes = metadata.get("notes")
+        if isinstance(notes, list):
+            notes.append("서버 backup_APT 폴더가 없어 자동 생성 후 백업을 저장했습니다.")
+
+    metadata["server_backup_root"] = str(SERVER_BACKUP_APT_ROOT)
+    metadata["server_backup_relative_path"] = str(mirror_zip.relative_to(SERVER_BACKUP_APT_ROOT)).replace("\\", "/")
+    metadata["server_backup_file_name"] = mirror_zip.name
+    metadata["server_backup_saved"] = True
+
+    # keep sidecar and mirrored sidecar in sync with latest metadata
+    _write_sidecar(zip_path, metadata)
+    side_src = _sidecar_path(zip_path)
+    side_dst = _sidecar_path(mirror_zip)
+    if side_src.exists():
+        shutil.copy2(side_src, side_dst)
 
 
 def _table_exists(con: sqlite3.Connection, table: str) -> bool:
@@ -602,6 +636,13 @@ def _run_full_backup(
                 )
         meta["maintenance_released"] = maintenance_released
         _write_sidecar(zip_path, meta)
+        try:
+            _mirror_backup_to_server_apt(zip_path, meta)
+        except Exception as e:
+            meta["server_backup_saved"] = False
+            meta["notes"].append(f"서버 backup_APT 저장 실패: {e}")
+            _write_sidecar(zip_path, meta)
+            logger.exception("Failed to mirror backup to server backup_APT: %s", zip_path)
         cleanup_old_backups()
         return _enrich_history_item(meta, zip_path)
     except Exception:
@@ -678,6 +719,13 @@ def _run_site_backup(
         zf.writestr("manifest.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
     _write_sidecar(zip_path, meta)
+    try:
+        _mirror_backup_to_server_apt(zip_path, meta)
+    except Exception as e:
+        meta["server_backup_saved"] = False
+        meta["notes"].append(f"서버 backup_APT 저장 실패: {e}")
+        _write_sidecar(zip_path, meta)
+        logger.exception("Failed to mirror site backup to server backup_APT: %s", zip_path)
     cleanup_old_backups()
     return _enrich_history_item(meta, zip_path)
 

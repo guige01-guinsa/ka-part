@@ -142,6 +142,23 @@ h2 {
   background: color-mix(in srgb, var(--bg-soft) 84%, black 16%);
 }
 
+.checkline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px;
+  font-size: 13px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg-soft) 84%, black 16%);
+}
+
+.checkline input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
 .target-list,
 .history-list {
   display: grid;

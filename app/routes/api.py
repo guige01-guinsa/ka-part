@@ -1891,7 +1891,7 @@ def _require_site_env_manager(request: Request) -> Tuple[Dict[str, Any], str]:
 
 
 def _can_manage_backup(user: Dict[str, Any]) -> bool:
-    return int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1
+    return _permission_level_from_user(user) in {"admin", "site_admin"}
 
 
 def _home_only_site_env_config() -> Dict[str, Any]:
@@ -3302,7 +3302,7 @@ def api_backup_status(request: Request):
         "permission_level": _permission_level_from_user(user),
         "schedules": [
             {"key": "daily_full", "label": "전체 시스템 DB 자동백업", "when": f"매일 00:00 ({backup_timezone_name()})"},
-            {"key": "weekly_site", "label": "단지대표자 단지코드 자동백업", "when": f"매주 금요일 00:20 ({backup_timezone_name()})"},
+            {"key": "weekly_site", "label": "단지관리자 단지코드 자동백업", "when": f"매주 금요일 00:20 ({backup_timezone_name()})"},
         ],
     }
 
