@@ -156,31 +156,43 @@
       const row = document.createElement("div");
       row.className = "detail-item-row";
       row.innerHTML = `
-        <label class="field">
-          <span>세부리스트 항목 ${i}</span>
-          <input data-role="detail-item-text" type="text" maxlength="300" placeholder="예: ${i}번 점검항목 내용을 입력하세요." />
-        </label>
+        <div class="detail-item-grid">
+          <label class="field">
+            <span>세부리스트 ${i} - 대분류</span>
+            <input data-role="detail-major" type="text" maxlength="120" placeholder="예: 전기" />
+          </label>
+          <label class="field">
+            <span>세부리스트 ${i} - 중분류</span>
+            <input data-role="detail-middle" type="text" maxlength="120" placeholder="예: 수전설비" />
+          </label>
+          <label class="field">
+            <span>세부리스트 ${i} - 소분류</span>
+            <input data-role="detail-minor" type="text" maxlength="120" placeholder="예: 차단기 상태 확인" />
+          </label>
+        </div>
       `;
       wrap.appendChild(row);
     }
   }
 
   function collectDetailItemsFromForm() {
-    const rows = Array.from(document.querySelectorAll("#detailItems .detail-item-row input[data-role='detail-item-text']"));
+    const rows = Array.from(document.querySelectorAll("#detailItems .detail-item-row"));
     if (!rows.length) return defaultTemplateItems();
 
     const items = [];
     const missing = [];
-    rows.forEach((input, idx) => {
-      const text = String(input.value || "").trim();
-      if (!text) {
+    rows.forEach((row, idx) => {
+      const major = String(row.querySelector("input[data-role='detail-major']")?.value || "").trim();
+      const middle = String(row.querySelector("input[data-role='detail-middle']")?.value || "").trim();
+      const minor = String(row.querySelector("input[data-role='detail-minor']")?.value || "").trim();
+      if (!major || !middle || !minor) {
         missing.push(idx + 1);
         return;
       }
       items.push({
         item_key: `item_${String(idx + 1).padStart(2, "0")}`,
-        item_text: text,
-        category: "",
+        item_text: `${middle} / ${minor}`,
+        category: major,
         severity: 1,
         sort_order: (idx + 1) * 10,
         requires_photo: false,
@@ -189,7 +201,7 @@
       });
     });
     if (missing.length) {
-      throw new Error(`세부리스트 항목 내용을 입력해 주세요: ${missing.join(", ")}번`);
+      throw new Error(`세부리스트 항목의 대/중/소분류를 모두 입력해 주세요: ${missing.join(", ")}번`);
     }
     return items;
   }

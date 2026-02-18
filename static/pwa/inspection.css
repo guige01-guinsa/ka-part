@@ -125,6 +125,13 @@ textarea { width: 100%; min-height: 68px; resize: vertical; }
   padding: 10px;
 }
 
+.detail-item-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
 @media (max-width: 760px) {
   .item-grid { grid-template-columns: 1fr; }
+  .detail-item-grid { grid-template-columns: 1fr; }
 }
