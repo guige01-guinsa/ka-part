@@ -354,7 +354,7 @@
     const homeMount = $("#filtersMountHome");
     const drawerMount = $("#filtersMountDrawer");
     if (!block || !homeMount || !drawerMount) return;
-    const target = isNarrowViewport() ? drawerMount : homeMount;
+    const target = (menuOpen || isNarrowViewport()) ? drawerMount : homeMount;
     if (block.parentElement !== target) {
       target.appendChild(block);
       syncStickyOffset();

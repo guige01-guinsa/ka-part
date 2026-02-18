@@ -110,15 +110,16 @@ body {
   top: 0;
   right: 0;
   z-index: 100;
-  width: min(420px, 92vw);
+  width: min(500px, 94vw);
   height: 100vh;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px;
+  padding: 14px;
   overflow-y: auto;
   overscroll-behavior: contain;
   border-left: 1px solid var(--line);
+  box-shadow: -16px 0 34px rgba(0, 0, 0, 0.36);
   background:
     radial-gradient(800px 380px at 20% -120px, rgba(45,125,255,.22), transparent 62%),
     radial-gradient(640px 280px at 92% -100px, rgba(243,155,47,.14), transparent 62%),
@@ -145,13 +146,13 @@ body {
 .menu-section {
   border: 1px solid color-mix(in srgb, var(--line) 88%, white 12%);
   border-radius: 14px;
-  padding: 10px;
+  padding: 12px;
   background: color-mix(in srgb, var(--card) 92%, black 8%);
 }
 
 .menu-section-title {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 900;
   margin-bottom: 8px;
 }
@@ -267,11 +268,15 @@ body {
 }
 
 .tab-run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin: 8px 12px 0;
-  padding: 7px 10px;
+  max-width: calc(100% - 24px);
+  padding: 6px 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  font-size: 12px;
+  border-radius: 999px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--muted);
   background: color-mix(in srgb, var(--bg-soft) 78%, black 22%);
@@ -549,6 +554,14 @@ body {
   body.parking-like-pc.home-page .context-line {
     border-color: #27465a;
     background: #0f2431;
+  }
+
+  body.parking-like-pc.home-page .tab-run-status {
+    margin: 8px auto 0;
+  }
+
+  body.parking-like-pc.home-page .menu-drawer {
+    width: min(560px, calc(100vw - 64px));
   }
 
   body.parking-like-pc.home-page .tabs {
