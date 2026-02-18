@@ -116,6 +116,15 @@ def _safe_result(value: Any) -> str:
     return raw
 
 
+def _result_label(value: Any) -> str:
+    code = _safe_result(value)
+    if code == "COMPLIANT":
+        return "양호"
+    if code == "NONCOMPLIANT":
+        return "부적합"
+    return "해당없음"
+
+
 def _normalize_role_text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -920,7 +929,7 @@ def _write_archive_pdf(snapshot: Dict[str, Any], run_code: str) -> str:
     line("[점검 항목]")
     for idx, item in enumerate(snapshot.get("items") or [], start=1):
         label = str(item.get("item_text") or item.get("item_key") or f"항목{idx}")
-        result = str(item.get("result") or "NA")
+        result = _result_label(item.get("result") or "NA")
         note = str(item.get("note") or "").strip()
         line(f"{idx}. {label} / 결과: {result}")
         if note:
@@ -1001,9 +1010,9 @@ def inspection_runs_submit(run_id: int, request: Request):
             note = str(row["note"] or "").strip()
             photo_path = str(row["photo_path"] or "").strip()
             if int(row["requires_note"] or 0) == 1 and not note:
-                raise HTTPException(status_code=409, detail=f"미준수 항목 메모가 필요합니다: {row['item_text']}")
+                raise HTTPException(status_code=409, detail=f"부적합 항목 메모가 필요합니다: {row['item_text']}")
             if int(row["requires_photo"] or 0) == 1 and not photo_path:
-                raise HTTPException(status_code=409, detail=f"미준수 항목 사진이 필요합니다: {row['item_text']}")
+                raise HTTPException(status_code=409, detail=f"부적합 항목 사진이 필요합니다: {row['item_text']}")
 
         approvers = _resolve_approval_chain(con, run)
         if not approvers:

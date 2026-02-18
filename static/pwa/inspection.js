@@ -270,7 +270,7 @@
           </div>
           <button class="btn" type="button" data-id="${Number(r.id || 0)}">상세</button>
         </div>
-        <div class="muted">${escapeHtml(r.target_name || "-")} / ${escapeHtml(r.template_name || "-")} / 미준수 ${Number(r.noncompliant_count || 0)}건</div>
+        <div class="muted">${escapeHtml(r.target_name || "-")} / ${escapeHtml(r.template_name || "-")} / 부적합 ${Number(r.noncompliant_count || 0)}건</div>
       `;
       div.querySelector("button")?.addEventListener("click", () => openRun(Number(r.id || 0)));
       wrap.appendChild(div);
@@ -424,8 +424,8 @@
               <label class="field">
                 <span>결과</span>
                 <select data-role="result">
-                  <option value="COMPLIANT" ${String(it.result || "").toUpperCase() === "COMPLIANT" ? "selected" : ""}>준수</option>
-                  <option value="NONCOMPLIANT" ${String(it.result || "").toUpperCase() === "NONCOMPLIANT" ? "selected" : ""}>미준수</option>
+                  <option value="COMPLIANT" ${String(it.result || "").toUpperCase() === "COMPLIANT" ? "selected" : ""}>양호</option>
+                  <option value="NONCOMPLIANT" ${String(it.result || "").toUpperCase() === "NONCOMPLIANT" ? "selected" : ""}>부적합</option>
                   <option value="NA" ${String(it.result || "").toUpperCase() === "NA" ? "selected" : ""}>해당없음</option>
                 </select>
               </label>
