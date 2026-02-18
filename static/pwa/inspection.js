@@ -5,6 +5,7 @@
   const state = {
     user: null,
     siteCode: "",
+    bootstrapUser: null,
     runs: [],
     selectedRunId: 0,
     selectedRun: null,
@@ -83,10 +84,62 @@
     return "";
   }
 
+  function isManagerUser() {
+    const u = state.bootstrapUser || {};
+    return !!u.is_admin || !!u.is_site_admin;
+  }
+
+  function defaultTemplateItems() {
+    const base = [
+      { item_key: "fire_extinguisher", item_text: "소화기 비치 및 압력상태 확인", category: "소방", severity: 2, requires_photo: false, requires_note: false },
+      { item_key: "emergency_exit", item_text: "비상구 통로 적치물 여부 확인", category: "피난", severity: 2, requires_photo: true, requires_note: false },
+      { item_key: "electrical_panel", item_text: "분전반 외관/표시/이상음 확인", category: "전기", severity: 2, requires_photo: false, requires_note: true },
+      { item_key: "leak_check", item_text: "누수 및 배관 이상 여부 확인", category: "설비", severity: 1, requires_photo: false, requires_note: true },
+      { item_key: "housekeeping", item_text: "정리정돈 및 위험물 방치 여부 확인", category: "일반", severity: 1, requires_photo: false, requires_note: false },
+    ];
+    return base.map((x, idx) => ({ ...x, sort_order: (idx + 1) * 10, is_active: true }));
+  }
+
+  function updateSetupState(data) {
+    const targets = Array.isArray(data?.targets) ? data.targets : [];
+    const templates = Array.isArray(data?.templates) ? data.templates : [];
+    const hasTargets = targets.length > 0;
+    const hasTemplates = templates.length > 0;
+    const setupCard = $("#setupCard");
+    const setupHint = $("#setupHint");
+    const createBtn = $("#btnCreateRun");
+
+    if (createBtn) createBtn.disabled = !(hasTargets && hasTemplates);
+
+    if (!setupCard || !setupHint) return;
+
+    if (hasTargets && hasTemplates) {
+      setupCard.hidden = true;
+      return;
+    }
+
+    const manager = isManagerUser();
+    if (!manager) {
+      setupCard.hidden = true;
+      msg("점검대상/점검표가 아직 없습니다. 관리자 계정으로 기초정보를 먼저 등록해 주세요.", true);
+      return;
+    }
+
+    setupCard.hidden = false;
+    if (!hasTargets && !hasTemplates) {
+      setupHint.textContent = "현재 단지에 점검대상과 점검표가 없습니다. 아래 버튼으로 기본 구성을 생성해 주세요.";
+    } else if (!hasTargets) {
+      setupHint.textContent = "점검대상이 없습니다. 점검대상을 먼저 생성해 주세요.";
+    } else {
+      setupHint.textContent = "점검표가 없습니다. 점검표를 생성해야 점검을 만들 수 있습니다.";
+    }
+  }
+
   async function loadBootstrap() {
     const q = buildSiteQuery();
     const data = await apiGet(`/api/inspection/bootstrap${q ? `?${q}` : ""}`);
     state.siteCode = String(data.site_code || "").trim().toUpperCase();
+    state.bootstrapUser = data.user || null;
 
     const userLine = $("#userLine");
     if (userLine) {
@@ -102,6 +155,12 @@
         opt.textContent = `${t.name} (${t.site_code})`;
         targetSel.appendChild(opt);
       }
+      if (!targetSel.options.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "등록된 점검대상이 없습니다.";
+        targetSel.appendChild(opt);
+      }
     }
     const tplSel = $("#templateId");
     if (tplSel) {
@@ -112,6 +171,21 @@
         opt.textContent = `${t.name} [${t.period}] · ${t.item_count}항목`;
         tplSel.appendChild(opt);
       }
+      if (!tplSel.options.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "등록된 점검표가 없습니다.";
+        tplSel.appendChild(opt);
+      }
+    }
+
+    updateSetupState(data);
+
+    if ($("#quickTargetName") && !$("#quickTargetName").value.trim()) {
+      $("#quickTargetName").value = "공용시설 기본 점검대상";
+    }
+    if ($("#quickTemplateName") && !$("#quickTemplateName").value.trim()) {
+      $("#quickTemplateName").value = "월간 안전점검표";
     }
   }
 
@@ -162,6 +236,18 @@
     const runDate = ($("#runDate")?.value || "").trim() || todayYmd();
     const runNote = ($("#runNote")?.value || "").trim();
     if (targetId <= 0 || templateId <= 0) {
+      const targetCount = Number($("#targetId")?.options?.length || 0);
+      const templateCount = Number($("#templateId")?.options?.length || 0);
+      if (targetCount <= 1 || templateCount <= 1) {
+        const canSetup = isManagerUser();
+        msg(
+          canSetup
+            ? "점검대상/점검표가 아직 없습니다. 아래 '기초정보 빠른 설정'에서 먼저 생성해 주세요."
+            : "점검대상/점검표가 아직 없습니다. 관리자에게 기초정보 등록을 요청해 주세요.",
+          true
+        );
+        return;
+      }
       msg("점검대상과 점검표를 선택하세요.", true);
       return;
     }
@@ -176,6 +262,52 @@
     msg(`점검 생성 완료: ${out.run_code || out.run_id}`);
     await loadRuns();
     if (Number(out.run_id || 0) > 0) await openRun(Number(out.run_id || 0));
+  }
+
+  async function quickSetup() {
+    if (!isManagerUser()) {
+      msg("관리자/운영관리자 계정에서만 기초정보를 생성할 수 있습니다.", true);
+      return;
+    }
+    const targetName = ($("#quickTargetName")?.value || "").trim() || "공용시설 기본 점검대상";
+    const templateName = ($("#quickTemplateName")?.value || "").trim() || "월간 안전점검표";
+    const period = String($("#quickTemplatePeriod")?.value || "MONTHLY").trim().toUpperCase();
+
+    let targetId = Number($("#targetId")?.value || 0);
+    if (targetId <= 0) {
+      const targetOut = await apiPost("/api/inspection/targets", {
+        site_code: state.siteCode,
+        name: targetName,
+        location: "",
+        description: "빠른 설정으로 생성된 기본 점검대상",
+        is_active: true,
+      });
+      targetId = Number(targetOut?.item?.id || 0);
+      if (targetId <= 0) {
+        throw new Error("점검대상 생성에 실패했습니다.");
+      }
+    }
+
+    let templateId = Number($("#templateId")?.value || 0);
+    if (templateId <= 0) {
+      const templateOut = await apiPost("/api/inspection/templates", {
+        site_code: state.siteCode,
+        target_id: targetId,
+        name: templateName,
+        period,
+        is_active: true,
+        items: defaultTemplateItems(),
+      });
+      templateId = Number(templateOut?.item?.id || 0);
+      if (templateId <= 0) {
+        throw new Error("점검표 생성에 실패했습니다.");
+      }
+    }
+
+    await loadBootstrap();
+    if (targetId > 0 && $("#targetId")) $("#targetId").value = String(targetId);
+    if (templateId > 0 && $("#templateId")) $("#templateId").value = String(templateId);
+    msg("기초정보 생성이 완료되었습니다. 이제 점검을 생성할 수 있습니다.");
   }
 
   function collectItemPayloads() {
@@ -344,6 +476,7 @@
       $("#btnRejectRun")?.addEventListener("click", () => rejectRun().catch((e) => msg(e.message || e, true)));
       $("#btnVerifyArchive")?.addEventListener("click", () => verifyArchive().catch((e) => verifyMsg(e.message || e, true)));
       $("#btnOpenPdf")?.addEventListener("click", openArchivePdf);
+      $("#btnQuickSetup")?.addEventListener("click", () => quickSetup().catch((e) => msg(e.message || e, true)));
 
       await loadBootstrap();
       await loadRuns();

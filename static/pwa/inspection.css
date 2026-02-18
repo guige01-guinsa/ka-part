@@ -79,6 +79,7 @@ textarea { width: 100%; min-height: 68px; resize: vertical; }
 .btn.danger { background: #442033; border-color: #a53957; }
 
 .muted { color: var(--muted); }
+.small { font-size: 12px; }
 .msg { margin-top: 10px; font-size: 13px; color: #cfe0ff; white-space: pre-wrap; }
 .list, .items, .approvals { display: grid; gap: 8px; margin-top: 10px; }
 
