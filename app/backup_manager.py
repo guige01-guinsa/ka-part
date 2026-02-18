@@ -512,6 +512,67 @@ def _export_facility_site_data(site_code: str, site_name: str = "") -> Dict[str,
             (site_code,),
         ) if _table_exists(con, "inspection_archives") else []
 
+        # Complaints module tables (site-scoped backup)
+        complaint_rows = _query_all(
+            con,
+            "SELECT * FROM complaints WHERE site_code=?",
+            (site_code,),
+        ) if _table_exists(con, "complaints") else []
+        tables["complaints"] = complaint_rows
+        complaint_ids = [int(r.get("id") or 0) for r in complaint_rows if int(r.get("id") or 0) > 0]
+
+        tables["complaint_attachments"] = _query_by_int_ids(
+            con,
+            "complaint_attachments",
+            "complaint_id",
+            complaint_ids,
+        )
+        tables["complaint_status_history"] = _query_by_int_ids(
+            con,
+            "complaint_status_history",
+            "complaint_id",
+            complaint_ids,
+        )
+        tables["complaint_comments"] = _query_by_int_ids(
+            con,
+            "complaint_comments",
+            "complaint_id",
+            complaint_ids,
+        )
+        tables["complaint_work_orders"] = _query_by_int_ids(
+            con,
+            "complaint_work_orders",
+            "complaint_id",
+            complaint_ids,
+        )
+        tables["complaint_visit_logs"] = _query_by_int_ids(
+            con,
+            "complaint_visit_logs",
+            "complaint_id",
+            complaint_ids,
+        )
+        # Shared lookups/templates used by complaints module
+        tables["complaint_categories"] = _query_all(
+            con,
+            "SELECT * FROM complaint_categories",
+            (),
+        ) if _table_exists(con, "complaint_categories") else []
+        tables["complaint_guidance_templates"] = _query_all(
+            con,
+            "SELECT * FROM complaint_guidance_templates",
+            (),
+        ) if _table_exists(con, "complaint_guidance_templates") else []
+        tables["complaint_notices"] = _query_all(
+            con,
+            "SELECT * FROM complaint_notices",
+            (),
+        ) if _table_exists(con, "complaint_notices") else []
+        tables["complaint_faqs"] = _query_all(
+            con,
+            "SELECT * FROM complaint_faqs",
+            (),
+        ) if _table_exists(con, "complaint_faqs") else []
+
         row_counts: Dict[str, int] = {}
         total_rows = 0
         for name, rows in tables.items():
