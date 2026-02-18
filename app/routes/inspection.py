@@ -38,6 +38,7 @@ class TargetPayload(BaseModel):
     location: str = ""
     description: str = ""
     is_active: bool = True
+    force_new: bool = False
 
 
 class TemplateItemPayload(BaseModel):
@@ -57,6 +58,7 @@ class TemplatePayload(BaseModel):
     name: str = Field(..., min_length=2, max_length=160)
     period: str = Field(default="MONTHLY", max_length=20)
     is_active: bool = True
+    force_new: bool = False
     items: List[TemplateItemPayload] = Field(default_factory=list)
 
 
@@ -270,6 +272,31 @@ def _next_run_code(con, run_date: str) -> str:
     return f"INSP-{year}-{seq:06d}"
 
 
+def _next_unique_master_name(con, table_name: str, site_code: str, base_name: str) -> str:
+    table = str(table_name or "").strip().lower()
+    if table not in {"inspection_targets", "inspection_templates"}:
+        raise HTTPException(status_code=500, detail="internal table validation failed")
+    clean_site = _clean_site_code(site_code)
+    seed = str(base_name or "").strip() or ("점검대상" if table == "inspection_targets" else "점검표")
+
+    row = con.execute(
+        f"SELECT id FROM {table} WHERE site_code=? AND name=? LIMIT 1",
+        (clean_site, seed),
+    ).fetchone()
+    if not row:
+        return seed
+
+    for i in range(2, 10000):
+        candidate = f"{seed} ({i})"
+        dup = con.execute(
+            f"SELECT id FROM {table} WHERE site_code=? AND name=? LIMIT 1",
+            (clean_site, candidate),
+        ).fetchone()
+        if not dup:
+            return candidate
+    raise HTTPException(status_code=409, detail="이름 자동생성 범위를 초과했습니다. 다른 제목을 입력해 주세요.")
+
+
 def _ensure_upload_dirs() -> None:
     PHOTO_ROOT.mkdir(parents=True, exist_ok=True)
     ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -394,6 +421,9 @@ def inspection_targets_create(request: Request, payload: TargetPayload = Body(..
     clean_description = str(payload.description or "").strip()
     con = _connect()
     try:
+        if bool(payload.force_new):
+            clean_name = _next_unique_master_name(con, "inspection_targets", scoped_site, clean_name)
+
         existing = con.execute(
             """
             SELECT id
@@ -403,7 +433,7 @@ def inspection_targets_create(request: Request, payload: TargetPayload = Body(..
             """,
             (scoped_site, clean_name),
         ).fetchone()
-        if existing:
+        if existing and not bool(payload.force_new):
             rid = int(existing["id"])
             con.execute(
                 """
@@ -503,6 +533,9 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
             raise HTTPException(status_code=404, detail="점검대상을 찾을 수 없습니다.")
         _scope_site_code(user, target["site_code"])
 
+        if bool(payload.force_new):
+            clean_name = _next_unique_master_name(con, "inspection_templates", scoped_site, clean_name)
+
         existing = con.execute(
             """
             SELECT id
@@ -512,7 +545,7 @@ def inspection_templates_create(request: Request, payload: TemplatePayload = Bod
             """,
             (scoped_site, clean_name),
         ).fetchone()
-        if existing:
+        if existing and not bool(payload.force_new):
             template_id = int(existing["id"])
             con.execute(
                 """

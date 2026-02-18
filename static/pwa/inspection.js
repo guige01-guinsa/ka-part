@@ -340,41 +340,37 @@
     const period = String($("#quickTemplatePeriod")?.value || "MONTHLY").trim().toUpperCase();
     const items = collectDetailItemsFromForm();
 
-    let targetId = Number($("#targetId")?.value || 0);
+    const targetOut = await apiPost("/api/inspection/targets", {
+      site_code: state.siteCode,
+      name: targetName,
+      location: "",
+      description: "리스트 폼 자동 생성으로 추가된 점검대상",
+      is_active: true,
+      force_new: true,
+    });
+    const targetId = Number(targetOut?.item?.id || targetOut?.target_id || 0);
     if (targetId <= 0) {
-      const targetOut = await apiPost("/api/inspection/targets", {
-        site_code: state.siteCode,
-        name: targetName,
-        location: "",
-        description: "빠른 설정으로 생성된 기본 점검대상",
-        is_active: true,
-      });
-      targetId = Number(targetOut?.item?.id || targetOut?.target_id || 0);
-      if (targetId <= 0) {
-        throw new Error("점검대상 생성에 실패했습니다.");
-      }
+      throw new Error("점검대상 생성에 실패했습니다.");
     }
 
-    let templateId = Number($("#templateId")?.value || 0);
+    const templateOut = await apiPost("/api/inspection/templates", {
+      site_code: state.siteCode,
+      target_id: targetId,
+      name: templateName,
+      period,
+      is_active: true,
+      force_new: true,
+      items,
+    });
+    const templateId = Number(templateOut?.template_id || templateOut?.item?.id || 0);
     if (templateId <= 0) {
-      const templateOut = await apiPost("/api/inspection/templates", {
-        site_code: state.siteCode,
-        target_id: targetId,
-        name: templateName,
-        period,
-        is_active: true,
-        items,
-      });
-      templateId = Number(templateOut?.template_id || templateOut?.item?.id || 0);
-      if (templateId <= 0) {
-        throw new Error("점검표 생성에 실패했습니다.");
-      }
+      throw new Error("점검표 생성에 실패했습니다.");
     }
 
     await loadBootstrap();
     if (targetId > 0 && $("#targetId")) $("#targetId").value = String(targetId);
     if (templateId > 0 && $("#templateId")) $("#templateId").value = String(templateId);
-    msg("기초정보 생성이 완료되었습니다. 이제 점검을 생성할 수 있습니다.");
+    msg("리스트 폼 자동 생성 완료: 점검대상/점검표가 신규로 추가되었습니다.");
   }
 
   function collectItemPayloads() {
