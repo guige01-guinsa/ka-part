@@ -1438,6 +1438,24 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "elec_incidents", "site_code TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_incidents", "site_name TEXT")
+    _ensure_column(con, "elec_incidents", "location TEXT")
+    _ensure_column(con, "elec_incidents", "title TEXT NOT NULL DEFAULT '누설전류 점검'")
+    _ensure_column(con, "elec_incidents", "insulation_mohm REAL NOT NULL DEFAULT 0")
+    _ensure_column(con, "elec_incidents", "ground_ohm REAL NOT NULL DEFAULT 0")
+    _ensure_column(con, "elec_incidents", "leakage_ma REAL NOT NULL DEFAULT 0")
+    _ensure_column(con, "elec_incidents", "risk_level TEXT NOT NULL DEFAULT 'ok'")
+    _ensure_column(con, "elec_incidents", "trend_state TEXT NOT NULL DEFAULT 'stable'")
+    _ensure_column(con, "elec_incidents", "event_level TEXT NOT NULL DEFAULT 'ok'")
+    _ensure_column(con, "elec_incidents", "risk_reason TEXT")
+    _ensure_column(con, "elec_incidents", "trend_reason TEXT")
+    _ensure_column(con, "elec_incidents", "note TEXT")
+    _ensure_column(con, "elec_incidents", "reported_by_user_id INTEGER")
+    _ensure_column(con, "elec_incidents", "reported_by_login TEXT")
+    _ensure_column(con, "elec_incidents", "reported_by_name TEXT")
+    _ensure_column(con, "elec_incidents", "created_at TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_incidents", "updated_at TEXT NOT NULL DEFAULT ''")
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_elec_incidents_site_created
@@ -1471,6 +1489,19 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "elec_rules", "site_code TEXT")
+    _ensure_column(con, "elec_rules", "caution_leakage_ma REAL NOT NULL DEFAULT 15.0")
+    _ensure_column(con, "elec_rules", "danger_leakage_ma REAL NOT NULL DEFAULT 30.0")
+    _ensure_column(con, "elec_rules", "caution_insulation_mohm REAL NOT NULL DEFAULT 1.0")
+    _ensure_column(con, "elec_rules", "danger_insulation_mohm REAL NOT NULL DEFAULT 0.5")
+    _ensure_column(con, "elec_rules", "caution_ground_ohm REAL NOT NULL DEFAULT 15.0")
+    _ensure_column(con, "elec_rules", "danger_ground_ohm REAL NOT NULL DEFAULT 30.0")
+    _ensure_column(con, "elec_rules", "ack_timeout_minutes INTEGER NOT NULL DEFAULT 30")
+    _ensure_column(con, "elec_rules", "trend_lookback_count INTEGER NOT NULL DEFAULT 3")
+    _ensure_column(con, "elec_rules", "trend_prealert_enabled INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(con, "elec_rules", "created_by TEXT")
+    _ensure_column(con, "elec_rules", "created_at TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_rules", "updated_at TEXT NOT NULL DEFAULT ''")
 
     con.execute(
         """
@@ -1486,6 +1517,13 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "elec_notify_routes", "site_code TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notify_routes", "event_level TEXT NOT NULL DEFAULT 'prealert'")
+    _ensure_column(con, "elec_notify_routes", "recipient_key TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notify_routes", "channel TEXT NOT NULL DEFAULT 'kakao'")
+    _ensure_column(con, "elec_notify_routes", "is_active INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(con, "elec_notify_routes", "created_at TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notify_routes", "updated_at TEXT NOT NULL DEFAULT ''")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_elec_notify_routes
@@ -1508,6 +1546,14 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "elec_duty_schedule", "site_code TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_duty_schedule", "shift_code TEXT NOT NULL DEFAULT 'DAY'")
+    _ensure_column(con, "elec_duty_schedule", "start_hhmm TEXT NOT NULL DEFAULT '06:00'")
+    _ensure_column(con, "elec_duty_schedule", "end_hhmm TEXT NOT NULL DEFAULT '18:00'")
+    _ensure_column(con, "elec_duty_schedule", "user_key TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_duty_schedule", "is_active INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(con, "elec_duty_schedule", "created_at TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_duty_schedule", "updated_at TEXT NOT NULL DEFAULT ''")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_elec_duty_schedule
@@ -1531,6 +1577,15 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "elec_escalation_routes", "site_code TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_escalation_routes", "event_level TEXT NOT NULL DEFAULT 'prealert'")
+    _ensure_column(con, "elec_escalation_routes", "source_recipient_key TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_escalation_routes", "target_recipient_key TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_escalation_routes", "delay_minutes INTEGER NOT NULL DEFAULT 30")
+    _ensure_column(con, "elec_escalation_routes", "channel TEXT NOT NULL DEFAULT 'kakao'")
+    _ensure_column(con, "elec_escalation_routes", "is_active INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(con, "elec_escalation_routes", "created_at TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_escalation_routes", "updated_at TEXT NOT NULL DEFAULT ''")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_elec_escalation_routes
@@ -1564,6 +1619,25 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "elec_notifications", "incident_id INTEGER")
+    _ensure_column(con, "elec_notifications", "site_code TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notifications", "event_level TEXT NOT NULL DEFAULT 'prealert'")
+    _ensure_column(con, "elec_notifications", "route_recipient_key TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notifications", "recipient_key TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notifications", "channel TEXT NOT NULL DEFAULT 'kakao'")
+    _ensure_column(con, "elec_notifications", "status TEXT NOT NULL DEFAULT 'sent'")
+    _ensure_column(con, "elec_notifications", "ack_token TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notifications", "sent_at TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notifications", "ack_due_at TEXT")
+    _ensure_column(con, "elec_notifications", "acked_at TEXT")
+    _ensure_column(con, "elec_notifications", "acked_by_user_id INTEGER")
+    _ensure_column(con, "elec_notifications", "acked_by_login TEXT")
+    _ensure_column(con, "elec_notifications", "acked_by_name TEXT")
+    _ensure_column(con, "elec_notifications", "escalated_from_notification_id INTEGER")
+    _ensure_column(con, "elec_notifications", "escalation_count INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(con, "elec_notifications", "last_escalated_at TEXT")
+    _ensure_column(con, "elec_notifications", "created_at TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notifications", "updated_at TEXT NOT NULL DEFAULT ''")
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_elec_notifications_ack_token
@@ -1593,6 +1667,15 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "elec_notify_ack", "notification_id INTEGER")
+    _ensure_column(con, "elec_notify_ack", "incident_id INTEGER")
+    _ensure_column(con, "elec_notify_ack", "site_code TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "elec_notify_ack", "ack_token TEXT")
+    _ensure_column(con, "elec_notify_ack", "acked_by_user_id INTEGER")
+    _ensure_column(con, "elec_notify_ack", "acked_by_login TEXT")
+    _ensure_column(con, "elec_notify_ack", "acked_by_name TEXT")
+    _ensure_column(con, "elec_notify_ack", "via TEXT NOT NULL DEFAULT 'api'")
+    _ensure_column(con, "elec_notify_ack", "created_at TEXT NOT NULL DEFAULT ''")
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_elec_notify_ack_incident

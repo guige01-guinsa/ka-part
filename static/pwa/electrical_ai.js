@@ -34,11 +34,23 @@
     return String(qs.get("site_code") || "").trim().toUpperCase();
   }
 
+  function siteIdFromQuery() {
+    const qs = new URLSearchParams(window.location.search);
+    const raw = String(qs.get("site_id") || "").trim();
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+  }
+
   function queryWithSite(basePath) {
     const code = state.siteCode || siteCodeFromQuery();
-    if (!code) return basePath;
+    const siteId = siteIdFromQuery();
+    const params = new URLSearchParams();
+    if (code) params.set("site_code", code);
+    if (siteId > 0) params.set("site_id", String(siteId));
+    const raw = params.toString();
+    if (!raw) return basePath;
     const sep = basePath.includes("?") ? "&" : "?";
-    return `${basePath}${sep}site_code=${encodeURIComponent(code)}`;
+    return `${basePath}${sep}${raw}`;
   }
 
   function isManager() {

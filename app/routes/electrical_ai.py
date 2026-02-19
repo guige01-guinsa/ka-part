@@ -16,7 +16,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from ..db import _connect, get_auth_user_by_token, now_iso
+from ..db import _connect, get_auth_user_by_token, now_iso, resolve_site_identity
 
 router = APIRouter()
 
@@ -144,20 +144,50 @@ def _require_auth(request: Request) -> Tuple[Dict[str, Any], str]:
     return user, token
 
 
-def _scope_site_code(user: Dict[str, Any], requested_site_code: Any = "") -> str:
+def _scope_site_code(
+    user: Dict[str, Any],
+    requested_site_code: Any = "",
+    requested_site_id: Any = 0,
+    requested_site_name: Any = "",
+) -> str:
     requested = _clean_site_code(requested_site_code)
     user_site = _clean_site_code(user.get("site_code"))
-    if _is_admin(user):
-        if requested:
-            return requested
+    requested_id = int(requested_site_id or 0) if str(requested_site_id or "").strip() else 0
+    requested_name = str(requested_site_name or "").strip()
+
+    # Non-admin users are pinned to their assigned site_code.
+    # If legacy accounts have no site_code, resolve via site_id/site_name mapping.
+    if not _is_admin(user):
         if user_site:
+            if requested and requested != user_site:
+                raise HTTPException(status_code=403, detail="소속 단지(site_code) 데이터만 접근할 수 있습니다.")
             return user_site
-        raise HTTPException(status_code=400, detail="site_code가 필요합니다.")
-    if not user_site:
+        ident = resolve_site_identity(
+            site_id=requested_id or user.get("site_id"),
+            site_name=requested_name or user.get("site_name"),
+            site_code=requested,
+            create_site_if_missing=False,
+        )
+        code = _clean_site_code(ident.get("site_code"))
+        if code:
+            return code
         raise HTTPException(status_code=403, detail="계정에 site_code가 없습니다. 관리자에게 문의하세요.")
-    if requested and requested != user_site:
-        raise HTTPException(status_code=403, detail="소속 단지(site_code) 데이터만 접근할 수 있습니다.")
-    return user_site
+
+    # Admin users can target any site, and may come with site_id-only query.
+    if requested:
+        return requested
+    ident = resolve_site_identity(
+        site_id=requested_id or user.get("site_id"),
+        site_name=requested_name or user.get("site_name"),
+        site_code=requested,
+        create_site_if_missing=False,
+    )
+    code = _clean_site_code(ident.get("site_code"))
+    if code:
+        return code
+    if user_site:
+        return user_site
+    raise HTTPException(status_code=400, detail="site_code가 필요합니다.")
 
 
 def _require_elec_user(request: Request) -> Tuple[Dict[str, Any], str]:
@@ -206,44 +236,67 @@ def _event_level(value: Any) -> str:
 
 def _ensure_default_settings(con, site_code: str, actor_login: str = "system") -> None:
     ts = _now_ts()
-    con.execute(
-        """
-        INSERT INTO elec_rules(
-          site_code,caution_leakage_ma,danger_leakage_ma,caution_insulation_mohm,danger_insulation_mohm,
-          caution_ground_ohm,danger_ground_ohm,ack_timeout_minutes,trend_lookback_count,trend_prealert_enabled,
-          created_by,created_at,updated_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(site_code) DO NOTHING
-        """,
-        (site_code, 15.0, 30.0, 1.0, 0.5, 15.0, 30.0, 30, 3, 1, actor_login, ts, ts),
-    )
+    has_rule = con.execute("SELECT id FROM elec_rules WHERE site_code=? LIMIT 1", (site_code,)).fetchone()
+    if not has_rule:
+        con.execute(
+            """
+            INSERT INTO elec_rules(
+              site_code,caution_leakage_ma,danger_leakage_ma,caution_insulation_mohm,danger_insulation_mohm,
+              caution_ground_ohm,danger_ground_ohm,ack_timeout_minutes,trend_lookback_count,trend_prealert_enabled,
+              created_by,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (site_code, 15.0, 30.0, 1.0, 0.5, 15.0, 30.0, 30, 3, 1, actor_login, ts, ts),
+        )
     for event_level, key in [("prealert", "duty"), ("danger", "electric_mgr"), ("danger", "chief")]:
-        con.execute(
+        has_row = con.execute(
             """
-            INSERT INTO elec_notify_routes(site_code,event_level,recipient_key,channel,is_active,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,?)
-            ON CONFLICT(site_code,event_level,recipient_key,channel) DO NOTHING
+            SELECT id
+            FROM elec_notify_routes
+            WHERE site_code=? AND event_level=? AND recipient_key=? AND channel=?
+            LIMIT 1
             """,
-            (site_code, event_level, key, "kakao", 1, ts, ts),
-        )
+            (site_code, event_level, key, "kakao"),
+        ).fetchone()
+        if not has_row:
+            con.execute(
+                """
+                INSERT INTO elec_notify_routes(site_code,event_level,recipient_key,channel,is_active,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?)
+                """,
+                (site_code, event_level, key, "kakao", 1, ts, ts),
+            )
     for shift, s, e, key in [("DAY", "06:00", "18:00", "duty_day"), ("NIGHT", "18:00", "06:00", "duty_night")]:
-        con.execute(
-            """
-            INSERT INTO elec_duty_schedule(site_code,shift_code,start_hhmm,end_hhmm,user_key,is_active,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,?,?)
-            ON CONFLICT(site_code,shift_code) DO NOTHING
-            """,
-            (site_code, shift, s, e, key, 1, ts, ts),
-        )
+        has_row = con.execute(
+            "SELECT id FROM elec_duty_schedule WHERE site_code=? AND shift_code=? LIMIT 1",
+            (site_code, shift),
+        ).fetchone()
+        if not has_row:
+            con.execute(
+                """
+                INSERT INTO elec_duty_schedule(site_code,shift_code,start_hhmm,end_hhmm,user_key,is_active,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (site_code, shift, s, e, key, 1, ts, ts),
+            )
     for event_level, source_key, target_key, delay in [("prealert", "duty", "electric_mgr", 30), ("danger", "electric_mgr", "chief", 15)]:
-        con.execute(
+        has_row = con.execute(
             """
-            INSERT INTO elec_escalation_routes(site_code,event_level,source_recipient_key,target_recipient_key,delay_minutes,is_active,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,?,?)
-            ON CONFLICT(site_code,event_level,source_recipient_key,target_recipient_key) DO NOTHING
+            SELECT id
+            FROM elec_escalation_routes
+            WHERE site_code=? AND event_level=? AND source_recipient_key=? AND target_recipient_key=?
+            LIMIT 1
             """,
-            (site_code, event_level, source_key, target_key, delay, 1, ts, ts),
-        )
+            (site_code, event_level, source_key, target_key),
+        ).fetchone()
+        if not has_row:
+            con.execute(
+                """
+                INSERT INTO elec_escalation_routes(site_code,event_level,source_recipient_key,target_recipient_key,delay_minutes,is_active,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (site_code, event_level, source_key, target_key, delay, 1, ts, ts),
+            )
 
 
 def _get_rules(con, site_code: str) -> Dict[str, Any]:
@@ -499,9 +552,15 @@ def _pdf_incident(incident: Dict[str, Any], notifications: List[Dict[str, Any]],
 
 
 @router.get("/elec/bootstrap")
-def elec_bootstrap(request: Request, site_code: str = Query(default=""), limit: int = Query(default=30, ge=1, le=200)):
+def elec_bootstrap(
+    request: Request,
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+    site_name: str = Query(default=""),
+    limit: int = Query(default=30, ge=1, le=200),
+):
     user, _token = _require_elec_user(request)
-    scoped = _scope_site_code(user, site_code)
+    scoped = _scope_site_code(user, site_code, site_id, site_name)
     con = _connect()
     try:
         _ensure_default_settings(con, scoped, actor_login=str(user.get("login_id") or "system"))
@@ -536,9 +595,15 @@ def elec_bootstrap(request: Request, site_code: str = Query(default=""), limit: 
 
 
 @router.put("/elec/settings/rules")
-def elec_update_rules(request: Request, payload: RulesUpdatePayload = Body(...), site_code: str = Query(default="")):
+def elec_update_rules(
+    request: Request,
+    payload: RulesUpdatePayload = Body(...),
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+    site_name: str = Query(default=""),
+):
     user, _token = _require_manager_user(request)
-    scoped = _scope_site_code(user, site_code)
+    scoped = _scope_site_code(user, site_code, site_id, site_name)
     con = _connect()
     try:
         _ensure_default_settings(con, scoped, actor_login=str(user.get("login_id") or "system"))
@@ -576,9 +641,15 @@ def elec_update_rules(request: Request, payload: RulesUpdatePayload = Body(...),
 
 
 @router.put("/elec/settings/duty")
-def elec_update_duty_schedule(request: Request, payload: DutyScheduleUpdatePayload = Body(...), site_code: str = Query(default="")):
+def elec_update_duty_schedule(
+    request: Request,
+    payload: DutyScheduleUpdatePayload = Body(...),
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+    site_name: str = Query(default=""),
+):
     user, _token = _require_manager_user(request)
-    scoped = _scope_site_code(user, site_code)
+    scoped = _scope_site_code(user, site_code, site_id, site_name)
     day_key = _clean_key(payload.day_user_key)
     night_key = _clean_key(payload.night_user_key)
     if not day_key or not night_key:
@@ -592,19 +663,27 @@ def elec_update_duty_schedule(request: Request, payload: DutyScheduleUpdatePaylo
         _ensure_default_settings(con, scoped, actor_login=str(user.get("login_id") or "system"))
         ts = _now_ts()
         for shift, s, e, key in [("DAY", day_start, day_end, day_key), ("NIGHT", night_start, night_end, night_key)]:
-            con.execute(
-                """
-                INSERT INTO elec_duty_schedule(site_code,shift_code,start_hhmm,end_hhmm,user_key,is_active,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?)
-                ON CONFLICT(site_code,shift_code) DO UPDATE SET
-                    start_hhmm=excluded.start_hhmm,
-                    end_hhmm=excluded.end_hhmm,
-                    user_key=excluded.user_key,
-                    is_active=excluded.is_active,
-                    updated_at=excluded.updated_at
-                """,
-                (scoped, shift, s, e, key, 1, ts, ts),
-            )
+            exists = con.execute(
+                "SELECT id FROM elec_duty_schedule WHERE site_code=? AND shift_code=? ORDER BY id LIMIT 1",
+                (scoped, shift),
+            ).fetchone()
+            if exists:
+                con.execute(
+                    """
+                    UPDATE elec_duty_schedule
+                    SET start_hhmm=?, end_hhmm=?, user_key=?, is_active=1, updated_at=?
+                    WHERE id=?
+                    """,
+                    (s, e, key, ts, int(exists["id"])),
+                )
+            else:
+                con.execute(
+                    """
+                    INSERT INTO elec_duty_schedule(site_code,shift_code,start_hhmm,end_hhmm,user_key,is_active,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?)
+                    """,
+                    (scoped, shift, s, e, key, 1, ts, ts),
+                )
         rows = _rows(con.execute("SELECT * FROM elec_duty_schedule WHERE site_code=? ORDER BY shift_code,id", (scoped,)).fetchall())
         con.commit()
         return {"ok": True, "duty_schedule": rows, "active_duty_user_key": _resolve_duty_user_key(con, scoped)}
@@ -616,12 +695,14 @@ def elec_update_duty_schedule(request: Request, payload: DutyScheduleUpdatePaylo
 def elec_incidents_list(
     request: Request,
     site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+    site_name: str = Query(default=""),
     risk_level: str = Query(default=""),
     event_level: str = Query(default=""),
     limit: int = Query(default=100, ge=1, le=500),
 ):
     user, _token = _require_elec_user(request)
-    scoped = _scope_site_code(user, site_code)
+    scoped = _scope_site_code(user, site_code, site_id, site_name)
     sql = "SELECT * FROM elec_incidents WHERE site_code=?"
     args: List[Any] = [scoped]
     risk = str(risk_level or "").strip().lower()
@@ -712,7 +793,12 @@ def elec_notification_ack(
     token: str = Query(default=""),
 ):
     user, _token = _require_elec_user(request)
-    scoped = _scope_site_code(user, request.query_params.get("site_code") or "")
+    scoped = _scope_site_code(
+        user,
+        request.query_params.get("site_code") or "",
+        request.query_params.get("site_id") or 0,
+        request.query_params.get("site_name") or "",
+    )
     provided = str(token or payload.token or "").strip()
     con = _connect()
     try:
@@ -786,9 +872,15 @@ def elec_escalation_run(request: Request, payload: EscalationRunPayload = Body(d
 
 
 @router.get("/elec/incidents/{incident_id}/report.pdf")
-def elec_incident_report_pdf(incident_id: int, request: Request, site_code: str = Query(default="")):
+def elec_incident_report_pdf(
+    incident_id: int,
+    request: Request,
+    site_code: str = Query(default=""),
+    site_id: int = Query(default=0),
+    site_name: str = Query(default=""),
+):
     user, _token = _require_elec_user(request)
-    scoped = _scope_site_code(user, site_code)
+    scoped = _scope_site_code(user, site_code, site_id, site_name)
     con = _connect()
     try:
         incident_row = con.execute("SELECT * FROM elec_incidents WHERE id=? AND site_code=? LIMIT 1", (int(incident_id), scoped)).fetchone()
