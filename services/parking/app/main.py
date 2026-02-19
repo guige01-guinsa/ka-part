@@ -2330,6 +2330,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     const $ = (id) => document.getElementById(id);
     const state = {
       stream: null,
+      cameraStarting: null,
       last: null,
       autoScan: false,
       autoScanTimer: null,
@@ -2342,6 +2343,9 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     const ROI_RECT = { x: 0.16, y: 0.52, w: 0.68, h: 0.30 };
     const AUTO_SCAN_INTERVAL_MS = 1400;
     const AUTO_SCAN_DEDUP_MS = 4500;
+    const CAMERA_READY_TIMEOUT_MS = 7000;
+    const OCR_READY_TIMEOUT_MS = 12000;
+    const OCR_READY_POLL_MS = 250;
     const OCR_PLATE_WHITELIST = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ가나다라마바사아자차카타파하거너더러머버서어저처커터퍼허고노도로모보소오조초코토포호";
     const boot = window.__BOOT__ || {};
 
@@ -2360,6 +2364,86 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     }
 
     function setHint(v) { hintLine.textContent = v; }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, Number(ms) || 0));
+    }
+
+    function hasLiveStream(stream) {
+      if (!stream) return false;
+      const tracks = typeof stream.getVideoTracks === "function" ? stream.getVideoTracks() : [];
+      if (!tracks.length) return false;
+      return tracks.some((t) => t && t.readyState === "live");
+    }
+
+    function setCameraButtonState(on) {
+      const btn = $("btnCam");
+      if (!btn) return;
+      if (on) {
+        btn.textContent = "카메라 끄기";
+        btn.classList.add("warn");
+      } else {
+        btn.textContent = "카메라 켜기";
+        btn.classList.remove("warn");
+      }
+    }
+
+    function describeCameraError(err) {
+      const name = String(err && err.name || "").trim();
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        return "카메라 권한이 거부되었습니다. 브라우저/OS 설정에서 카메라 권한을 허용하세요.";
+      }
+      if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        return "사용 가능한 카메라 장치를 찾지 못했습니다.";
+      }
+      if (name === "NotReadableError" || name === "TrackStartError") {
+        return "카메라가 다른 앱에서 사용 중이거나 장치에 접근할 수 없습니다.";
+      }
+      if (name === "OverconstrainedError" || name === "ConstraintNotSatisfiedError") {
+        return "카메라 조건이 맞지 않습니다. 기본 카메라로 다시 시도하세요.";
+      }
+      if (name === "SecurityError") {
+        return "보안 정책으로 카메라를 사용할 수 없습니다. HTTPS 접속인지 확인하세요.";
+      }
+      const msg = String(err && err.message || "").trim();
+      return msg || "카메라 시작 중 알 수 없는 오류가 발생했습니다.";
+    }
+
+    async function waitForVideoReady(timeoutMs = CAMERA_READY_TIMEOUT_MS) {
+      const timeout = Math.max(500, Number(timeoutMs) || CAMERA_READY_TIMEOUT_MS);
+      const startAt = Date.now();
+      while ((Date.now() - startAt) < timeout) {
+        if ((video.readyState || 0) >= 2 && Number(video.videoWidth || 0) > 1 && Number(video.videoHeight || 0) > 1) {
+          return true;
+        }
+        await sleep(80);
+      }
+      throw new Error("카메라 프레임 준비 시간이 초과되었습니다.");
+    }
+
+    async function ensureOcrReady(timeoutMs = OCR_READY_TIMEOUT_MS) {
+      if (window.Tesseract && typeof window.Tesseract.recognize === "function") return true;
+      const timeout = Math.max(1000, Number(timeoutMs) || OCR_READY_TIMEOUT_MS);
+      const startAt = Date.now();
+      while ((Date.now() - startAt) < timeout) {
+        await sleep(OCR_READY_POLL_MS);
+        if (window.Tesseract && typeof window.Tesseract.recognize === "function") return true;
+      }
+      return false;
+    }
+
+    function stopCamera({ clearHint = false } = {}) {
+      if (state.stream) {
+        try {
+          state.stream.getTracks().forEach((t) => t.stop());
+        } catch (_e) {}
+      }
+      state.stream = null;
+      state.cameraStarting = null;
+      if (video) video.srcObject = null;
+      setCameraButtonState(false);
+      if (clearHint) setHint("카메라가 꺼졌습니다.");
+    }
 
     function norm(raw) {
       return String(raw || "").replace(/[^0-9A-Za-z가-힣]/g, "").toUpperCase().trim();
@@ -2380,18 +2464,74 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       resultText.textContent = text;
     }
 
-    async function startCamera() {
-      if (state.stream) return;
+    async function startCamera({ forceRestart = false } = {}) {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setHint("이 브라우저는 카메라 API를 지원하지 않습니다.");
-        return;
+        throw new Error("이 브라우저는 카메라 API를 지원하지 않습니다.");
       }
-      state.stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-      video.srcObject = state.stream;
-      setHint("카메라 활성화");
+
+      if (state.cameraStarting) {
+        return await state.cameraStarting;
+      }
+
+      if (hasLiveStream(state.stream) && !forceRestart) {
+        if (video.srcObject !== state.stream) {
+          video.srcObject = state.stream;
+        }
+        try {
+          await video.play();
+        } catch (_e) {}
+        await waitForVideoReady(CAMERA_READY_TIMEOUT_MS);
+        setCameraButtonState(true);
+        setHint("카메라 활성화");
+        return true;
+      }
+
+      if (state.stream && !hasLiveStream(state.stream)) {
+        stopCamera();
+      }
+
+      const run = (async () => {
+        const candidates = [
+          { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+          { video: { facingMode: "environment" }, audio: false },
+          { video: true, audio: false },
+        ];
+        let lastErr = null;
+        let nextStream = null;
+        for (const constraints of candidates) {
+          try {
+            nextStream = await navigator.mediaDevices.getUserMedia(constraints);
+            if (nextStream) break;
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+        if (!nextStream) {
+          throw new Error(describeCameraError(lastErr));
+        }
+
+        state.stream = nextStream;
+        video.srcObject = nextStream;
+        video.setAttribute("playsinline", "true");
+        video.muted = true;
+        try {
+          await video.play();
+        } catch (_e) {}
+        await waitForVideoReady(CAMERA_READY_TIMEOUT_MS);
+        setCameraButtonState(true);
+        setHint("카메라 활성화");
+        return true;
+      })();
+
+      state.cameraStarting = run;
+      try {
+        return await run;
+      } catch (e) {
+        stopCamera();
+        throw e;
+      } finally {
+        state.cameraStarting = null;
+      }
     }
 
     function _clamp(v, min, max) {
@@ -2399,14 +2539,20 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     }
 
     function capturePlateRoiCanvas() {
-      const w = video.videoWidth || 1280;
-      const h = video.videoHeight || 720;
-      if (!w || !h) throw new Error("카메라 프레임이 아직 준비되지 않았습니다.");
+      const w = Number(video.videoWidth || 0);
+      const h = Number(video.videoHeight || 0);
+      if ((video.readyState || 0) < 2 || w < 2 || h < 2) {
+        throw new Error("카메라 프레임이 아직 준비되지 않았습니다.");
+      }
 
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, w, h);
+      try {
+        ctx.drawImage(video, 0, 0, w, h);
+      } catch (_e) {
+        throw new Error("카메라 프레임 캡처에 실패했습니다. 잠시 후 다시 시도하세요.");
+      }
 
       const rx = _clamp(Math.floor(w * ROI_RECT.x), 0, w - 2);
       const ry = _clamp(Math.floor(h * ROI_RECT.y), 0, h - 2);
@@ -2466,8 +2612,9 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     }
 
     async function runOcr() {
-      if (!window.Tesseract || !window.Tesseract.recognize) {
-        throw new Error("OCR 엔진 로딩 중입니다.");
+      const ocrReady = await ensureOcrReady();
+      if (!ocrReady) {
+        throw new Error("OCR 엔진 로딩이 지연되고 있습니다. 네트워크 상태를 확인한 뒤 다시 시도하세요.");
       }
       if (state.ocrBusy) return "";
       state.ocrBusy = true;
@@ -2617,9 +2764,16 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     async function autoScanTick() {
       if (!state.autoScan) return;
       try {
+        if (!hasLiveStream(state.stream)) {
+          await startCamera();
+        }
         await analyzeAndCheck("AUTO");
       } catch (e) {
-        setHint(`즉시스캔 오류: ${String(e.message || e)}`);
+        const msg = String(e && e.message ? e.message : e);
+        setHint(`즉시스캔 오류: ${msg}`);
+        if (msg.includes("권한") || msg.includes("지원하지") || msg.includes("보안")) {
+          stopAutoScan();
+        }
       } finally {
         if (state.autoScan) {
           state.autoScanTimer = setTimeout(autoScanTick, AUTO_SCAN_INTERVAL_MS);
@@ -2628,7 +2782,16 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     }
 
     $("btnCam").addEventListener("click", async () => {
-      try { await startCamera(); } catch (e) { setHint(String(e.message || e)); }
+      try {
+        if (hasLiveStream(state.stream)) {
+          stopAutoScan();
+          stopCamera({ clearHint: true });
+          return;
+        }
+        await startCamera({ forceRestart: true });
+      } catch (e) {
+        setHint(String(e.message || e));
+      }
     });
 
     $("btnShot").addEventListener("click", async () => {
@@ -2647,9 +2810,13 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
           return;
         }
         await startCamera();
+        if (state.autoScanTimer) {
+          clearTimeout(state.autoScanTimer);
+          state.autoScanTimer = null;
+        }
         setAutoScanMode(true);
         setHint("즉시스캔 시작: 촬영 저장 없이 현재 프레임을 반복 분석합니다.");
-        autoScanTick();
+        await autoScanTick();
       } catch (e) {
         stopAutoScan();
         setHint(`즉시스캔 시작 실패: ${String(e.message || e)}`);
@@ -2674,11 +2841,13 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
 
     window.addEventListener("beforeunload", () => {
       stopAutoScan();
-      if (state.stream) {
-        try {
-          state.stream.getTracks().forEach((t) => t.stop());
-        } catch (_e) {}
-      }
+      stopCamera();
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) return;
+      stopAutoScan();
+      stopCamera();
     });
 
     if ("serviceWorker" in navigator) {
