@@ -4,7 +4,9 @@
   const $ = (s) => document.querySelector(s);
   const state = {
     user: null,
+    ctx: null,
     siteCode: "",
+    limitPolicy: { default_limit: 100, max_limit: 500 },
     bootstrapUser: null,
     targets: [],
     templates: [],
@@ -85,11 +87,50 @@
       .replaceAll("'", "&#39;");
   }
 
-  function buildSiteQuery() {
+  function normalizePositiveInt(value, fallback = 0) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return Number(fallback || 0);
+    return Math.trunc(n);
+  }
+
+  function currentLimitPolicy() {
+    const p = state.limitPolicy || {};
+    const d = normalizePositiveInt(p.default_limit ?? p.defaultLimit, 100) || 100;
+    const mRaw = normalizePositiveInt(p.max_limit ?? p.maxLimit, 500) || 500;
+    const m = mRaw >= d ? mRaw : d;
+    return { default_limit: d, max_limit: m };
+  }
+
+  function clampRunLimit(value, fallback = 100) {
+    const p = currentLimitPolicy();
+    const base = normalizePositiveInt(fallback, p.default_limit) || p.default_limit;
+    let out = normalizePositiveInt(value, 0);
+    if (out <= 0) out = base;
+    if (out > p.max_limit) out = p.max_limit;
+    if (out < 1) out = 1;
+    return out;
+  }
+
+  function buildSiteQuery(extra = {}) {
     const qs = new URLSearchParams(window.location.search);
-    const siteCode = (qs.get("site_code") || "").trim().toUpperCase();
-    if (siteCode) return `site_code=${encodeURIComponent(siteCode)}`;
-    return "";
+    const siteCode = String(
+      (extra && extra.site_code) ||
+      state.siteCode ||
+      (state.ctx && state.ctx.siteCode) ||
+      qs.get("site_code") ||
+      "",
+    ).trim().toUpperCase();
+    const params = new URLSearchParams();
+    if (siteCode) params.set("site_code", siteCode);
+    for (const [k, v] of Object.entries(extra || {})) {
+      if (k === "site_code") continue;
+      const key = String(k || "").trim();
+      const val = String(v == null ? "" : v).trim();
+      if (!key || !val) continue;
+      params.set(key, val);
+    }
+    if (!params.toString()) return "";
+    return params.toString();
   }
 
   function isManagerUser() {
@@ -638,6 +679,7 @@
     if (df) params.set("date_from", df);
     const dt = ($("#qDateTo")?.value || "").trim();
     if (dt) params.set("date_to", dt);
+    params.set("limit", String(clampRunLimit(0, 100)));
     return params;
   }
 
@@ -1125,7 +1167,21 @@
   async function init() {
     try {
       if (!window.KAAuth) throw new Error("auth.js가 로드되지 않았습니다.");
-      state.user = await window.KAAuth.requireAuth();
+      if (window.KAModuleBase && typeof window.KAModuleBase.bootstrap === "function") {
+        state.ctx = await window.KAModuleBase.bootstrap("inspection", {
+          defaultLimit: 100,
+          maxLimit: 500,
+        });
+        state.user = state.ctx.user || null;
+        const p = (state.ctx && state.ctx.policy) || {};
+        state.limitPolicy = {
+          default_limit: normalizePositiveInt(p.default_limit ?? p.defaultLimit, 100) || 100,
+          max_limit: normalizePositiveInt(p.max_limit ?? p.maxLimit, 500) || 500,
+        };
+        if (!state.siteCode) state.siteCode = String(state.ctx.siteCode || "").trim().toUpperCase();
+      } else {
+        state.user = await window.KAAuth.requireAuth();
+      }
       $("#runDate").value = todayYmd();
       $("#btnReload")?.addEventListener("click", () => {
         loadBootstrap().then(loadRuns).catch((e) => msg(e.message || e, true));

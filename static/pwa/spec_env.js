@@ -25,6 +25,7 @@
   ];
 
   let me = null;
+  let moduleCtx = null;
   let templates = [];
   let baseSchema = {};
   let activeSchema = {};
@@ -202,15 +203,43 @@
     return clean;
   }
 
-  function buildSiteQuery(siteName, siteCode) {
+  function buildSiteQuery(siteName, siteCode, siteId = null) {
     const qs = new URLSearchParams();
     const site = String(siteName || "").trim();
     const code = String(siteCode || "").trim().toUpperCase();
-    const siteId = getSiteId();
-    if (siteId > 0) qs.set("site_id", String(siteId));
+    const sid = normalizeSiteId(siteId == null ? getSiteId() : siteId);
+    if (sid > 0) qs.set("site_id", String(sid));
     if (site) qs.set("site_name", site);
     if (code) qs.set("site_code", code);
     return qs.toString();
+  }
+
+  function withSitePath(basePath, overrides = {}) {
+    const scope = {
+      site_id: Object.prototype.hasOwnProperty.call(overrides, "site_id") ? overrides.site_id : getSiteId(),
+      site_name: Object.prototype.hasOwnProperty.call(overrides, "site_name") ? overrides.site_name : getSiteName(),
+      site_code: Object.prototype.hasOwnProperty.call(overrides, "site_code") ? overrides.site_code : getSiteCode(),
+    };
+    const extra = { ...(overrides || {}) };
+    delete extra.site_id;
+    delete extra.site_name;
+    delete extra.site_code;
+
+    if (moduleCtx && typeof moduleCtx.withSite === "function") {
+      return moduleCtx.withSite(basePath, { ...scope, ...extra });
+    }
+
+    const qs = buildSiteQuery(scope.site_name, scope.site_code, scope.site_id);
+    const params = new URLSearchParams(qs || "");
+    for (const [k, v] of Object.entries(extra)) {
+      const key = String(k || "").trim();
+      const val = String(v == null ? "" : v).trim();
+      if (!key || !val) continue;
+      params.set(key, val);
+    }
+    if (!params.toString()) return basePath;
+    const sep = String(basePath || "").includes("?") ? "&" : "?";
+    return `${basePath}${sep}${params.toString()}`;
   }
 
   async function syncSiteIdentity(silent = true) {
@@ -221,8 +250,7 @@
       if (!silent) setMsg("site_name 또는 site_code를 입력하세요.", true);
       return null;
     }
-    const qs = buildSiteQuery(site, siteCode);
-    const data = await jfetch(`/api/site_identity?${qs}`);
+    const data = await jfetch(withSitePath("/api/site_identity", { site_name: site, site_code: siteCode, site_id: siteId }));
     if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
@@ -519,16 +547,15 @@
     const reasonEl = $("#migReason");
     if (!siteNameEl || !oldCodeEl || !newCodeEl || !reasonEl) return null;
 
-    const qs = new URLSearchParams();
     const siteId = getSiteId();
     const siteName = getSiteName();
-    if (siteId > 0) qs.set("site_id", String(siteId));
-    if (siteName) qs.set("site_name", siteName);
 
     let resolved = null;
-    if (qs.toString()) {
+    if (siteId > 0 || siteName) {
       try {
-        resolved = await KAAuth.requestJson(`/api/site_identity?${qs.toString()}`);
+        resolved = await KAAuth.requestJson(
+          withSitePath("/api/site_identity", { site_id: siteId, site_name: siteName, site_code: getSiteCode() }),
+        );
       } catch (_e) {
         resolved = null;
       }
@@ -1069,8 +1096,7 @@
     }
     if (site) localStorage.setItem(SITE_KEY, site);
     setSiteCode(siteCode);
-    const qs = buildSiteQuery(site, siteCode);
-    const data = await jfetch(`/api/site_env?${qs}`);
+    const data = await jfetch(withSitePath("/api/site_env", { site_name: site, site_code: siteCode, site_id: siteId }));
     if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
@@ -1144,10 +1170,12 @@
     }
     const ok = confirm(`${site}${siteCode ? ` [${siteCode}]` : ""} 단지의 제원설정을 삭제할까요?`);
     if (!ok) return;
-    const qs = buildSiteQuery(site, siteCode);
-    const del = await jfetch(`/api/site_env?${qs}`, { method: "DELETE", headers: { "X-KA-MFA-VERIFIED": "1" } });
+    const del = await jfetch(withSitePath("/api/site_env", { site_name: site, site_code: siteCode, site_id: siteId }), {
+      method: "DELETE",
+      headers: { "X-KA-MFA-VERIFIED": "1" },
+    });
     if (del && Object.prototype.hasOwnProperty.call(del, "site_id")) setSiteId(del.site_id);
-    const data = await jfetch(`/api/schema?${qs}`);
+    const data = await jfetch(withSitePath("/api/schema", { site_name: site, site_code: siteCode, site_id: siteId }));
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setConfigToEditor((data && data.site_env_config) || {});
@@ -1173,8 +1201,7 @@
       setMsg("site_name/site_id를 확인하세요.", true);
       return;
     }
-    const qs = buildSiteQuery(site, siteCode);
-    const data = await jfetch(`/api/schema?${qs}`);
+    const data = await jfetch(withSitePath("/api/schema", { site_name: site, site_code: siteCode, site_id: siteId }));
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     setActiveSchema(data.schema || {});
@@ -1190,8 +1217,7 @@
       setMsg("메인으로 이동합니다.");
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = buildSiteQuery(site, siteCode);
-      const target = qs ? `/pwa/?${qs}` : "/pwa/";
+      const target = withSitePath("/pwa/", { site_name: site, site_code: siteCode, site_id: getSiteId() });
       window.setTimeout(() => {
         window.location.href = target;
       }, 240);
@@ -1321,7 +1347,15 @@
   }
 
   async function init() {
-    me = await KAAuth.requireAuth();
+    if (window.KAModuleBase && typeof window.KAModuleBase.bootstrap === "function") {
+      moduleCtx = await window.KAModuleBase.bootstrap("main", {
+        defaultLimit: 100,
+        maxLimit: 500,
+      });
+      me = moduleCtx.user || null;
+    } else {
+      me = await KAAuth.requireAuth();
+    }
     if (!canManageSpecEnv(me)) {
       alert("관리자/단지대표자만 접근할 수 있습니다.");
       window.location.href = "/pwa/";
@@ -1331,13 +1365,16 @@
     const qSite = (u.searchParams.get("site_name") || "").trim();
     const qCode = (u.searchParams.get("site_code") || "").trim().toUpperCase();
     const qSiteId = normalizeSiteId(u.searchParams.get("site_id") || "");
+    const ctxSite = String(moduleCtx && moduleCtx.siteName ? moduleCtx.siteName : "").trim();
+    const ctxCode = String(moduleCtx && moduleCtx.siteCode ? moduleCtx.siteCode : "").trim().toUpperCase();
+    const ctxSiteId = normalizeSiteId(moduleCtx && moduleCtx.siteId ? moduleCtx.siteId : 0);
     const stored = (localStorage.getItem(SITE_KEY) || "").trim();
     const storedCode = (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
     const storedSiteId = normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
     const meSiteId = normalizeSiteId(me.site_id);
-    setSiteId(qSiteId || storedSiteId || meSiteId || 0);
-    setSiteName(qSite || stored || String(me.site_name || "").trim());
-    setSiteCode(qCode || storedCode || "");
+    setSiteId(qSiteId || ctxSiteId || storedSiteId || meSiteId || 0);
+    setSiteName(qSite || ctxSite || stored || String(me.site_name || "").trim());
+    setSiteCode(qCode || ctxCode || storedCode || "");
     enforceSitePolicy();
 
     wire();

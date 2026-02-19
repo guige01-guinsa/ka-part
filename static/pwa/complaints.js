@@ -39,10 +39,38 @@
   };
 
   let me = null;
+  let moduleCtx = null;
   let categories = [];
   let selectedComplaintId = null;
   let selectedAdminComplaintId = null;
   let unitSelector = null;
+
+  function normalizePositiveInt(value, fallback = 0) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return Number(fallback || 0);
+    return Math.trunc(n);
+  }
+
+  function moduleLimitPolicy() {
+    const policy = (moduleCtx && moduleCtx.policy) || {};
+    const d = normalizePositiveInt(policy.default_limit ?? policy.defaultLimit, 100) || 100;
+    const mRaw = normalizePositiveInt(policy.max_limit ?? policy.maxLimit, 500) || 500;
+    const m = mRaw >= d ? mRaw : d;
+    return { default_limit: d, max_limit: m };
+  }
+
+  function clampModuleLimit(value, fallback, endpointMax) {
+    const p = moduleLimitPolicy();
+    const base = normalizePositiveInt(fallback, p.default_limit) || p.default_limit;
+    let out = normalizePositiveInt(value, 0);
+    if (out <= 0) out = base;
+    let max = p.max_limit;
+    const endpoint = normalizePositiveInt(endpointMax, max) || max;
+    if (endpoint > 0 && endpoint < max) max = endpoint;
+    if (out > max) out = max;
+    if (out < 1) out = 1;
+    return out;
+  }
 
   function isAdmin(user) {
     return !!(user && (user.is_admin || user.is_site_admin));
@@ -307,14 +335,16 @@
 
   function normalizeSiteContext() {
     const q = parseQuery();
+    const ctxSiteName = String(moduleCtx && moduleCtx.siteName ? moduleCtx.siteName : "").trim();
+    const ctxSiteCode = String(moduleCtx && moduleCtx.siteCode ? moduleCtx.siteCode : "").trim().toUpperCase();
     const userSiteName = String(me && me.site_name ? me.site_name : "").trim();
     const userSiteCode = String(me && me.site_code ? me.site_code : "").trim().toUpperCase();
     const storedSiteName = String(localStorage.getItem(SITE_NAME_KEY) || "").trim();
     const storedSiteCode = String(localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
 
     const showSite = canViewSiteIdentity(me);
-    let siteName = q.site_name || storedSiteName || userSiteName || "";
-    let siteCode = q.site_code || storedSiteCode || userSiteCode || "";
+    let siteName = q.site_name || ctxSiteName || storedSiteName || userSiteName || "";
+    let siteCode = q.site_code || ctxSiteCode || storedSiteCode || userSiteCode || "";
 
     if (!showSite) {
       siteName = userSiteName || siteName;
@@ -474,7 +504,7 @@
     const status = String($("#myStatusFilter").value || "").trim().toUpperCase();
     const qs = new URLSearchParams();
     if (status) qs.set("status", status);
-    qs.set("limit", "80");
+    qs.set("limit", String(clampModuleLimit(80, 80, 200)));
     const path = `/api/v1/complaints?${qs.toString()}`;
     const data = await jfetch(path);
     const rows = Array.isArray(data.items) ? data.items : [];
@@ -655,9 +685,13 @@
     const scope = String($("#adminScopeFilter").value || "").trim().toUpperCase();
     const status = String($("#adminStatusFilter").value || "").trim().toUpperCase();
     const qs = new URLSearchParams();
+    if (canViewSiteIdentity(me)) {
+      const siteCode = normalizeText($("#siteCode")?.value || "", 32, "단지코드", false).toUpperCase();
+      if (siteCode) qs.set("site_code", siteCode);
+    }
     if (scope) qs.set("scope", scope);
     if (status) qs.set("status", status);
-    qs.set("limit", "120");
+    qs.set("limit", String(clampModuleLimit(120, 120, 500)));
     const data = await jfetch(`/api/v1/admin/complaints?${qs.toString()}`);
     const rows = Array.isArray(data.items) ? data.items : [];
     const wrap = $("#adminList");
@@ -720,7 +754,13 @@
 
   async function loadStats() {
     if (!isAdmin(me)) return;
-    const data = await jfetch("/api/v1/admin/stats/complaints");
+    const qs = new URLSearchParams();
+    if (canViewSiteIdentity(me)) {
+      const siteCode = normalizeText($("#siteCode")?.value || "", 32, "단지코드", false).toUpperCase();
+      if (siteCode) qs.set("site_code", siteCode);
+    }
+    const path = qs.toString() ? `/api/v1/admin/stats/complaints?${qs.toString()}` : "/api/v1/admin/stats/complaints";
+    const data = await jfetch(path);
     const item = data && data.item ? data.item : {};
     const byStatus = Array.isArray(item.by_status)
       ? item.by_status.map((x) => `${toStatusLabel(x.status)}:${x.count}`).join(", ")
@@ -813,7 +853,15 @@
   }
 
   async function init() {
-    me = await KAAuth.requireAuth();
+    if (window.KAModuleBase && typeof window.KAModuleBase.bootstrap === "function") {
+      moduleCtx = await window.KAModuleBase.bootstrap("complaints", {
+        defaultLimit: 100,
+        maxLimit: 500,
+      });
+      me = moduleCtx.user || null;
+    } else {
+      me = await KAAuth.requireAuth();
+    }
     if (isSecurityRole(me)) {
       window.location.href = "/parking/admin2";
       throw new Error("모듈 전환 중");

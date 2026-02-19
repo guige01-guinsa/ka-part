@@ -27,6 +27,7 @@
   let editingId = null;
   let recommendedCount = 9;
   let me = null;
+  let moduleCtx = null;
   let selfProfile = null;
   let isAdminView = false;
   let isSuperAdminView = false;
@@ -883,7 +884,15 @@
   }
 
   async function init() {
-    me = await KAAuth.requireAuth();
+    if (window.KAModuleBase && typeof window.KAModuleBase.bootstrap === "function") {
+      moduleCtx = await window.KAModuleBase.bootstrap("main", {
+        defaultLimit: 100,
+        maxLimit: 500,
+      });
+      me = moduleCtx.user || null;
+    } else {
+      me = await KAAuth.requireAuth();
+    }
     if (!me || !me.is_admin) {
       window.location.replace("/pwa/profile.html");
       return;
