@@ -71,6 +71,7 @@ from ..db import (
     get_staff_user_by_login,
     hash_password,
     list_entries,
+    list_module_contracts,
     list_privileged_change_requests,
     list_security_audit_logs,
     list_site_env_config_versions,
@@ -148,6 +149,7 @@ ROLE_LABEL_BY_PERMISSION = {
     "resident": "입주민",
     "board_member": "입대의",
 }
+DEFAULT_GENERAL_MODULE_ORDER = ["main", "parking", "complaints", "inspection", "electrical_ai"]
 SITE_REGISTRY_REQUEST_CHANGE_TYPE = "site_code_registration"
 DEFAULT_SITE_NAME = "미지정단지"
 PHONE_VERIFY_TTL_MINUTES = 5
@@ -388,6 +390,22 @@ def _permission_level_from_role_text(value: Any, *, allow_admin_levels: bool = T
     return "user"
 
 
+def _active_general_modules() -> List[str]:
+    known = set(DEFAULT_GENERAL_MODULE_ORDER)
+    try:
+        contracts = list_module_contracts(active_only=True)
+    except Exception:
+        return list(DEFAULT_GENERAL_MODULE_ORDER)
+    ordered: List[str] = []
+    for item in contracts:
+        key = str(item.get("module_key") or "").strip()
+        if key and key in known and key not in ordered:
+            ordered.append(key)
+    if ordered:
+        return ordered
+    return list(DEFAULT_GENERAL_MODULE_ORDER)
+
+
 def _allowed_modules_for_user(user: Dict[str, Any]) -> List[str]:
     role = _effective_role_for_permission_level(
         _normalized_role_text(user.get("role")),
@@ -397,15 +415,35 @@ def _allowed_modules_for_user(user: Dict[str, Any]) -> List[str]:
         return ["parking"]
     if _is_complaints_only_role(role):
         return ["complaints"]
-    return ["main", "parking", "complaints", "inspection", "electrical_ai"]
+    return _active_general_modules()
+
+
+def _module_ui_path(module_key: str) -> str:
+    clean_key = str(module_key or "").strip()
+    fallback = {
+        "main": "/pwa/",
+        "parking": "/parking/admin2",
+        "complaints": "/pwa/complaints.html",
+        "inspection": "/pwa/inspection.html",
+        "electrical_ai": "/pwa/electrical_ai.html",
+    }.get(clean_key, "/pwa/")
+    try:
+        rows = list_module_contracts(active_only=True)
+    except Exception:
+        return fallback
+    for item in rows:
+        key = str(item.get("module_key") or "").strip()
+        if key != clean_key:
+            continue
+        ui_path = str(item.get("ui_path") or "").strip()
+        return ui_path or fallback
+    return fallback
 
 
 def _default_landing_path_for_user(user: Dict[str, Any]) -> str:
     modules = _allowed_modules_for_user(user)
-    if "parking" in modules and len(modules) == 1:
-        return "/parking/admin2"
-    if "complaints" in modules and len(modules) == 1:
-        return "/pwa/complaints.html"
+    if len(modules) == 1:
+        return _module_ui_path(modules[0])
     return "/pwa/"
 
 
@@ -1744,6 +1782,7 @@ def _enforce_api_module_scope(user: Dict[str, Any], request_path: str) -> None:
             "/api/auth/me",
             "/api/auth/logout",
             "/api/auth/change_password",
+            "/api/modules/contracts",
             "/api/users/me",
             "/api/users/me/withdraw",
             "/api/parking/context",
@@ -1756,6 +1795,7 @@ def _enforce_api_module_scope(user: Dict[str, Any], request_path: str) -> None:
             "/api/auth/me",
             "/api/auth/logout",
             "/api/auth/change_password",
+            "/api/modules/contracts",
             "/api/users/me",
             "/api/users/me/withdraw",
         }
@@ -4304,6 +4344,40 @@ def auth_me(request: Request):
         "user": _public_user(user),
         "session_expires_at": user.get("expires_at"),
         "landing_path": _default_landing_path_for_user(user),
+    }
+
+
+@router.get("/modules/contracts")
+def api_modules_contracts(request: Request):
+    user, _token = _require_auth(request)
+    allowed_modules = _allowed_modules_for_user(user)
+    allowed_set = {str(x or "").strip() for x in allowed_modules if str(x or "").strip()}
+    items_by_key: Dict[str, Dict[str, Any]] = {}
+    try:
+        for item in list_module_contracts(active_only=True):
+            key = str(item.get("module_key") or "").strip()
+            if key and key in allowed_set:
+                items_by_key[key] = item
+    except Exception:
+        items_by_key = {}
+    fallback_by_key: Dict[str, Dict[str, Any]] = {
+        "main": {"module_key": "main", "module_name": "메인 운영", "ui_path": "/pwa/", "api_prefix": "/api"},
+        "parking": {"module_key": "parking", "module_name": "주차관리", "ui_path": "/parking/admin2", "api_prefix": "/api/parking"},
+        "complaints": {"module_key": "complaints", "module_name": "민원관리", "ui_path": "/pwa/complaints.html", "api_prefix": "/api/v1"},
+        "inspection": {"module_key": "inspection", "module_name": "점검관리", "ui_path": "/pwa/inspection.html", "api_prefix": "/api/inspection"},
+        "electrical_ai": {"module_key": "electrical_ai", "module_name": "전기AI", "ui_path": "/pwa/electrical_ai.html", "api_prefix": "/api/elec"},
+    }
+    contracts: List[Dict[str, Any]] = []
+    for module_key in allowed_modules:
+        if module_key in items_by_key:
+            contracts.append(items_by_key[module_key])
+            continue
+        if module_key in fallback_by_key:
+            contracts.append(dict(fallback_by_key[module_key]))
+    return {
+        "ok": True,
+        "allowed_modules": allowed_modules,
+        "contracts": contracts,
     }
 
 

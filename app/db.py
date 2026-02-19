@@ -42,6 +42,69 @@ _WORK_TYPE_ALIAS_MAP = {
 }
 _WORK_TYPE_SET = {str(x or "").strip() for x in WORK_TYPES if str(x or "").strip()}
 DEFAULT_WORK_TYPE = "일일" if "일일" in _WORK_TYPE_SET else (next(iter(_WORK_TYPE_SET), ""))
+MODULE_STATUS_SET = {"active", "beta", "disabled"}
+MODULE_CONTRACT_DEFAULTS: List[Dict[str, Any]] = [
+    {
+        "module_key": "main",
+        "module_name": "메인 운영",
+        "status": "active",
+        "ui_path": "/pwa/",
+        "api_prefix": "/api",
+        "default_limit": 100,
+        "max_limit": 500,
+        "query_timeout_ms": 8000,
+        "cache_ttl_sec": 0,
+        "sort_order": 10,
+    },
+    {
+        "module_key": "parking",
+        "module_name": "주차관리",
+        "status": "active",
+        "ui_path": "/parking/admin2",
+        "api_prefix": "/api/parking",
+        "default_limit": 100,
+        "max_limit": 500,
+        "query_timeout_ms": 8000,
+        "cache_ttl_sec": 10,
+        "sort_order": 20,
+    },
+    {
+        "module_key": "complaints",
+        "module_name": "민원관리",
+        "status": "active",
+        "ui_path": "/pwa/complaints.html",
+        "api_prefix": "/api/v1",
+        "default_limit": 100,
+        "max_limit": 500,
+        "query_timeout_ms": 8000,
+        "cache_ttl_sec": 5,
+        "sort_order": 30,
+    },
+    {
+        "module_key": "inspection",
+        "module_name": "점검관리",
+        "status": "active",
+        "ui_path": "/pwa/inspection.html",
+        "api_prefix": "/api/inspection",
+        "default_limit": 100,
+        "max_limit": 500,
+        "query_timeout_ms": 8000,
+        "cache_ttl_sec": 5,
+        "sort_order": 40,
+    },
+    {
+        "module_key": "electrical_ai",
+        "module_name": "전기AI",
+        "status": "active",
+        "ui_path": "/pwa/electrical_ai.html",
+        "api_prefix": "/api/elec",
+        "default_limit": 30,
+        "max_limit": 200,
+        "query_timeout_ms": 10000,
+        "cache_ttl_sec": 0,
+        "sort_order": 50,
+    },
+]
 
 
 def _connect() -> sqlite3.Connection:
@@ -57,6 +120,18 @@ def _connect() -> sqlite3.Connection:
     con = sqlite3.connect(str(DB_PATH), timeout=timeout_sec)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON;")
+    try:
+        wal_enabled = str(os.getenv("KA_SQLITE_WAL_ENABLED") or "1").strip().lower() in {"1", "true", "yes", "on"}
+        if wal_enabled:
+            con.execute("PRAGMA journal_mode=WAL;")
+            con.execute("PRAGMA synchronous=NORMAL;")
+    except Exception:
+        # WAL tuning is best-effort; ignore if unsupported by current filesystem/runtime.
+        pass
+    try:
+        con.execute("PRAGMA temp_store=MEMORY;")
+    except Exception:
+        pass
     try:
         busy_ms = 30000
         raw_busy = str(os.getenv("KA_SQLITE_BUSY_TIMEOUT_MS") or "").strip()
@@ -538,6 +613,146 @@ def dynamic_upsert(
 
     values = tuple(clean.get(c) for c in insert_cols)
     con.execute(sql, values)
+
+
+def _safe_int_value(value: Any, *, default: int, min_value: int, max_value: int) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = int(default)
+    if parsed < int(min_value):
+        parsed = int(min_value)
+    if parsed > int(max_value):
+        parsed = int(max_value)
+    return int(parsed)
+
+
+def _normalize_module_contract_input(item: Dict[str, Any]) -> Dict[str, Any]:
+    key = re.sub(r"[^a-z0-9_]+", "", str(item.get("module_key") or "").strip().lower())
+    if not key:
+        raise ValueError("module_key is required")
+    status = str(item.get("status") or "active").strip().lower()
+    if status not in MODULE_STATUS_SET:
+        status = "active"
+    default_limit = _safe_int_value(item.get("default_limit"), default=100, min_value=1, max_value=100000)
+    max_limit = _safe_int_value(item.get("max_limit"), default=500, min_value=default_limit, max_value=200000)
+    query_timeout_ms = _safe_int_value(item.get("query_timeout_ms"), default=8000, min_value=500, max_value=120000)
+    cache_ttl_sec = _safe_int_value(item.get("cache_ttl_sec"), default=0, min_value=0, max_value=86400)
+    sort_order = _safe_int_value(item.get("sort_order"), default=100, min_value=1, max_value=100000)
+    return {
+        "module_key": key,
+        "module_name": str(item.get("module_name") or key).strip() or key,
+        "status": status,
+        "ui_path": str(item.get("ui_path") or "").strip() or "/pwa/",
+        "api_prefix": str(item.get("api_prefix") or "").strip() or "/api",
+        "default_limit": default_limit,
+        "max_limit": max_limit,
+        "query_timeout_ms": query_timeout_ms,
+        "cache_ttl_sec": cache_ttl_sec,
+        "sort_order": sort_order,
+    }
+
+
+def _seed_module_contracts(con: sqlite3.Connection) -> None:
+    ts = now_iso()
+    for raw in MODULE_CONTRACT_DEFAULTS:
+        item = _normalize_module_contract_input(raw)
+        key = item["module_key"]
+        existing = con.execute("SELECT * FROM module_contracts WHERE module_key=? LIMIT 1", (key,)).fetchone()
+        if not existing:
+            con.execute(
+                """
+                INSERT INTO module_contracts(
+                  module_key,module_name,status,ui_path,api_prefix,default_limit,max_limit,query_timeout_ms,cache_ttl_sec,sort_order,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    key,
+                    item["module_name"],
+                    item["status"],
+                    item["ui_path"],
+                    item["api_prefix"],
+                    item["default_limit"],
+                    item["max_limit"],
+                    item["query_timeout_ms"],
+                    item["cache_ttl_sec"],
+                    item["sort_order"],
+                    ts,
+                    ts,
+                ),
+            )
+            continue
+
+        cur = dict(existing)
+        merged_name = str(cur.get("module_name") or "").strip() or item["module_name"]
+        merged_status = str(cur.get("status") or "").strip().lower()
+        if merged_status not in MODULE_STATUS_SET:
+            merged_status = item["status"]
+        merged_ui_path = str(cur.get("ui_path") or "").strip() or item["ui_path"]
+        merged_api_prefix = str(cur.get("api_prefix") or "").strip() or item["api_prefix"]
+        merged_default_limit = _safe_int_value(
+            cur.get("default_limit"),
+            default=item["default_limit"],
+            min_value=1,
+            max_value=100000,
+        )
+        merged_max_limit = _safe_int_value(
+            cur.get("max_limit"),
+            default=item["max_limit"],
+            min_value=merged_default_limit,
+            max_value=200000,
+        )
+        merged_query_timeout_ms = _safe_int_value(
+            cur.get("query_timeout_ms"),
+            default=item["query_timeout_ms"],
+            min_value=500,
+            max_value=120000,
+        )
+        merged_cache_ttl_sec = _safe_int_value(
+            cur.get("cache_ttl_sec"),
+            default=item["cache_ttl_sec"],
+            min_value=0,
+            max_value=86400,
+        )
+        merged_sort_order = _safe_int_value(
+            cur.get("sort_order"),
+            default=item["sort_order"],
+            min_value=1,
+            max_value=100000,
+        )
+        needs_update = (
+            str(cur.get("module_name") or "") != merged_name
+            or str(cur.get("status") or "").strip().lower() != merged_status
+            or str(cur.get("ui_path") or "") != merged_ui_path
+            or str(cur.get("api_prefix") or "") != merged_api_prefix
+            or int(cur.get("default_limit") or 0) != merged_default_limit
+            or int(cur.get("max_limit") or 0) != merged_max_limit
+            or int(cur.get("query_timeout_ms") or 0) != merged_query_timeout_ms
+            or int(cur.get("cache_ttl_sec") or 0) != merged_cache_ttl_sec
+            or int(cur.get("sort_order") or 0) != merged_sort_order
+        )
+        if not needs_update:
+            continue
+        con.execute(
+            """
+            UPDATE module_contracts
+            SET module_name=?, status=?, ui_path=?, api_prefix=?, default_limit=?, max_limit=?, query_timeout_ms=?, cache_ttl_sec=?, sort_order=?, updated_at=?
+            WHERE module_key=?
+            """,
+            (
+                merged_name,
+                merged_status,
+                merged_ui_path,
+                merged_api_prefix,
+                merged_default_limit,
+                merged_max_limit,
+                merged_query_timeout_ms,
+                merged_cache_ttl_sec,
+                merged_sort_order,
+                ts,
+                key,
+            ),
+        )
 
 
 def ensure_domain_tables(con: sqlite3.Connection) -> None:
@@ -1128,6 +1343,42 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         ON privileged_change_requests(status, change_type, created_at DESC);
         """
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS module_contracts (
+          module_key TEXT PRIMARY KEY,
+          module_name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          ui_path TEXT NOT NULL,
+          api_prefix TEXT NOT NULL,
+          default_limit INTEGER NOT NULL DEFAULT 100,
+          max_limit INTEGER NOT NULL DEFAULT 500,
+          query_timeout_ms INTEGER NOT NULL DEFAULT 8000,
+          cache_ttl_sec INTEGER NOT NULL DEFAULT 0,
+          sort_order INTEGER NOT NULL DEFAULT 100,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    _ensure_column(con, "module_contracts", "module_name TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "module_contracts", "status TEXT NOT NULL DEFAULT 'active'")
+    _ensure_column(con, "module_contracts", "ui_path TEXT NOT NULL DEFAULT '/pwa/'")
+    _ensure_column(con, "module_contracts", "api_prefix TEXT NOT NULL DEFAULT '/api'")
+    _ensure_column(con, "module_contracts", "default_limit INTEGER NOT NULL DEFAULT 100")
+    _ensure_column(con, "module_contracts", "max_limit INTEGER NOT NULL DEFAULT 500")
+    _ensure_column(con, "module_contracts", "query_timeout_ms INTEGER NOT NULL DEFAULT 8000")
+    _ensure_column(con, "module_contracts", "cache_ttl_sec INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(con, "module_contracts", "sort_order INTEGER NOT NULL DEFAULT 100")
+    _ensure_column(con, "module_contracts", "created_at TEXT NOT NULL DEFAULT ''")
+    _ensure_column(con, "module_contracts", "updated_at TEXT NOT NULL DEFAULT ''")
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_module_contracts_status_order
+        ON module_contracts(status, sort_order, module_key);
+        """
+    )
+    _seed_module_contracts(con)
 
     # Safety inspection module domain tables.
     con.execute(
@@ -2882,6 +3133,141 @@ def list_site_env_configs() -> List[Dict[str, Any]]:
         return out
     finally:
         con.close()
+
+
+def _clean_module_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9_]+", "", str(value or "").strip().lower())
+
+
+def _normalize_module_contract_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    item = _normalize_module_contract_input(row)
+    item["created_at"] = str(row.get("created_at") or "")
+    item["updated_at"] = str(row.get("updated_at") or "")
+    return item
+
+
+def list_module_contracts_in_tx(con: sqlite3.Connection, *, active_only: bool = False) -> List[Dict[str, Any]]:
+    clauses: List[str] = []
+    params: List[Any] = []
+    if active_only:
+        clauses.append("status=?")
+        params.append("active")
+    sql = """
+        SELECT module_key,module_name,status,ui_path,api_prefix,default_limit,max_limit,query_timeout_ms,cache_ttl_sec,sort_order,created_at,updated_at
+        FROM module_contracts
+    """
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY sort_order ASC, module_key ASC"
+    rows = con.execute(sql, tuple(params)).fetchall()
+    out: List[Dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        try:
+            out.append(_normalize_module_contract_row(row))
+        except Exception:
+            continue
+    return out
+
+
+def list_module_contracts(*, active_only: bool = False) -> List[Dict[str, Any]]:
+    con = _connect()
+    try:
+        return list_module_contracts_in_tx(con, active_only=active_only)
+    finally:
+        con.close()
+
+
+def get_module_contract_in_tx(con: sqlite3.Connection, module_key: str) -> Optional[Dict[str, Any]]:
+    clean_key = _clean_module_key(module_key)
+    if not clean_key:
+        return None
+    row = con.execute(
+        """
+        SELECT module_key,module_name,status,ui_path,api_prefix,default_limit,max_limit,query_timeout_ms,cache_ttl_sec,sort_order,created_at,updated_at
+        FROM module_contracts
+        WHERE module_key=?
+        LIMIT 1
+        """,
+        (clean_key,),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        return _normalize_module_contract_row(dict(row))
+    except Exception:
+        return None
+
+
+def get_module_contract(module_key: str) -> Optional[Dict[str, Any]]:
+    con = _connect()
+    try:
+        return get_module_contract_in_tx(con, module_key)
+    finally:
+        con.close()
+
+
+def module_limit_policy_in_tx(
+    con: sqlite3.Connection,
+    module_key: str,
+    *,
+    fallback_default: int = 100,
+    fallback_max: int = 500,
+) -> Dict[str, int]:
+    base_default = _safe_int_value(fallback_default, default=100, min_value=1, max_value=100000)
+    base_max = _safe_int_value(fallback_max, default=500, min_value=base_default, max_value=200000)
+    contract = get_module_contract_in_tx(con, module_key) or {}
+    default_limit = _safe_int_value(
+        contract.get("default_limit"),
+        default=base_default,
+        min_value=1,
+        max_value=100000,
+    )
+    max_limit = _safe_int_value(
+        contract.get("max_limit"),
+        default=base_max,
+        min_value=default_limit,
+        max_value=200000,
+    )
+    return {
+        "default_limit": default_limit,
+        "max_limit": max_limit,
+    }
+
+
+def get_module_limit_policy(
+    module_key: str,
+    *,
+    fallback_default: int = 100,
+    fallback_max: int = 500,
+) -> Dict[str, int]:
+    con = _connect()
+    try:
+        return module_limit_policy_in_tx(
+            con,
+            module_key,
+            fallback_default=fallback_default,
+            fallback_max=fallback_max,
+        )
+    finally:
+        con.close()
+
+
+def clamp_module_limit(value: Any, *, default_limit: int, max_limit: int) -> int:
+    safe_default = _safe_int_value(default_limit, default=100, min_value=1, max_value=100000)
+    safe_max = _safe_int_value(max_limit, default=500, min_value=safe_default, max_value=200000)
+    raw = str(value or "").strip()
+    if not raw:
+        return safe_default
+    try:
+        parsed = int(raw)
+    except Exception:
+        parsed = safe_default
+    if parsed < 1:
+        parsed = 1
+    if parsed > safe_max:
+        parsed = safe_max
+    return int(parsed)
 
 
 _APT_BUILDING_KEY_RE = re.compile(r"^[0-9]{1,4}$")

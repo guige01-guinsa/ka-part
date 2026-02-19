@@ -16,7 +16,15 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from ..db import _connect, get_auth_user_by_token, init_db, now_iso, resolve_site_identity
+from ..db import (
+    _connect,
+    clamp_module_limit,
+    get_auth_user_by_token,
+    init_db,
+    module_limit_policy_in_tx,
+    now_iso,
+    resolve_site_identity,
+)
 
 router = APIRouter()
 
@@ -551,7 +559,14 @@ def _pdf_incident(incident: Dict[str, Any], notifications: List[Dict[str, Any]],
     return buf.getvalue()
 
 
-def _bootstrap_payload(con, scoped: str, user: Dict[str, Any], limit: int) -> Dict[str, Any]:
+def _bootstrap_payload(
+    con,
+    scoped: str,
+    user: Dict[str, Any],
+    limit: int,
+    *,
+    limit_policy: Dict[str, int] | None = None,
+) -> Dict[str, Any]:
     _ensure_default_settings(con, scoped, actor_login=str(user.get("login_id") or "system"))
     settings = _list_settings(con, scoped)
     incidents = _rows(con.execute("SELECT * FROM elec_incidents WHERE site_code=? ORDER BY id DESC LIMIT ?", (scoped, limit)).fetchall())
@@ -565,6 +580,8 @@ def _bootstrap_payload(con, scoped: str, user: Dict[str, Any], limit: int) -> Di
         "ok": True,
         "site_code": scoped,
         "site_name": str(user.get("site_name") or "").strip(),
+        "applied_limit": int(limit),
+        "limit_policy": limit_policy or {"default_limit": int(limit), "max_limit": int(limit)},
         "active_duty_user_key": _resolve_duty_user_key(con, scoped),
         "user": {
             "id": int(user.get("id") or 0),
@@ -586,14 +603,26 @@ def elec_bootstrap(
     site_code: str = Query(default=""),
     site_id: int = Query(default=0),
     site_name: str = Query(default=""),
-    limit: int = Query(default=30, ge=1, le=200),
+    limit: int = Query(default=30, ge=1, le=100000),
 ):
     user, _token = _require_elec_user(request)
     scoped = _scope_site_code(user, site_code, site_id, site_name)
     con = _connect()
     try:
         try:
-            payload = _bootstrap_payload(con, scoped, user, limit)
+            policy = module_limit_policy_in_tx(con, "electrical_ai", fallback_default=30, fallback_max=200)
+            safe_limit = clamp_module_limit(
+                limit,
+                default_limit=policy["default_limit"],
+                max_limit=policy["max_limit"],
+            )
+            payload = _bootstrap_payload(
+                con,
+                scoped,
+                user,
+                safe_limit,
+                limit_policy=policy,
+            )
             con.commit()
             return payload
         except HTTPException:
@@ -602,7 +631,19 @@ def elec_bootstrap(
             # Self-heal path for legacy/partial schema states on production DB.
             con.rollback()
             init_db()
-            payload = _bootstrap_payload(con, scoped, user, limit)
+            policy = module_limit_policy_in_tx(con, "electrical_ai", fallback_default=30, fallback_max=200)
+            safe_limit = clamp_module_limit(
+                limit,
+                default_limit=policy["default_limit"],
+                max_limit=policy["max_limit"],
+            )
+            payload = _bootstrap_payload(
+                con,
+                scoped,
+                user,
+                safe_limit,
+                limit_policy=policy,
+            )
             con.commit()
             return payload
     except HTTPException:
@@ -722,7 +763,7 @@ def elec_incidents_list(
     site_name: str = Query(default=""),
     risk_level: str = Query(default=""),
     event_level: str = Query(default=""),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=100000),
 ):
     user, _token = _require_elec_user(request)
     scoped = _scope_site_code(user, site_code, site_id, site_name)
@@ -740,11 +781,24 @@ def elec_incidents_list(
         sql += " AND event_level=?"
         args.append(event)
     sql += " ORDER BY id DESC LIMIT ?"
-    args.append(max(1, min(500, int(limit))))
     con = _connect()
     try:
-        items = _rows(con.execute(sql, tuple(args)).fetchall())
-        return {"ok": True, "site_code": scoped, "items": items}
+        policy = module_limit_policy_in_tx(con, "electrical_ai", fallback_default=100, fallback_max=500)
+        safe_limit = clamp_module_limit(
+            limit,
+            default_limit=policy["default_limit"],
+            max_limit=policy["max_limit"],
+        )
+        qargs = list(args)
+        qargs.append(safe_limit)
+        items = _rows(con.execute(sql, tuple(qargs)).fetchall())
+        return {
+            "ok": True,
+            "site_code": scoped,
+            "items": items,
+            "applied_limit": safe_limit,
+            "limit_policy": policy,
+        }
     finally:
         con.close()
 

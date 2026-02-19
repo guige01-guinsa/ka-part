@@ -4,8 +4,11 @@
   const $ = (s) => document.querySelector(s);
   const state = {
     user: null,
+    ctx: null,
     siteCode: "",
     siteName: "",
+    siteId: 0,
+    limitPolicy: { default_limit: 30, max_limit: 200 },
     settings: null,
     incidents: [],
     notifications: [],
@@ -29,24 +32,63 @@
     return window.KAAuth ? window.KAAuth.getToken() : "";
   }
 
-  function siteCodeFromQuery() {
-    const qs = new URLSearchParams(window.location.search);
-    return String(qs.get("site_code") || "").trim().toUpperCase();
-  }
-
-  function siteIdFromQuery() {
-    const qs = new URLSearchParams(window.location.search);
-    const raw = String(qs.get("site_id") || "").trim();
-    const n = Number(raw);
+  function normalizePositiveInt(value) {
+    const n = Number(value);
     return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
   }
 
-  function queryWithSite(basePath) {
-    const code = state.siteCode || siteCodeFromQuery();
-    const siteId = siteIdFromQuery();
+  function siteScopeFromQuery() {
+    const qs = new URLSearchParams(window.location.search);
+    return {
+      site_code: String(qs.get("site_code") || "").trim().toUpperCase(),
+      site_name: String(qs.get("site_name") || "").trim(),
+      site_id: normalizePositiveInt(qs.get("site_id") || ""),
+    };
+  }
+
+  function effectiveLimitPolicy() {
+    const current = state.limitPolicy || {};
+    const d = normalizePositiveInt(current.default_limit) || 30;
+    const m = normalizePositiveInt(current.max_limit) || 200;
+    return {
+      default_limit: d,
+      max_limit: m >= d ? m : d,
+    };
+  }
+
+  function clampLimit(value, fallback = 0) {
+    const policy = effectiveLimitPolicy();
+    const defaultLimit = normalizePositiveInt(fallback) || policy.default_limit;
+    let n = normalizePositiveInt(value);
+    if (n <= 0) n = defaultLimit;
+    if (n > policy.max_limit) n = policy.max_limit;
+    return n;
+  }
+
+  function queryWithSite(basePath, extra = {}) {
+    if (state.ctx && typeof state.ctx.withSite === "function") {
+      const scope = {
+        site_code: state.siteCode || state.ctx.siteCode || "",
+        site_name: state.siteName || state.ctx.siteName || "",
+        site_id: state.siteId || state.ctx.siteId || 0,
+        ...(extra || {}),
+      };
+      return state.ctx.withSite(basePath, scope);
+    }
+
+    const q = siteScopeFromQuery();
+    const code = String((extra && extra.site_code) || state.siteCode || q.site_code || "").trim().toUpperCase();
+    const name = String((extra && extra.site_name) || state.siteName || q.site_name || "").trim();
+    const siteId = normalizePositiveInt((extra && extra.site_id) || state.siteId || q.site_id || 0);
     const params = new URLSearchParams();
     if (code) params.set("site_code", code);
+    if (name) params.set("site_name", name);
     if (siteId > 0) params.set("site_id", String(siteId));
+    for (const [k, v] of Object.entries(extra || {})) {
+      if (k === "site_code" || k === "site_name" || k === "site_id") continue;
+      const val = String(v == null ? "" : v).trim();
+      if (val) params.set(k, val);
+    }
     const raw = params.toString();
     if (!raw) return basePath;
     const sep = basePath.includes("?") ? "&" : "?";
@@ -227,10 +269,13 @@
   }
 
   async function loadBootstrap() {
-    const data = await apiGet(queryWithSite("/api/elec/bootstrap"));
+    const bootstrapLimit = clampLimit(0, 30);
+    const data = await apiGet(queryWithSite("/api/elec/bootstrap", { limit: bootstrapLimit }));
     state.siteCode = String(data.site_code || "").trim().toUpperCase();
     state.siteName = String(data.site_name || "").trim();
+    state.siteId = normalizePositiveInt(data.site_id || state.siteId || 0);
     state.user = data.user || null;
+    if (data && data.limit_policy) state.limitPolicy = data.limit_policy;
     state.settings = data.settings || {};
     state.incidents = Array.isArray(data.incidents) ? data.incidents : [];
     state.notifications = Array.isArray(data.pending_notifications) ? data.pending_notifications : [];
@@ -241,30 +286,34 @@
     applyManagerUiPolicy();
     renderIncidents(state.incidents);
     renderNotifications(state.notifications);
-    msg("전기AI 모듈 준비 완료");
+    msg(`전기AI 모듈 준비 완료 (limit ${Number(data.applied_limit || bootstrapLimit)})`);
   }
 
   async function reloadLists() {
     const risk = String($("#qRiskLevel")?.value || "").trim();
     const event = String($("#qEventLevel")?.value || "").trim();
-    const p = new URLSearchParams();
-    if (state.siteCode) p.set("site_code", state.siteCode);
-    if (risk) p.set("risk_level", risk);
-    if (event) p.set("event_level", event);
-    p.set("limit", "100");
-    const out = await apiGet(`/api/elec/incidents?${p.toString()}`);
+    const listLimit = clampLimit(100, 100);
+    const out = await apiGet(
+      queryWithSite("/api/elec/incidents", {
+        risk_level: risk,
+        event_level: event,
+        limit: listLimit,
+      }),
+    );
+    if (out && out.limit_policy) state.limitPolicy = out.limit_policy;
     state.incidents = Array.isArray(out.items) ? out.items : [];
     renderIncidents(state.incidents);
 
-    const b = await apiGet(queryWithSite("/api/elec/bootstrap?limit=100"));
+    const b = await apiGet(queryWithSite("/api/elec/bootstrap", { limit: listLimit }));
+    if (b && b.limit_policy) state.limitPolicy = b.limit_policy;
     state.notifications = Array.isArray(b.pending_notifications) ? b.pending_notifications : [];
     renderNotifications(state.notifications);
   }
 
   async function createIncident() {
     const payload = {
-      site_code: state.siteCode || "",
-      site_name: state.siteName || "",
+      site_code: state.siteCode || (state.ctx && state.ctx.siteCode) || "",
+      site_name: state.siteName || (state.ctx && state.ctx.siteName) || "",
       location: String($("#incidentLocation")?.value || "").trim(),
       title: String($("#incidentTitle")?.value || "").trim() || "누설전류 점검",
       insulation_mohm: Number($("#insulationMohm")?.value || 0),
@@ -282,16 +331,21 @@
   }
 
   async function ackNotification(id, token) {
-    const p = new URLSearchParams();
-    if (state.siteCode) p.set("site_code", state.siteCode);
-    if (token) p.set("token", token);
-    await apiPost(`/api/elec/notifications/${Number(id)}/ack?${p.toString()}`, {});
+    await apiPost(
+      queryWithSite(`/api/elec/notifications/${Number(id)}/ack`, {
+        token: token || "",
+      }),
+      {},
+    );
     msg(`ACK 완료 (#${Number(id)})`);
     await reloadLists();
   }
 
   async function runEscalation() {
-    const out = await apiPost("/api/elec/escalations/run", { site_code: state.siteCode || "", limit: 300 });
+    const out = await apiPost("/api/elec/escalations/run", {
+      site_code: state.siteCode || (state.ctx && state.ctx.siteCode) || "",
+      limit: clampLimit(300, 100),
+    });
     msg(`에스컬레이션 완료: checked=${out.checked || 0}, escalated=${out.escalated || 0}`);
     state.notifications = Array.isArray(out.pending_notifications) ? out.pending_notifications : [];
     renderNotifications(state.notifications);
@@ -333,11 +387,9 @@
 
   async function downloadReport(id) {
     const token = getToken();
-    const p = new URLSearchParams();
-    if (state.siteCode) p.set("site_code", state.siteCode);
     const headers = {};
     if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(`/api/elec/incidents/${Number(id)}/report.pdf?${p.toString()}`, { headers });
+    const res = await fetch(queryWithSite(`/api/elec/incidents/${Number(id)}/report.pdf`), { headers });
     if (!res.ok) {
       const t = await res.text();
       throw new Error(t || `HTTP ${res.status}`);
@@ -367,6 +419,25 @@
   async function init() {
     if (!window.KAAuth) throw new Error("auth.js가 로드되지 않았습니다.");
     await window.KAAuth.requireAuth();
+    if (window.KAModuleBase && typeof window.KAModuleBase.bootstrap === "function") {
+      state.ctx = await window.KAModuleBase.bootstrap("electrical_ai", {
+        defaultLimit: 30,
+        maxLimit: 200,
+      });
+      const p = (state.ctx && state.ctx.policy) || {};
+      state.limitPolicy = {
+        default_limit: normalizePositiveInt(p.default_limit || p.defaultLimit || 30) || 30,
+        max_limit: normalizePositiveInt(p.max_limit || p.maxLimit || 200) || 200,
+      };
+      if (!state.siteCode) state.siteCode = String(state.ctx.siteCode || "").trim().toUpperCase();
+      if (!state.siteName) state.siteName = String(state.ctx.siteName || "").trim();
+      if (!state.siteId) state.siteId = normalizePositiveInt(state.ctx.siteId || 0);
+    } else {
+      const scope = siteScopeFromQuery();
+      if (!state.siteCode) state.siteCode = scope.site_code;
+      if (!state.siteName) state.siteName = scope.site_name;
+      if (!state.siteId) state.siteId = scope.site_id;
+    }
     wire();
     await loadBootstrap();
   }
