@@ -8,6 +8,7 @@
   const ACTION_SUCCESS_BUTTON_IDS = ["btnReload", "btnSave", "btnGoMain"];
 
   let me = null;
+  let moduleCtx = null;
   let buildingOverrides = {};
 
   function canManage(user) {
@@ -121,15 +122,47 @@
     else localStorage.removeItem(SITE_CODE_KEY);
   }
 
-  function buildSiteQuery(siteName, siteCode) {
+  function buildSiteQuery(siteName, siteCode, siteId = null) {
     const qs = new URLSearchParams();
-    const siteId = getSiteId();
-    if (siteId > 0) qs.set("site_id", String(siteId));
+    const sid = normalizeSiteId(siteId == null ? getSiteId() : siteId);
+    if (sid > 0) qs.set("site_id", String(sid));
     const s = String(siteName || "").trim();
     const c = String(siteCode || "").trim().toUpperCase();
     if (s) qs.set("site_name", s);
     if (c) qs.set("site_code", c);
     return qs.toString();
+  }
+
+  function withSitePath(basePath, overrides = {}) {
+    const scope = {
+      site_id: Object.prototype.hasOwnProperty.call(overrides, "site_id") ? overrides.site_id : getSiteId(),
+      site_name: Object.prototype.hasOwnProperty.call(overrides, "site_name") ? overrides.site_name : getSiteName(),
+      site_code: Object.prototype.hasOwnProperty.call(overrides, "site_code") ? overrides.site_code : getSiteCode(),
+    };
+    const extra = { ...(overrides || {}) };
+    delete extra.site_id;
+    delete extra.site_name;
+    delete extra.site_code;
+
+    if (moduleCtx && typeof moduleCtx.withSite === "function") {
+      return moduleCtx.withSite(basePath, { ...scope, ...extra });
+    }
+
+    const qs = buildSiteQuery(scope.site_name, scope.site_code, scope.site_id);
+    const params = new URLSearchParams(qs || "");
+    for (const [k, v] of Object.entries(extra)) {
+      const key = String(k || "").trim();
+      const val = String(v == null ? "" : v).trim();
+      if (!key) continue;
+      if (!val) {
+        params.delete(key);
+        continue;
+      }
+      params.set(key, val);
+    }
+    if (!params.toString()) return basePath;
+    const sep = String(basePath || "").includes("?") ? "&" : "?";
+    return `${basePath}${sep}${params.toString()}`;
   }
 
   function intOr(value, fallback) {
@@ -322,8 +355,7 @@
       if (!silent) setMsg("site_name 또는 site_code를 입력하세요.", true);
       return null;
     }
-    const qs = buildSiteQuery(site, code);
-    const data = await jfetch(`/api/site_identity?${qs}`);
+    const data = await jfetch(withSitePath("/api/site_identity", { site_name: site, site_code: code, site_id: siteId }));
     if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
@@ -332,8 +364,11 @@
 
   async function loadProfile() {
     await syncSiteIdentity(false);
-    const qs = buildSiteQuery(getSiteName(), getSiteCode());
-    const data = await jfetch(`/api/apartment_profile?${qs}`);
+    const data = await jfetch(withSitePath("/api/apartment_profile", {
+      site_name: getSiteName(),
+      site_code: getSiteCode(),
+      site_id: getSiteId(),
+    }));
     applyProfileToForm(data || {});
     markActionSuccess($("#btnReload"), "↺");
     setMsg("아파트 정보를 불러왔습니다.");
@@ -365,8 +400,10 @@
     const label = canViewSiteIdentity(me) ? `${site}${code ? ` [${code}]` : ""}` : "현재 단지";
     const ok = confirm(`${label}의 아파트 정보 설정을 삭제할까요?`);
     if (!ok) return;
-    const qs = buildSiteQuery(site, code);
-    await jfetch(`/api/apartment_profile?${qs}`, { method: "DELETE", headers: { "X-KA-MFA-VERIFIED": "1" } });
+    await jfetch(withSitePath("/api/apartment_profile", { site_name: site, site_code: code, site_id: getSiteId() }), {
+      method: "DELETE",
+      headers: { "X-KA-MFA-VERIFIED": "1" },
+    });
     applyProfileToForm({
       households_total: 0,
       building_start: 101,
@@ -486,9 +523,11 @@
     $("#btnGoMain")?.addEventListener("click", (e) => {
       e.preventDefault();
       markActionSuccess(e.currentTarget, "↗");
-      const qs = canViewSiteIdentity(me) ? buildSiteQuery(getSiteName(), getSiteCode()) : "";
+      const target = canViewSiteIdentity(me)
+        ? withSitePath("/pwa/", { site_name: getSiteName(), site_code: getSiteCode(), site_id: getSiteId() })
+        : "/pwa/";
       window.setTimeout(() => {
-        window.location.href = qs ? `/pwa/?${qs}` : "/pwa/";
+        window.location.href = target;
       }, 200);
     });
     $("#btnReload")?.addEventListener("click", () => loadProfile().catch((e) => setMsg(e.message || String(e), true)));
@@ -515,13 +554,27 @@
   }
 
   async function init() {
-    me = await window.KAAuth.requireAuth();
+    if (window.KAModuleBase && typeof window.KAModuleBase.bootstrap === "function") {
+      moduleCtx = await window.KAModuleBase.bootstrap("main", {
+        defaultLimit: 100,
+        maxLimit: 500,
+      });
+      me = moduleCtx.user || null;
+    } else {
+      me = await window.KAAuth.requireAuth();
+    }
     if (!canManage(me)) {
       alert("아파트 정보 설정은 관리자/단지대표자만 사용할 수 있습니다.");
       window.location.href = "/pwa/";
       return;
     }
     loadSiteFromQueryOrStorage();
+    const ctxSiteId = normalizeSiteId(moduleCtx && moduleCtx.siteId ? moduleCtx.siteId : 0);
+    const ctxSiteName = String(moduleCtx && moduleCtx.siteName ? moduleCtx.siteName : "").trim();
+    const ctxSiteCode = String(moduleCtx && moduleCtx.siteCode ? moduleCtx.siteCode : "").trim().toUpperCase();
+    if (ctxSiteId > 0 && getSiteId() <= 0) setSiteId(ctxSiteId);
+    if (ctxSiteName && !getSiteName()) setSiteName(ctxSiteName);
+    if (ctxSiteCode && !getSiteCode()) setSiteCode(ctxSiteCode);
     if (!canViewSiteIdentity(me)) {
       stripSiteIdentityFromUrl();
       if (me && me.site_id) setSiteId(me.site_id);

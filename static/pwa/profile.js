@@ -3,6 +3,7 @@
 
   const $ = (s) => document.querySelector(s);
   let me = null;
+  let moduleCtx = null;
   let profile = null;
 
   async function jfetch(url, opts = {}) {
@@ -196,10 +197,21 @@
   }
 
   async function init() {
-    me = await KAAuth.requireAuth();
+    if (window.KAModuleBase && typeof window.KAModuleBase.bootstrap === "function") {
+      moduleCtx = await window.KAModuleBase.bootstrap("main", {
+        defaultLimit: 100,
+        maxLimit: 500,
+      });
+      me = moduleCtx.user || null;
+    } else {
+      me = await KAAuth.requireAuth();
+    }
     const back = $("#btnBack");
     if (back) {
-      const target = String((me && me.default_landing_path) || "/pwa/").trim() || "/pwa/";
+      const fallbackPath = String((me && me.default_landing_path) || "/pwa/").trim() || "/pwa/";
+      const target = (moduleCtx && typeof moduleCtx.withSite === "function" && (fallbackPath === "/pwa/" || fallbackPath === "/pwa"))
+        ? moduleCtx.withSite("/pwa/")
+        : fallbackPath;
       back.setAttribute("href", target);
     }
     await loadProfile();

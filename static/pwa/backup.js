@@ -5,6 +5,7 @@
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
   let me = null;
+  let moduleCtx = null;
   let options = null;
   let pollTimer = null;
   let backupTimezone = "";
@@ -192,10 +193,12 @@
       const q = new URL(window.location.href);
       const qCode = (q.searchParams.get("site_code") || "").trim().toUpperCase();
       const qName = (q.searchParams.get("site_name") || "").trim();
+      const ctxCode = String(moduleCtx && moduleCtx.siteCode ? moduleCtx.siteCode : "").trim().toUpperCase();
+      const ctxName = String(moduleCtx && moduleCtx.siteName ? moduleCtx.siteName : "").trim();
       const storedCode = (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
       const storedName = (localStorage.getItem(SITE_NAME_KEY) || "").trim();
-      if (!siteCodeEl.value) siteCodeEl.value = qCode || storedCode || "";
-      if (!siteNameEl.value) siteNameEl.value = qName || storedName || "";
+      if (!siteCodeEl.value) siteCodeEl.value = qCode || ctxCode || storedCode || "";
+      if (!siteNameEl.value) siteNameEl.value = qName || ctxName || storedName || "";
       siteCodeEl.readOnly = false;
       siteNameEl.readOnly = false;
     }
@@ -585,7 +588,15 @@
   }
 
   async function init() {
-    me = await KAAuth.requireAuth();
+    if (window.KAModuleBase && typeof window.KAModuleBase.bootstrap === "function") {
+      moduleCtx = await window.KAModuleBase.bootstrap("main", {
+        defaultLimit: 100,
+        maxLimit: 500,
+      });
+      me = moduleCtx.user || null;
+    } else {
+      me = await KAAuth.requireAuth();
+    }
     if (!canManageBackup(me)) {
       alert("최고/운영관리자 또는 단지관리자만 접근할 수 있습니다.");
       window.location.href = "/pwa/";
