@@ -16,7 +16,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
-from ..db import _connect, get_auth_user_by_token, now_iso, resolve_site_identity
+from ..db import _connect, get_auth_user_by_token, init_db, now_iso, resolve_site_identity
 
 router = APIRouter()
 
@@ -551,6 +551,35 @@ def _pdf_incident(incident: Dict[str, Any], notifications: List[Dict[str, Any]],
     return buf.getvalue()
 
 
+def _bootstrap_payload(con, scoped: str, user: Dict[str, Any], limit: int) -> Dict[str, Any]:
+    _ensure_default_settings(con, scoped, actor_login=str(user.get("login_id") or "system"))
+    settings = _list_settings(con, scoped)
+    incidents = _rows(con.execute("SELECT * FROM elec_incidents WHERE site_code=? ORDER BY id DESC LIMIT ?", (scoped, limit)).fetchall())
+    notifications = _rows(
+        con.execute(
+            "SELECT * FROM elec_notifications WHERE site_code=? AND status='sent' ORDER BY ack_due_at,id LIMIT ?",
+            (scoped, limit),
+        ).fetchall()
+    )
+    return {
+        "ok": True,
+        "site_code": scoped,
+        "site_name": str(user.get("site_name") or "").strip(),
+        "active_duty_user_key": _resolve_duty_user_key(con, scoped),
+        "user": {
+            "id": int(user.get("id") or 0),
+            "login_id": user.get("login_id"),
+            "name": user.get("name"),
+            "role": user.get("role"),
+            "is_admin": bool(user.get("is_admin")),
+            "is_site_admin": bool(user.get("is_site_admin")),
+        },
+        "settings": settings,
+        "incidents": incidents,
+        "pending_notifications": [_notification_public(r) for r in notifications],
+    }
+
+
 @router.get("/elec/bootstrap")
 def elec_bootstrap(
     request: Request,
@@ -563,33 +592,27 @@ def elec_bootstrap(
     scoped = _scope_site_code(user, site_code, site_id, site_name)
     con = _connect()
     try:
-        _ensure_default_settings(con, scoped, actor_login=str(user.get("login_id") or "system"))
-        settings = _list_settings(con, scoped)
-        incidents = _rows(con.execute("SELECT * FROM elec_incidents WHERE site_code=? ORDER BY id DESC LIMIT ?", (scoped, limit)).fetchall())
-        notifications = _rows(
-            con.execute(
-                "SELECT * FROM elec_notifications WHERE site_code=? AND status='sent' ORDER BY ack_due_at,id LIMIT ?",
-                (scoped, limit),
-            ).fetchall()
-        )
-        con.commit()
-        return {
-            "ok": True,
-            "site_code": scoped,
-            "site_name": str(user.get("site_name") or "").strip(),
-            "active_duty_user_key": _resolve_duty_user_key(con, scoped),
-            "user": {
-                "id": int(user.get("id") or 0),
-                "login_id": user.get("login_id"),
-                "name": user.get("name"),
-                "role": user.get("role"),
-                "is_admin": bool(user.get("is_admin")),
-                "is_site_admin": bool(user.get("is_site_admin")),
-            },
-            "settings": settings,
-            "incidents": incidents,
-            "pending_notifications": [_notification_public(r) for r in notifications],
-        }
+        try:
+            payload = _bootstrap_payload(con, scoped, user, limit)
+            con.commit()
+            return payload
+        except HTTPException:
+            raise
+        except Exception:
+            # Self-heal path for legacy/partial schema states on production DB.
+            con.rollback()
+            init_db()
+            payload = _bootstrap_payload(con, scoped, user, limit)
+            con.commit()
+            return payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        et = type(e).__name__
+        msg = str(e or "").strip()
+        if len(msg) > 180:
+            msg = msg[:180] + "..."
+        raise HTTPException(status_code=500, detail=f"전기AI 초기화 오류(ELEC_BOOTSTRAP): {et}: {msg}")
     finally:
         con.close()
 
