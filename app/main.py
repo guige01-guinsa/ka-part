@@ -25,6 +25,7 @@ from .ops_diagnostics import (
 from .routes.api import router as api_router
 from .routes.inspection import router as inspection_router
 from .routes.complaints import router as complaints_router
+from .routes.electrical_ai import router as electrical_ai_router
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -49,6 +50,7 @@ def _shutdown():
 app.include_router(api_router, prefix="/api")
 app.include_router(inspection_router, prefix="/api")
 app.include_router(complaints_router, prefix="/api/v1")
+app.include_router(electrical_ai_router, prefix="/api")
 
 
 @app.middleware("http")

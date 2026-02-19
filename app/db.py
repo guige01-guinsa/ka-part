@@ -1412,6 +1412,194 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         """
     )
 
+    # Electrical AI operations module domain tables.
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS elec_incidents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          site_name TEXT,
+          location TEXT,
+          title TEXT NOT NULL,
+          insulation_mohm REAL NOT NULL,
+          ground_ohm REAL NOT NULL,
+          leakage_ma REAL NOT NULL,
+          risk_level TEXT NOT NULL CHECK(risk_level IN ('ok','caution','danger')),
+          trend_state TEXT NOT NULL DEFAULT 'stable' CHECK(trend_state IN ('stable','worsening')),
+          event_level TEXT NOT NULL DEFAULT 'ok' CHECK(event_level IN ('ok','prealert','danger')),
+          risk_reason TEXT,
+          trend_reason TEXT,
+          note TEXT,
+          reported_by_user_id INTEGER,
+          reported_by_login TEXT,
+          reported_by_name TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_elec_incidents_site_created
+        ON elec_incidents(site_code, created_at DESC, id DESC);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_elec_incidents_site_risk
+        ON elec_incidents(site_code, risk_level, event_level, created_at DESC);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS elec_rules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL UNIQUE,
+          caution_leakage_ma REAL NOT NULL DEFAULT 15.0,
+          danger_leakage_ma REAL NOT NULL DEFAULT 30.0,
+          caution_insulation_mohm REAL NOT NULL DEFAULT 1.0,
+          danger_insulation_mohm REAL NOT NULL DEFAULT 0.5,
+          caution_ground_ohm REAL NOT NULL DEFAULT 15.0,
+          danger_ground_ohm REAL NOT NULL DEFAULT 30.0,
+          ack_timeout_minutes INTEGER NOT NULL DEFAULT 30,
+          trend_lookback_count INTEGER NOT NULL DEFAULT 3,
+          trend_prealert_enabled INTEGER NOT NULL DEFAULT 1 CHECK(trend_prealert_enabled IN (0,1)),
+          created_by TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS elec_notify_routes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          event_level TEXT NOT NULL CHECK(event_level IN ('prealert','danger')),
+          recipient_key TEXT NOT NULL,
+          channel TEXT NOT NULL DEFAULT 'kakao',
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_elec_notify_routes
+        ON elec_notify_routes(site_code, event_level, recipient_key, channel);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS elec_duty_schedule (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          shift_code TEXT NOT NULL,
+          start_hhmm TEXT NOT NULL,
+          end_hhmm TEXT NOT NULL,
+          user_key TEXT NOT NULL,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_elec_duty_schedule
+        ON elec_duty_schedule(site_code, shift_code);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS elec_escalation_routes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_code TEXT NOT NULL,
+          event_level TEXT NOT NULL CHECK(event_level IN ('prealert','danger')),
+          source_recipient_key TEXT NOT NULL,
+          target_recipient_key TEXT NOT NULL,
+          delay_minutes INTEGER NOT NULL DEFAULT 30,
+          channel TEXT NOT NULL DEFAULT 'kakao',
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_elec_escalation_routes
+        ON elec_escalation_routes(site_code, event_level, source_recipient_key, target_recipient_key);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS elec_notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          incident_id INTEGER NOT NULL REFERENCES elec_incidents(id) ON DELETE CASCADE,
+          site_code TEXT NOT NULL,
+          event_level TEXT NOT NULL CHECK(event_level IN ('prealert','danger')),
+          route_recipient_key TEXT NOT NULL,
+          recipient_key TEXT NOT NULL,
+          channel TEXT NOT NULL DEFAULT 'kakao',
+          status TEXT NOT NULL DEFAULT 'sent' CHECK(status IN ('sent','acked','escalated','canceled')),
+          ack_token TEXT NOT NULL,
+          sent_at TEXT NOT NULL,
+          ack_due_at TEXT,
+          acked_at TEXT,
+          acked_by_user_id INTEGER,
+          acked_by_login TEXT,
+          acked_by_name TEXT,
+          escalated_from_notification_id INTEGER REFERENCES elec_notifications(id) ON DELETE SET NULL,
+          escalation_count INTEGER NOT NULL DEFAULT 0,
+          last_escalated_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_elec_notifications_ack_token
+        ON elec_notifications(ack_token);
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_elec_notifications_pending
+        ON elec_notifications(site_code, status, ack_due_at, id);
+        """
+    )
+
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS elec_notify_ack (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          notification_id INTEGER NOT NULL REFERENCES elec_notifications(id) ON DELETE CASCADE,
+          incident_id INTEGER NOT NULL REFERENCES elec_incidents(id) ON DELETE CASCADE,
+          site_code TEXT NOT NULL,
+          ack_token TEXT,
+          acked_by_user_id INTEGER,
+          acked_by_login TEXT,
+          acked_by_name TEXT,
+          via TEXT NOT NULL DEFAULT 'api',
+          created_at TEXT NOT NULL
+        );
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_elec_notify_ack_incident
+        ON elec_notify_ack(incident_id, created_at DESC, id DESC);
+        """
+    )
+
 
 def _index_columns(con: sqlite3.Connection, index_name: str) -> List[str]:
     rows = con.execute(f"PRAGMA index_info({index_name})").fetchall()

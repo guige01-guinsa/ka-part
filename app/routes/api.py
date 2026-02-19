@@ -397,7 +397,7 @@ def _allowed_modules_for_user(user: Dict[str, Any]) -> List[str]:
         return ["parking"]
     if _is_complaints_only_role(role):
         return ["complaints"]
-    return ["main", "parking", "complaints", "inspection"]
+    return ["main", "parking", "complaints", "inspection", "electrical_ai"]
 
 
 def _default_landing_path_for_user(user: Dict[str, Any]) -> str:

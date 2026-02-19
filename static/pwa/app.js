@@ -1533,6 +1533,12 @@
       const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/inspection.html?${qs}` : "/pwa/inspection.html";
     });
+    $("#btnElectricalAi")?.addEventListener("click", () => {
+      const site = getSiteName();
+      const siteCode = getSiteCode();
+      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
+      window.location.href = qs ? `/pwa/electrical_ai.html?${qs}` : "/pwa/electrical_ai.html";
+    });
     $("#btnBackup")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
