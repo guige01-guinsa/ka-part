@@ -2,6 +2,7 @@
   "use strict";
 
   const $ = (s) => document.querySelector(s);
+  const KAUtil = window.KAUtil;
   let users = [];
   let roles = [];
   let permissionLevels = [
@@ -42,10 +43,6 @@
     region: "",
     keyword: "",
   };
-
-  async function jfetch(url, opts = {}) {
-    return KAAuth.requestJson(url, opts);
-  }
 
   function escapeHtml(v) {
     return String(v)
@@ -99,15 +96,6 @@
     return found ? found.label : key;
   }
 
-  function isSuperAdmin(user) {
-    if (!user || !user.is_admin) return false;
-    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
-  }
-
-  function canViewSiteIdentity(user) {
-    return isSuperAdmin(user);
-  }
-
   function setWrapHiddenByInputId(inputId, hidden) {
     const el = typeof inputId === "string" ? document.getElementById(inputId) : null;
     const wrap = el ? el.closest(".field") : null;
@@ -137,32 +125,14 @@
   }
 
   function applySiteIdentityVisibility() {
-    const show = canViewSiteIdentity(me);
+    const show = KAUtil.canViewSiteIdentity(me);
     const hide = !show;
     setWrapHiddenByInputId("userSiteName", hide);
     setWrapHiddenByInputId("userSiteCode", hide);
     setWrapHiddenByInputId("filterSiteCode", hide);
     setWrapHiddenByInputId("filterSiteName", hide);
     setTableColumnsHiddenByHeaderText(document.getElementById("userSheet"), ["단지코드", "단지명"], hide);
-    if (hide) stripSiteIdentityFromUrl();
-  }
-
-  function stripSiteIdentityFromUrl() {
-    try {
-      const u = new URL(window.location.href);
-      let changed = false;
-      if (u.searchParams.has("site_name")) {
-        u.searchParams.delete("site_name");
-        changed = true;
-      }
-      if (u.searchParams.has("site_code")) {
-        u.searchParams.delete("site_code");
-        changed = true;
-      }
-      if (!changed) return;
-      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
-      window.history.replaceState({}, "", next);
-    } catch (_e) {}
+    if (hide) KAUtil.stripSiteIdentityFromUrl();
   }
 
   function isResidentRole(role) {
@@ -200,7 +170,7 @@
 
   function applyMode() {
     isAdminView = !!(me && me.is_admin);
-    isSuperAdminView = isSuperAdmin(me);
+    isSuperAdminView = KAUtil.isSuperAdmin(me);
     $("#userListCard").hidden = !isAdminView;
     $("#siteRegistryReqCard").hidden = !isSuperAdminView;
     $("#selfHint").hidden = isAdminView;
@@ -253,7 +223,7 @@
     $("#adminScope").value = "ops_admin";
     $("#isActive").checked = true;
     syncAdminScopeVisibility();
-    if (me && !canViewSiteIdentity(me)) {
+    if (me && !KAUtil.canViewSiteIdentity(me)) {
       $("#userSiteCode").value = String(me.site_code || "").trim().toUpperCase();
       $("#userSiteName").value = String(me.site_name || "").trim();
     }
@@ -316,7 +286,7 @@
       const user = selfProfile || me || {};
       const name = String(user.name || user.login_id || "사용자");
       const level = permissionLabel(user);
-      const showSite = canViewSiteIdentity(user);
+      const showSite = KAUtil.canViewSiteIdentity(user);
       const siteCode = String(user.site_code || "-");
       const siteName = String(user.site_name || "-");
       const siteText = showSite ? `${siteCode} / ${siteName}` : "(숨김)";
@@ -457,7 +427,7 @@
     const qs = new URLSearchParams();
     qs.set("status", status || "pending");
     qs.set("limit", "200");
-    const data = await jfetch(`/api/site_registry/requests?${qs.toString()}`);
+    const data = await KAUtil.authJson(`/api/site_registry/requests?${qs.toString()}`);
     siteRegistryRequests = Array.isArray(data.items) ? data.items : [];
     updateSiteReqMeta(data.pending_count || 0);
     renderSiteReqSheet();
@@ -476,7 +446,7 @@
     if (!ok) return;
     const payload = {};
     if (requestedCode) payload.site_code = requestedCode;
-    const data = await jfetch(`/api/site_registry/requests/${Number(id)}/execute`, {
+    const data = await KAUtil.authJson(`/api/site_registry/requests/${Number(id)}/execute`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
@@ -508,7 +478,7 @@
     const requester = String(req.requester_name || "-");
     const ok = confirm(`요청 #${id} (${siteName} / ${requester}) 을(를) 삭제할까요? 이 작업은 되돌릴 수 없습니다.`);
     if (!ok) return;
-    const data = await jfetch(`/api/site_registry/requests/${Number(id)}`, {
+    const data = await KAUtil.authJson(`/api/site_registry/requests/${Number(id)}`, {
       method: "DELETE",
     });
     setSiteReqMsg(String((data && data.message) || `요청 #${id} 삭제 완료`), false);
@@ -608,7 +578,7 @@
   }
 
   async function loadRoles() {
-    const data = await jfetch("/api/user_roles");
+    const data = await KAUtil.authJson("/api/user_roles");
     roles = Array.isArray(data.roles) ? data.roles : [];
     permissionLevels = Array.isArray(data.permission_levels) && data.permission_levels.length ? data.permission_levels : permissionLevels;
     adminScopes = Array.isArray(data.admin_scopes) && data.admin_scopes.length ? data.admin_scopes : adminScopes;
@@ -616,7 +586,7 @@
 
     const permSel = $("#userPermission");
     permSel.innerHTML = "";
-    const allowAdminPermission = isSuperAdmin(me);
+    const allowAdminPermission = KAUtil.isSuperAdmin(me);
     const levelItems = allowAdminPermission ? permissionLevels : permissionLevels.filter((p) => String(p.key || "") !== "admin");
     for (const p of levelItems) {
       const o = document.createElement("option");
@@ -658,7 +628,7 @@
   async function loadUsers() {
     if (!isAdminView) return;
     const query = buildUserQuery();
-    const data = await jfetch(query ? `/api/users?${query}` : "/api/users");
+    const data = await KAUtil.authJson(query ? `/api/users?${query}` : "/api/users");
     users = Array.isArray(data.users) ? data.users : [];
     recommendedCount = Number(data.recommended_staff_count || recommendedCount);
 
@@ -673,7 +643,7 @@
   }
 
   async function loadSelfProfile() {
-    const data = await jfetch("/api/users/me");
+    const data = await KAUtil.authJson("/api/users/me");
     const user = data && data.user ? data.user : null;
     if (!user) {
       throw new Error("내 정보를 불러오지 못했습니다.");
@@ -721,10 +691,10 @@
     }
 
     if (editingId == null) {
-      await jfetch("/api/users", { method: "POST", body: JSON.stringify(body) });
+      await KAUtil.authJson("/api/users", { method: "POST", body: JSON.stringify(body) });
       setMsg("등록했습니다.");
     } else {
-      await jfetch(`/api/users/${editingId}`, { method: "PATCH", body: JSON.stringify(body) });
+      await KAUtil.authJson(`/api/users/${editingId}`, { method: "PATCH", body: JSON.stringify(body) });
       setMsg("수정했습니다.");
     }
 
@@ -743,7 +713,7 @@
       return;
     }
     const willRotateSession = !!body.password;
-    const data = await jfetch("/api/users/me", { method: "PATCH", body: JSON.stringify(body) });
+    const data = await KAUtil.authJson("/api/users/me", { method: "PATCH", body: JSON.stringify(body) });
     selfProfile = data && data.user ? data.user : selfProfile;
     if (selfProfile) fillForm(selfProfile);
     setMsg("내 정보를 수정했습니다.");
@@ -764,7 +734,7 @@
     }
     const ok = confirm(`사용자 '${u.name}'를 삭제할까요?`);
     if (!ok) return;
-    await jfetch(`/api/users/${id}`, { method: "DELETE" });
+    await KAUtil.authJson(`/api/users/${id}`, { method: "DELETE" });
     if (editingId === Number(id)) clearForm();
     setMsg("삭제했습니다.");
     await loadUsers();
@@ -912,3 +882,4 @@
 
   init().catch((e) => setMsg(e.message || String(e), true));
 })();
+

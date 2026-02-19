@@ -4614,6 +4614,13 @@ def api_users(
     clean_region = _normalize_region_label(_clean_query_text(region, max_len=40))
     clean_keyword = _clean_query_text(keyword, max_len=80).lower()
 
+    # Legacy rows may still contain malformed site_code; do not fail the whole list response.
+    def _safe_site_code(value: Any) -> str:
+        try:
+            return _clean_site_code(value, required=False)
+        except HTTPException:
+            return ""
+
     source_users = [_public_user(x) for x in list_staff_users(active_only=bool(active_only))]
     for u in source_users:
         u["region"] = _region_from_address(u.get("address"))
@@ -4621,7 +4628,7 @@ def api_users(
     site_bucket: Dict[str, Dict[str, Any]] = {}
     region_bucket: Dict[str, int] = {}
     for u in source_users:
-        row_code = _clean_site_code(u.get("site_code"), required=False)
+        row_code = _safe_site_code(u.get("site_code"))
         row_name = str(u.get("site_name") or "").strip()
         if row_code or row_name:
             key = f"{row_code}|{row_name}"
@@ -4637,7 +4644,7 @@ def api_users(
 
     users = source_users
     if clean_site_code:
-        users = [u for u in users if _clean_site_code(u.get("site_code"), required=False) == clean_site_code]
+        users = [u for u in users if _safe_site_code(u.get("site_code")) == clean_site_code]
     if clean_site_name:
         users = [u for u in users if str(u.get("site_name") or "").strip() == clean_site_name]
     if clean_region:

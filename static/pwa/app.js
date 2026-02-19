@@ -1,7 +1,8 @@
-﻿(() => {
+(() => {
   "use strict";
 
   const $ = (sel) => document.querySelector(sel);
+  const KAUtil = window.KAUtil;
   const PREFERRED_TAB_ORDER = [
     "home",
     "tr1",
@@ -91,6 +92,7 @@
   };
   const PUBLIC_ACCESS_ALLOWED_MENU_BUTTON_IDS = new Set(["btnParking", "btnComplaints", "btnLogout"]);
   const PUBLIC_ACCESS_SIGNUP_MESSAGE = "신규가입 후 사용해 주세요.";
+  const MENU_ANIMATION_MS = 180;
 
   let TABS = [];
   let rangeDates = [];
@@ -102,18 +104,10 @@
   let reloginByConflictInProgress = false;
   let siteIdentityRecoverInProgress = false;
   let menuOpen = false;
+  let menuHideTimer = null;
 
   function hasAdminPermission(user) {
     return !!(user && user.is_admin);
-  }
-
-  function isSuperAdmin(user) {
-    if (!user || !user.is_admin) return false;
-    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
-  }
-
-  function canViewSiteIdentity(user) {
-    return isSuperAdmin(user);
   }
 
   function setWrapHiddenByInputSelector(inputSelector, hidden) {
@@ -123,7 +117,7 @@
   }
 
   function applySiteIdentityVisibility() {
-    const show = canViewSiteIdentity(authUser);
+    const show = KAUtil.canViewSiteIdentity(authUser);
     setWrapHiddenByInputSelector("#siteName", !show);
     setWrapHiddenByInputSelector("#siteCode", !show);
     // Home tab site identity fields (if present)
@@ -138,7 +132,7 @@
   function permissionLabel(user) {
     const accountType = String((user && user.account_type) || "").trim();
     if (accountType) return accountType;
-    if (hasAdminPermission(user)) return isSuperAdmin(user) ? "최고관리자" : "운영관리자";
+    if (hasAdminPermission(user)) return KAUtil.isSuperAdmin(user) ? "최고관리자" : "운영관리자";
     if (hasSiteAdminPermission(user)) return "단지대표자";
     return "사용자";
   }
@@ -199,7 +193,7 @@
 
   function menuDrawerFocusSelector() {
     if (isPublicAccessUser(authUser)) return "#btnParking";
-    return canViewSiteIdentity(authUser) ? "#siteName" : "#dateStart";
+    return KAUtil.canViewSiteIdentity(authUser) ? "#siteName" : "#dateStart";
   }
 
   function applyPublicAccessMenuPolicy() {
@@ -316,15 +310,6 @@
     }
   }
 
-  function setTabRunStatus(tabTitle = "", isRunning = false) {
-    const el = $("#tabRunStatus");
-    if (!el) return;
-    // UI policy: hide run-status indicator completely.
-    el.textContent = "";
-    el.classList.add("hidden");
-    el.setAttribute("aria-hidden", "true");
-  }
-
   function isNarrowViewport() {
     return window.matchMedia("(max-width: 760px)").matches;
   }
@@ -332,7 +317,7 @@
   function updateContextLine() {
     const el = $("#contextLine");
     if (!el) return;
-    const showSite = canViewSiteIdentity(authUser);
+    const showSite = KAUtil.canViewSiteIdentity(authUser);
     const siteName = showSite ? String(getSiteNameRaw() || getSiteName() || "").trim() : "";
     const siteCode = showSite ? String(getSiteCodeRaw() || getSiteCode() || "").trim().toUpperCase() : "";
     const siteText = showSite ? ([siteCode, siteName].filter(Boolean).join(" / ") || "-") : "(숨김)";
@@ -358,16 +343,21 @@
 
   function applyMenuState({ focusSelector = "" } = {}) {
     const btn = $("#btnMenu");
-    const overlay = $("#menuOverlay");
     const drawer = $("#menuDrawer");
-    if (!btn || !overlay || !drawer) return;
+    if (!btn || !drawer) return;
+    if (menuHideTimer) {
+      clearTimeout(menuHideTimer);
+      menuHideTimer = null;
+    }
 
     if (menuOpen) {
-      overlay.classList.remove("hidden");
-      overlay.setAttribute("aria-hidden", "false");
       drawer.hidden = false;
+      drawer.setAttribute("aria-hidden", "false");
       btn.setAttribute("aria-expanded", "true");
-      document.body.classList.add("menu-open");
+      btn.classList.add("active");
+      btn.textContent = "메뉴닫기";
+      btn.setAttribute("aria-label", "메뉴 숨기기");
+      requestAnimationFrame(() => drawer.classList.add("is-open"));
       relocateFiltersBlock();
 
       try {
@@ -382,11 +372,20 @@
         if (focusEl && typeof focusEl.focus === "function") focusEl.focus();
       } catch (_e) {}
     } else {
-      overlay.classList.add("hidden");
-      overlay.setAttribute("aria-hidden", "true");
-      drawer.hidden = true;
+      drawer.classList.remove("is-open");
+      drawer.setAttribute("aria-hidden", "true");
       btn.setAttribute("aria-expanded", "false");
-      document.body.classList.remove("menu-open");
+      btn.classList.remove("active");
+      btn.textContent = "메뉴";
+      btn.setAttribute("aria-label", "메뉴 펼치기");
+      menuHideTimer = setTimeout(() => {
+        if (!menuOpen) {
+          drawer.hidden = true;
+          relocateFiltersBlock();
+          syncStickyOffset();
+        }
+        menuHideTimer = null;
+      }, MENU_ANIMATION_MS);
     }
     syncStickyOffset();
   }
@@ -403,17 +402,20 @@
 
   function wireMenuDrawer() {
     const btn = $("#btnMenu");
-    const overlay = $("#menuOverlay");
     const drawer = $("#menuDrawer");
     const closeBtn = $("#btnCloseMenu");
-    if (!btn || !overlay || !drawer) return;
+    if (!btn || !drawer) return;
 
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
       if (menuOpen) closeMenu();
       else openMenu({ focusSelector: menuDrawerFocusSelector() });
     });
-    closeBtn?.addEventListener("click", () => closeMenu());
-    overlay.addEventListener("click", () => closeMenu());
+    closeBtn?.addEventListener("click", (e) => {
+      e.preventDefault();
+      closeMenu();
+    });
 
     drawer.addEventListener(
       "click",
@@ -435,6 +437,14 @@
       requestAnimationFrame(() => closeMenu());
     });
 
+    document.addEventListener("click", (e) => {
+      if (!menuOpen) return;
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (drawer.contains(target) || btn.contains(target)) return;
+      closeMenu();
+    });
+
     document.addEventListener("keydown", (e) => {
       if (!menuOpen) return;
       if (e.key === "Escape") {
@@ -442,8 +452,6 @@
         closeMenu();
       }
     });
-
-    $("#contextLine")?.addEventListener("click", () => openMenu({ focusSelector: menuDrawerFocusSelector() }));
 
     relocateFiltersBlock();
     updateContextLine();
@@ -499,16 +507,9 @@
     chip.textContent = `${user.name || user.login_id} (${role})`;
   }
 
-  function normalizeSiteId(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    const id = Math.trunc(n);
-    return id > 0 ? id : 0;
-  }
-
   function assignedSiteIdForUser() {
     if (!authUser || hasAdminPermission(authUser)) return 0;
-    return normalizeSiteId(authUser.site_id);
+    return KAUtil.normalizeSiteId(authUser.site_id);
   }
 
   function assignedSiteNameForUser() {
@@ -532,7 +533,7 @@
         nameEl.title = "";
       }
       if (codeEl) {
-        if (isSuperAdmin(authUser)) {
+        if (KAUtil.isSuperAdmin(authUser)) {
           codeEl.readOnly = false;
           codeEl.removeAttribute("aria-readonly");
           codeEl.title = "";
@@ -586,24 +587,11 @@
     const btnBackup = $("#btnBackup");
     if (btnBackup && !hasSiteAdminPermission(authUser)) btnBackup.style.display = "none";
     applyPublicAccessMenuPolicy();
-    setSiteId(normalizeSiteId(authUser && authUser.site_id));
+    setSiteId(KAUtil.normalizeSiteId(authUser && authUser.site_id));
     enforceSiteIdentityPolicy();
     const assignedCode = assignedSiteCodeForUser();
     if (assignedCode) setSiteCode(assignedCode);
     applySiteIdentityVisibility();
-  }
-
-  function parseFilename(contentDisposition, fallback) {
-    const value = String(contentDisposition || "");
-    const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(value);
-    if (utf8 && utf8[1]) {
-      try {
-        return decodeURIComponent(utf8[1]);
-      } catch (_e) {}
-    }
-    const plain = /filename=\"?([^\";]+)\"?/i.exec(value);
-    if (plain && plain[1]) return plain[1];
-    return fallback;
   }
 
   async function downloadWithAuth(url, fallbackName) {
@@ -623,7 +611,7 @@
       throw new Error(`${res.status} ${res.statusText} ${txt}`.trim());
     }
     const blob = await res.blob();
-    const filename = parseFilename(res.headers.get("content-disposition"), fallbackName);
+    const filename = KAUtil.parseDownloadFilename(res.headers.get("content-disposition"), fallbackName);
     const href = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = href;
@@ -656,7 +644,7 @@
   }
 
   function getSiteIdRaw() {
-    return normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
+    return KAUtil.normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
   }
 
   function getSiteId() {
@@ -699,7 +687,7 @@
   }
 
   function setSiteId(siteId) {
-    const clean = normalizeSiteId(siteId);
+    const clean = KAUtil.normalizeSiteId(siteId);
     if (clean > 0) localStorage.setItem(SITE_ID_KEY, String(clean));
     else localStorage.removeItem(SITE_ID_KEY);
     return clean;
@@ -709,7 +697,7 @@
     const qs = new URLSearchParams();
     const s = String(siteName || "").trim();
     const c = String(siteCode || "").trim().toUpperCase();
-    const i = normalizeSiteId(siteId === null ? getSiteId() : siteId);
+    const i = KAUtil.normalizeSiteId(siteId === null ? getSiteId() : siteId);
     if (i > 0) qs.set("site_id", String(i));
     if (s) qs.set("site_name", s);
     if (c) qs.set("site_code", c);
@@ -742,16 +730,16 @@
     const assigned = assignedSiteIdForUser();
     if (assigned > 0) return setSiteId(assigned);
     const u = new URL(window.location.href);
-    const q = normalizeSiteId(u.searchParams.get("site_id") || "");
+    const q = KAUtil.normalizeSiteId(u.searchParams.get("site_id") || "");
     if (q > 0) return setSiteId(q);
-    const stored = normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
+    const stored = KAUtil.normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
     if (stored > 0) return setSiteId(stored);
     return setSiteId(0);
   }
 
   function updateAddressBarSiteQuery() {
     const u = new URL(window.location.href);
-    const showSite = canViewSiteIdentity(authUser);
+    const showSite = KAUtil.canViewSiteIdentity(authUser);
     const siteName = getSiteNameRaw();
     const siteCode = getSiteCodeRaw();
     const siteId = getSiteId();
@@ -1069,7 +1057,6 @@
     }
 
     if (TABS.length) activateTab(TABS[0].key);
-    else setTabRunStatus("", false);
   }
 
   function activateTab(tabKey, announce = false) {
@@ -1083,8 +1070,6 @@
     for (const p of document.querySelectorAll(".panel")) {
       p.classList.toggle("active", p.id === `panel-${tabKey}`);
     }
-    if (activatedTitle) setTabRunStatus(activatedTitle, true);
-    else setTabRunStatus("", false);
     if (announce && activatedTitle) {
       toast(`탭 실행: ${activatedTitle}`);
     }
@@ -1506,43 +1491,43 @@
     $("#btnUsers")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
+      const qs = KAUtil.canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/users.html?${qs}` : "/pwa/users.html";
     });
     $("#btnSpecEnv")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
+      const qs = KAUtil.canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/spec_env.html?${qs}` : "/pwa/spec_env.html";
     });
     $("#btnApartmentInfo")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
+      const qs = KAUtil.canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/apartment_info.html?${qs}` : "/pwa/apartment_info.html";
     });
     $("#btnComplaints")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
+      const qs = KAUtil.canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/complaints.html?${qs}` : "/pwa/complaints.html";
     });
     $("#btnInspection")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
+      const qs = KAUtil.canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/inspection.html?${qs}` : "/pwa/inspection.html";
     });
     $("#btnElectricalAi")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
+      const qs = KAUtil.canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/electrical_ai.html?${qs}` : "/pwa/electrical_ai.html";
     });
     $("#btnBackup")?.addEventListener("click", () => {
       const site = getSiteName();
       const siteCode = getSiteCode();
-      const qs = canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
+      const qs = KAUtil.canViewSiteIdentity(authUser) ? buildSiteQuery(site, siteCode) : buildSiteQuery("", "", getSiteId());
       window.location.href = qs ? `/pwa/backup.html?${qs}` : "/pwa/backup.html";
     });
     $("#btnParking")?.addEventListener("click", () => {
@@ -1602,4 +1587,5 @@
     alert("앱 초기화 오류: " + msg);
   });
 })();
+
 

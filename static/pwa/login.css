@@ -1,14 +1,3 @@
-:root {
-  --bg: #0f1825;
-  --bg-soft: #152236;
-  --card: #111e2f;
-  --fg: #e7edf7;
-  --muted: #9cb0c9;
-  --line: #2a3b55;
-  --primary: #2d7dff;
-  --error: #ff9e9e;
-}
-
 * { box-sizing: border-box; }
 
 body {
@@ -198,3 +187,4 @@ a.btn {
     font-size: 16px;
   }
 }
+

@@ -6,6 +6,7 @@
   const SITE_CODE_KEY = "ka_current_site_code_v1";
   const SITE_ID_KEY = "ka_current_site_id_v1";
   const ACTION_SUCCESS_BUTTON_IDS = ["btnReload", "btnSave", "btnGoMain"];
+  const KAUtil = window.KAUtil;
 
   let me = null;
   let moduleCtx = null;
@@ -17,33 +18,6 @@
 
   function isAdmin(user) {
     return !!(user && user.is_admin);
-  }
-
-  function isSuperAdmin(user) {
-    if (!user || !user.is_admin) return false;
-    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
-  }
-
-  function canViewSiteIdentity(user) {
-    return isSuperAdmin(user);
-  }
-
-  function stripSiteIdentityFromUrl() {
-    try {
-      const u = new URL(window.location.href);
-      let changed = false;
-      if (u.searchParams.has("site_name")) {
-        u.searchParams.delete("site_name");
-        changed = true;
-      }
-      if (u.searchParams.has("site_code")) {
-        u.searchParams.delete("site_code");
-        changed = true;
-      }
-      if (!changed) return;
-      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
-      window.history.replaceState({}, "", next);
-    } catch (_e) {}
   }
 
   function setMsg(msg, isErr = false) {
@@ -78,23 +52,12 @@
     button._actionPulseTimer = setTimeout(() => button.classList.remove("action-success-pulse"), 560);
   }
 
-  async function jfetch(url, opts = {}) {
-    return window.KAAuth.requestJson(url, opts);
-  }
-
-  function normalizeSiteId(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    const id = Math.trunc(n);
-    return id > 0 ? id : 0;
-  }
-
   function getSiteId() {
-    return normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
+    return KAUtil.normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
   }
 
   function setSiteId(siteId) {
-    const clean = normalizeSiteId(siteId);
+    const clean = KAUtil.normalizeSiteId(siteId);
     if (clean > 0) localStorage.setItem(SITE_ID_KEY, String(clean));
     else localStorage.removeItem(SITE_ID_KEY);
     return clean;
@@ -124,7 +87,7 @@
 
   function buildSiteQuery(siteName, siteCode, siteId = null) {
     const qs = new URLSearchParams();
-    const sid = normalizeSiteId(siteId == null ? getSiteId() : siteId);
+    const sid = KAUtil.normalizeSiteId(siteId == null ? getSiteId() : siteId);
     if (sid > 0) qs.set("site_id", String(sid));
     const s = String(siteName || "").trim();
     const c = String(siteCode || "").trim().toUpperCase();
@@ -355,7 +318,7 @@
       if (!silent) setMsg("site_name 또는 site_code를 입력하세요.", true);
       return null;
     }
-    const data = await jfetch(withSitePath("/api/site_identity", { site_name: site, site_code: code, site_id: siteId }));
+    const data = await KAUtil.authJson(withSitePath("/api/site_identity", { site_name: site, site_code: code, site_id: siteId }));
     if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
@@ -364,7 +327,7 @@
 
   async function loadProfile() {
     await syncSiteIdentity(false);
-    const data = await jfetch(withSitePath("/api/apartment_profile", {
+    const data = await KAUtil.authJson(withSitePath("/api/apartment_profile", {
       site_name: getSiteName(),
       site_code: getSiteCode(),
       site_id: getSiteId(),
@@ -377,7 +340,7 @@
   async function saveProfile() {
     await syncSiteIdentity(false);
     const profile = collectProfile();
-    const data = await jfetch("/api/apartment_profile", {
+    const data = await KAUtil.authJson("/api/apartment_profile", {
       method: "PUT",
       body: JSON.stringify({
         site_id: getSiteId(),
@@ -397,10 +360,10 @@
     await syncSiteIdentity(false);
     const site = getSiteName();
     const code = getSiteCode();
-    const label = canViewSiteIdentity(me) ? `${site}${code ? ` [${code}]` : ""}` : "현재 단지";
+    const label = KAUtil.canViewSiteIdentity(me) ? `${site}${code ? ` [${code}]` : ""}` : "현재 단지";
     const ok = confirm(`${label}의 아파트 정보 설정을 삭제할까요?`);
     if (!ok) return;
-    await jfetch(withSitePath("/api/apartment_profile", { site_name: site, site_code: code, site_id: getSiteId() }), {
+    await KAUtil.authJson(withSitePath("/api/apartment_profile", { site_name: site, site_code: code, site_id: getSiteId() }), {
       method: "DELETE",
       headers: { "X-KA-MFA-VERIFIED": "1" },
     });
@@ -492,7 +455,7 @@
   }
 
   function applyPermissionPolicy() {
-    const canEditSite = isSuperAdmin(me);
+    const canEditSite = KAUtil.isSuperAdmin(me);
     $("#siteName").readOnly = !canEditSite;
     $("#siteCode").readOnly = !canEditSite;
     if (!canEditSite) {
@@ -500,7 +463,7 @@
       $("#siteCode").title = "단지코드 입력/수정은 관리자만 가능합니다.";
     }
 
-    const show = canViewSiteIdentity(me);
+    const show = KAUtil.canViewSiteIdentity(me);
     const nameWrap = $("#siteName")?.closest(".field");
     const codeWrap = $("#siteCode")?.closest(".field");
     if (nameWrap) nameWrap.classList.toggle("hidden", !show);
@@ -511,7 +474,7 @@
     const u = new URL(window.location.href);
     const qName = (u.searchParams.get("site_name") || "").trim();
     const qCode = (u.searchParams.get("site_code") || "").trim().toUpperCase();
-    const qId = normalizeSiteId(u.searchParams.get("site_id") || "");
+    const qId = KAUtil.normalizeSiteId(u.searchParams.get("site_id") || "");
     if (qId > 0) setSiteId(qId);
     if (qName) setSiteName(qName);
     else setSiteName((localStorage.getItem(SITE_NAME_KEY) || "").trim());
@@ -523,7 +486,7 @@
     $("#btnGoMain")?.addEventListener("click", (e) => {
       e.preventDefault();
       markActionSuccess(e.currentTarget, "↗");
-      const target = canViewSiteIdentity(me)
+      const target = KAUtil.canViewSiteIdentity(me)
         ? withSitePath("/pwa/", { site_name: getSiteName(), site_code: getSiteCode(), site_id: getSiteId() })
         : "/pwa/";
       window.setTimeout(() => {
@@ -569,14 +532,14 @@
       return;
     }
     loadSiteFromQueryOrStorage();
-    const ctxSiteId = normalizeSiteId(moduleCtx && moduleCtx.siteId ? moduleCtx.siteId : 0);
+    const ctxSiteId = KAUtil.normalizeSiteId(moduleCtx && moduleCtx.siteId ? moduleCtx.siteId : 0);
     const ctxSiteName = String(moduleCtx && moduleCtx.siteName ? moduleCtx.siteName : "").trim();
     const ctxSiteCode = String(moduleCtx && moduleCtx.siteCode ? moduleCtx.siteCode : "").trim().toUpperCase();
     if (ctxSiteId > 0 && getSiteId() <= 0) setSiteId(ctxSiteId);
     if (ctxSiteName && !getSiteName()) setSiteName(ctxSiteName);
     if (ctxSiteCode && !getSiteCode()) setSiteCode(ctxSiteCode);
-    if (!canViewSiteIdentity(me)) {
-      stripSiteIdentityFromUrl();
+    if (!KAUtil.canViewSiteIdentity(me)) {
+      KAUtil.stripSiteIdentityFromUrl();
       if (me && me.site_id) setSiteId(me.site_id);
       if (me && me.site_name) setSiteName(me.site_name);
       if (me && me.site_code) setSiteCode(me.site_code);
@@ -595,3 +558,4 @@
     setMsg(e.message || String(e), true);
   });
 })();
+

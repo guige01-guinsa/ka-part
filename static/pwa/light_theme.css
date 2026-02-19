@@ -1,0 +1,238 @@
+:root {
+  color-scheme: light;
+  --bg: #eef1f7;
+  --bg-soft: #f7f9fc;
+  --card: #ffffff;
+  --fg: #1d2430;
+  --text: #1d2430;
+  --muted: #5e6a85;
+  --line: #cbd6ea;
+  --primary: #215bd6;
+  --accent: #215bd6;
+  --danger: #c23a55;
+  --warn: #d87815;
+  --ok: #0d8f45;
+  --error: #c23a55;
+}
+
+html,
+body {
+  background: #eef1f7 !important;
+  color: #1d2430 !important;
+}
+
+body.parking-like-pc.home-page,
+body.parking-like-pc.complaints-page {
+  background: #eef1f7 !important;
+}
+
+.top,
+body.parking-like-pc.home-page .top {
+  border-bottom: 1px solid #d9e0ee !important;
+  background: linear-gradient(90deg, #ffffff, #f3f7ff) !important;
+  backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+.title,
+h1,
+h2,
+h3,
+h4,
+.menu-title {
+  color: #102445 !important;
+}
+
+.meta,
+.muted,
+.sub,
+.hint,
+.line2,
+.field span,
+.mini-field label,
+.field .inline-help,
+.target-desc {
+  color: #5e6a85 !important;
+}
+
+.msg {
+  color: #224f9f !important;
+}
+
+.msg.err {
+  color: #b43a52 !important;
+}
+
+.card,
+.panel,
+.menu-section,
+.box,
+.item,
+.run-item,
+.item-card,
+.ap-card,
+.target-item,
+.history-item,
+.ov-item,
+.detail-item-row,
+.detail-major-card,
+.detail-middle-row,
+.checkline,
+.detail,
+.assist,
+.result,
+pre,
+.sheet-wrap,
+.grid-wrap,
+.unit-selector {
+  background: #ffffff !important;
+  border-color: #dfe5f2 !important;
+  box-shadow: 0 2px 10px rgba(29, 36, 48, 0.04) !important;
+}
+
+.menu-drawer {
+  border-color: #d9e0ee !important;
+  background: linear-gradient(90deg, #ffffff, #f3f7ff) !important;
+  color: #1d2430 !important;
+}
+
+.btn,
+button.btn,
+a.btn {
+  border: 1px solid #b7c6e5 !important;
+  background: #f8fbff !important;
+  color: #1b355f !important;
+}
+
+.btn.ghost {
+  background: #ffffff !important;
+  color: #1b355f !important;
+}
+
+.btn.primary {
+  border-color: #215bd6 !important;
+  background: #215bd6 !important;
+  color: #ffffff !important;
+}
+
+.btn.warn {
+  border-color: #d87815 !important;
+  background: #d87815 !important;
+  color: #ffffff !important;
+}
+
+.btn.danger {
+  border-color: #e3b9c0 !important;
+  background: #fff3f5 !important;
+  color: #8f2336 !important;
+}
+
+.btn.action-success {
+  border-color: #0d8f45 !important;
+  background: #0d8f45 !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+input,
+select,
+textarea,
+.input input,
+.input select,
+.input textarea,
+.field input,
+.field select,
+.field textarea,
+.mini-field input,
+.mini-field select {
+  border: 1px solid #cbd6ea !important;
+  background: #ffffff !important;
+  color: #1d2430 !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #7a879f !important;
+}
+
+.quickbar,
+.context-line,
+.maintenance-banner {
+  border-color: #d9e0ee !important;
+  background: #ffffff !important;
+}
+
+.userchip {
+  border-color: #cbd6ea !important;
+  background: #f8fbff !important;
+  color: #1b355f !important;
+}
+
+.tabs {
+  border-bottom: 1px solid #d9e0ee !important;
+  background: #f4f7fc !important;
+}
+
+.tabbtn {
+  border-color: #b7c6e5 !important;
+  background: #f8fbff !important;
+  color: #1b355f !important;
+  filter: none !important;
+  opacity: 1 !important;
+}
+
+.tabbtn.active {
+  border-color: #215bd6 !important;
+  background: #215bd6 !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+  transform: none !important;
+  text-shadow: none !important;
+}
+
+.panel.active {
+  border-color: #dfe5f2 !important;
+  background: #ffffff !important;
+  box-shadow: 0 3px 14px rgba(29, 36, 48, 0.04) !important;
+}
+
+.table,
+.sheet {
+  background: #ffffff !important;
+}
+
+.table th,
+.sheet thead th {
+  border-color: #d9e0ee !important;
+  background: #f1f5fd !important;
+  color: #1b355f !important;
+}
+
+.table td,
+.sheet td {
+  border-color: #e1e7f4 !important;
+  color: #1d2430 !important;
+}
+
+.sheet tbody tr:hover {
+  background: #edf3ff !important;
+}
+
+.badge {
+  border-color: #b7c6e5 !important;
+  background: #eef4ff !important;
+  color: #1b355f !important;
+}
+
+.kicker {
+  border-color: #b7c6e5 !important;
+  background: #eef4ff !important;
+  color: #1b355f !important;
+}
+
+.foot {
+  border-top: 1px solid #d9e0ee !important;
+  background: #f7f9fc !important;
+}
+

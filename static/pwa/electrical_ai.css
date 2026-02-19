@@ -1,7 +1,3 @@
-:root {
-  color-scheme: light;
-}
-
 * {
   box-sizing: border-box;
 }
@@ -214,3 +210,4 @@ input[type="checkbox"] {
     flex-direction: column;
   }
 }
+

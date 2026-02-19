@@ -4,6 +4,7 @@
   const $ = (s) => document.querySelector(s);
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
+  const KAUtil = window.KAUtil;
   let me = null;
   let moduleCtx = null;
   let options = null;
@@ -14,15 +15,6 @@
 
   function isAdmin(user) {
     return !!(user && user.is_admin);
-  }
-
-  function isSuperAdmin(user) {
-    if (!user || !user.is_admin) return false;
-    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
-  }
-
-  function canViewSiteIdentity(user) {
-    return isSuperAdmin(user);
   }
 
   function canManageBackup(user) {
@@ -58,19 +50,6 @@
     return `${val.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
   }
 
-  function parseFilename(contentDisposition, fallbackName) {
-    const value = String(contentDisposition || "");
-    const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(value);
-    if (utf8 && utf8[1]) {
-      try {
-        return decodeURIComponent(utf8[1]);
-      } catch (_e) {}
-    }
-    const plain = /filename=\"?([^\";]+)\"?/i.exec(value);
-    if (plain && plain[1]) return plain[1];
-    return fallbackName;
-  }
-
   function formatDateTime(value) {
     const raw = String(value || "").trim();
     if (!raw) return "-";
@@ -84,7 +63,7 @@
     const el = $("#metaLine");
     if (!el || !me) return;
     const level = isAdmin(me) ? "최고/운영관리자" : "단지관리자";
-    const showSite = canViewSiteIdentity(me);
+    const showSite = KAUtil.canViewSiteIdentity(me);
     const code = (me.site_code || "").trim().toUpperCase();
     const name = (me.site_name || "").trim();
     const siteText = showSite ? (code ? `${code}${name ? ` / ${name}` : ""}` : (name || "-")) : "(숨김)";
@@ -92,29 +71,11 @@
   }
 
   function applySiteIdentityVisibility() {
-    const show = canViewSiteIdentity(me);
+    const show = KAUtil.canViewSiteIdentity(me);
     const codeWrap = $("#siteCode")?.closest(".field");
     const nameWrap = $("#siteName")?.closest(".field");
     if (codeWrap) codeWrap.classList.toggle("hidden", !show);
     if (nameWrap) nameWrap.classList.toggle("hidden", !show);
-  }
-
-  function stripSiteIdentityFromUrl() {
-    try {
-      const u = new URL(window.location.href);
-      let changed = false;
-      if (u.searchParams.has("site_name")) {
-        u.searchParams.delete("site_name");
-        changed = true;
-      }
-      if (u.searchParams.has("site_code")) {
-        u.searchParams.delete("site_code");
-        changed = true;
-      }
-      if (!changed) return;
-      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
-      window.history.replaceState({}, "", next);
-    } catch (_e) {}
   }
 
   function setMaintenanceStatus(payload) {
@@ -169,7 +130,7 @@
 
   function applyRolePolicy() {
     const admin = isAdmin(me);
-    const superAdmin = isSuperAdmin(me);
+    const superAdmin = KAUtil.isSuperAdmin(me);
     const scopeEl = $("#scopeSelect");
     const siteCodeEl = $("#siteCode");
     const siteNameEl = $("#siteName");
@@ -204,7 +165,7 @@
     }
 
     applySiteIdentityVisibility();
-    if (!canViewSiteIdentity(me)) stripSiteIdentityFromUrl();
+    if (!KAUtil.canViewSiteIdentity(me)) KAUtil.stripSiteIdentityFromUrl();
     $("#restoreUploadWrap")?.classList.toggle("hidden", !canManageBackup(me));
   }
 
@@ -223,10 +184,6 @@
     el.innerHTML = `${body}${tz}`;
   }
 
-  async function jfetch(url, opts = {}) {
-    return KAAuth.requestJson(url, opts);
-  }
-
   async function fetchBackupBlob(path) {
     const token = KAAuth.getToken();
     const headers = {};
@@ -243,7 +200,7 @@
       throw new Error((txt || `${res.status}`).trim());
     }
     const blob = await res.blob();
-    const name = parseFilename(res.headers.get("content-disposition"), "backup.zip");
+    const name = KAUtil.parseDownloadFilename(res.headers.get("content-disposition"), "backup.zip");
     return { blob, name };
   }
 
@@ -298,7 +255,7 @@
   }
 
   async function refreshStatus() {
-    const data = await jfetch("/api/backup/status");
+    const data = await KAUtil.authJson("/api/backup/status");
     backupTimezone = String(data.timezone || "").trim();
     setMaintenanceStatus(data);
     renderScheduleInfo(data.schedules || []);
@@ -306,7 +263,7 @@
   }
 
   async function loadOptions() {
-    const data = await jfetch("/api/backup/options");
+    const data = await KAUtil.authJson("/api/backup/options");
     options = data;
     renderTargets(Array.isArray(data.targets) ? data.targets : []);
     if (!isAdmin(me)) {
@@ -321,7 +278,7 @@
     const trigger = escapeHtml(item.trigger_label || item.trigger || "-");
     const when = escapeHtml(formatDateTime(item.created_at || ""));
     const targetLabels = Array.isArray(item.target_labels) ? item.target_labels.join(", ") : "-";
-    const sitePart = canViewSiteIdentity(me) && item.site_code ? ` · 단지코드 ${escapeHtml(item.site_code)}` : "";
+    const sitePart = KAUtil.canViewSiteIdentity(me) && item.site_code ? ` · 단지코드 ${escapeHtml(item.site_code)}` : "";
     const rel = escapeHtml(item.relative_path || "");
     const size = prettyBytes(item.file_size_bytes);
     const rawScope = String(item.scope || "").trim().toLowerCase() || "full";
@@ -357,7 +314,7 @@
   }
 
   async function loadHistory() {
-    const data = await jfetch("/api/backup/history?limit=40");
+    const data = await KAUtil.authJson("/api/backup/history?limit=40");
     const items = Array.isArray(data.items) ? data.items : [];
     const wrap = $("#historyList");
     if (!wrap) return;
@@ -407,7 +364,7 @@
     if (runBtn) runBtn.disabled = true;
     setMsg("백업 실행 중입니다...");
     try {
-      const data = await jfetch("/api/backup/run", {
+      const data = await KAUtil.authJson("/api/backup/run", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -451,7 +408,7 @@
     if (!ok) return;
 
     setMsg("DB 복구 실행 중입니다...");
-    const data = await jfetch("/api/backup/restore", {
+    const data = await KAUtil.authJson("/api/backup/restore", {
       method: "POST",
       body: JSON.stringify({
         path: safePath,
@@ -613,3 +570,4 @@
 
   init().catch((e) => setMsg(e.message || String(e), true));
 })();
+

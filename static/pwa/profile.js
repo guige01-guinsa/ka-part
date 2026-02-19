@@ -2,13 +2,10 @@
   "use strict";
 
   const $ = (s) => document.querySelector(s);
+  const KAUtil = window.KAUtil;
   let me = null;
   let moduleCtx = null;
   let profile = null;
-
-  async function jfetch(url, opts = {}) {
-    return KAAuth.requestJson(url, opts);
-  }
 
   function setMsg(msg, isErr = false) {
     const el = $("#msg");
@@ -34,18 +31,13 @@
     return map[key] || key;
   }
 
-  function isSuperAdmin(user) {
-    if (!user || !user.is_admin) return false;
-    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
-  }
-
   function isResidentRole(user) {
     const txt = String((user && user.role) || "").trim();
     return txt === "입주민" || txt === "주민" || txt === "세대주민";
   }
 
   function siteDisplay(user) {
-    if (!isSuperAdmin(user)) return "(숨김)";
+    if (!KAUtil.isSuperAdmin(user)) return "(숨김)";
     const code = String((user && user.site_code) || "").trim();
     const name = String((user && user.site_name) || "").trim();
     if (code && name) return `${code} / ${name}`;
@@ -99,7 +91,7 @@
   }
 
   async function loadProfile() {
-    const data = await jfetch("/api/users/me");
+    const data = await KAUtil.authJson("/api/users/me");
     const u = data && data.user ? data.user : null;
     if (!u) throw new Error("내 정보를 불러오지 못했습니다.");
     profile = u;
@@ -114,7 +106,7 @@
       setMsg("저장하려면 현재 비밀번호를 입력하세요.", true);
       return;
     }
-    const data = await jfetch("/api/users/me", { method: "PATCH", body: JSON.stringify(body) });
+    const data = await KAUtil.authJson("/api/users/me", { method: "PATCH", body: JSON.stringify(body) });
     const u = data && data.user ? data.user : null;
     if (u) {
       profile = u;
@@ -141,7 +133,7 @@
       setMsg("새 비밀번호 확인이 일치하지 않습니다.", true);
       return;
     }
-    const data = await jfetch("/api/auth/change_password", {
+    const data = await KAUtil.authJson("/api/auth/change_password", {
       method: "POST",
       body: JSON.stringify({ old_password: oldPw, new_password: newPw }),
     });
@@ -170,7 +162,7 @@
     }
     const ok = confirm("정말 탈퇴할까요? 탈퇴 후에는 로그인할 수 없습니다.");
     if (!ok) return;
-    await jfetch("/api/users/me/withdraw", { method: "POST", body: JSON.stringify({ password: pw, confirm: "탈퇴" }) });
+    await KAUtil.authJson("/api/users/me/withdraw", { method: "POST", body: JSON.stringify({ password: pw, confirm: "탈퇴" }) });
     KAAuth.clearSession({ includeSensitive: true, broadcast: true });
     window.location.replace("/pwa/login.html");
   }

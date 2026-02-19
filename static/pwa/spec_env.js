@@ -5,6 +5,7 @@
   const SITE_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
   const SITE_ID_KEY = "ka_current_site_id_v1";
+  const KAUtil = window.KAUtil;
   const TAB_ORDER = [
     "home",
     "tr1",
@@ -40,21 +41,12 @@
     return !!(user && user.is_admin);
   }
 
-  function isSuperAdmin(user) {
-    if (!user || !user.is_admin) return false;
-    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
-  }
-
-  function canViewSiteIdentity(user) {
-    return isSuperAdmin(user);
-  }
-
   function canManageSiteCodeMigration(user) {
-    return isSuperAdmin(user);
+    return KAUtil.isSuperAdmin(user);
   }
 
   function applySiteIdentityVisibility() {
-    const show = canViewSiteIdentity(me);
+    const show = KAUtil.canViewSiteIdentity(me);
     const siteWrap = $("#siteName")?.closest(".field");
     const codeWrap = $("#siteCode")?.closest(".field");
     if (siteWrap) siteWrap.classList.toggle("hidden", !show);
@@ -62,25 +54,7 @@
 
     const listCard = $("#siteList")?.closest("section.card");
     if (listCard) listCard.hidden = !show;
-    if (!show) stripSiteIdentityFromUrl();
-  }
-
-  function stripSiteIdentityFromUrl() {
-    try {
-      const u = new URL(window.location.href);
-      let changed = false;
-      if (u.searchParams.has("site_name")) {
-        u.searchParams.delete("site_name");
-        changed = true;
-      }
-      if (u.searchParams.has("site_code")) {
-        u.searchParams.delete("site_code");
-        changed = true;
-      }
-      if (!changed) return;
-      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
-      window.history.replaceState({}, "", next);
-    } catch (_e) {}
+    if (!show) KAUtil.stripSiteIdentityFromUrl();
   }
 
   function setMsg(msg, isErr = false) {
@@ -185,19 +159,12 @@
     else localStorage.removeItem(SITE_CODE_KEY);
   }
 
-  function normalizeSiteId(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    const id = Math.trunc(n);
-    return id > 0 ? id : 0;
-  }
-
   function getSiteId() {
-    return normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
+    return KAUtil.normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
   }
 
   function setSiteId(siteId) {
-    const clean = normalizeSiteId(siteId);
+    const clean = KAUtil.normalizeSiteId(siteId);
     if (clean > 0) localStorage.setItem(SITE_ID_KEY, String(clean));
     else localStorage.removeItem(SITE_ID_KEY);
     return clean;
@@ -207,7 +174,7 @@
     const qs = new URLSearchParams();
     const site = String(siteName || "").trim();
     const code = String(siteCode || "").trim().toUpperCase();
-    const sid = normalizeSiteId(siteId == null ? getSiteId() : siteId);
+    const sid = KAUtil.normalizeSiteId(siteId == null ? getSiteId() : siteId);
     if (sid > 0) qs.set("site_id", String(sid));
     if (site) qs.set("site_name", site);
     if (code) qs.set("site_code", code);
@@ -456,9 +423,9 @@
   function renderPreview(data) {
     const schema = (data && data.schema) || {};
     const lines = [];
-    const sid = normalizeSiteId((data && data.site_id) || getSiteId());
+    const sid = KAUtil.normalizeSiteId((data && data.site_id) || getSiteId());
     lines.push(`site_id: ${sid > 0 ? sid : "-"}`);
-    if (canViewSiteIdentity(me)) {
+    if (KAUtil.canViewSiteIdentity(me)) {
       lines.push(`site_name: ${data.site_name || getSiteName()}`);
       lines.push(`site_code: ${data.site_code || getSiteCode() || "-"}`);
     } else {
@@ -1296,7 +1263,7 @@
       if (!btn) return;
       const site = String(btn.dataset.site || "").trim();
       const code = String(btn.dataset.code || "").trim().toUpperCase();
-      const siteId = normalizeSiteId(btn.dataset.siteId || "");
+      const siteId = KAUtil.normalizeSiteId(btn.dataset.siteId || "");
       if (!site) return;
       setSiteId(siteId);
       setSiteName(site);
@@ -1316,7 +1283,7 @@
       siteInput.readOnly = false;
       siteInput.removeAttribute("aria-readonly");
       siteInput.title = "";
-      if (isSuperAdmin(me)) {
+      if (KAUtil.isSuperAdmin(me)) {
         codeInput.readOnly = false;
         codeInput.removeAttribute("aria-readonly");
         codeInput.title = "";
@@ -1333,7 +1300,7 @@
     if (!assignedSite) {
       throw new Error("계정에 소속 단지가 지정되지 않았습니다. 관리자에게 문의하세요.");
     }
-    setSiteId(normalizeSiteId(me.site_id));
+    setSiteId(KAUtil.normalizeSiteId(me.site_id));
     setSiteName(assignedSite);
     const assignedCode = String(me.site_code || "").trim().toUpperCase();
     setSiteCode(assignedCode || "");
@@ -1364,14 +1331,14 @@
     const u = new URL(window.location.href);
     const qSite = (u.searchParams.get("site_name") || "").trim();
     const qCode = (u.searchParams.get("site_code") || "").trim().toUpperCase();
-    const qSiteId = normalizeSiteId(u.searchParams.get("site_id") || "");
+    const qSiteId = KAUtil.normalizeSiteId(u.searchParams.get("site_id") || "");
     const ctxSite = String(moduleCtx && moduleCtx.siteName ? moduleCtx.siteName : "").trim();
     const ctxCode = String(moduleCtx && moduleCtx.siteCode ? moduleCtx.siteCode : "").trim().toUpperCase();
-    const ctxSiteId = normalizeSiteId(moduleCtx && moduleCtx.siteId ? moduleCtx.siteId : 0);
+    const ctxSiteId = KAUtil.normalizeSiteId(moduleCtx && moduleCtx.siteId ? moduleCtx.siteId : 0);
     const stored = (localStorage.getItem(SITE_KEY) || "").trim();
     const storedCode = (localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
-    const storedSiteId = normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
-    const meSiteId = normalizeSiteId(me.site_id);
+    const storedSiteId = KAUtil.normalizeSiteId(localStorage.getItem(SITE_ID_KEY) || "");
+    const meSiteId = KAUtil.normalizeSiteId(me.site_id);
     setSiteId(qSiteId || ctxSiteId || storedSiteId || meSiteId || 0);
     setSiteName(qSite || ctxSite || stored || String(me.site_name || "").trim());
     setSiteCode(qCode || ctxCode || storedCode || "");
@@ -1384,7 +1351,7 @@
     }
     await loadBaseSchema();
     await loadTemplates();
-    if (canViewSiteIdentity(me)) {
+    if (KAUtil.canViewSiteIdentity(me)) {
       await loadSiteList().catch(() => {});
     } else {
       applySiteIdentityVisibility();
@@ -1406,3 +1373,4 @@
 
   init().catch((e) => setMsg(e.message || String(e), true));
 })();
+

@@ -3,8 +3,8 @@
   "short_name": "시설관리",
   "start_url": "/pwa/?v=20260205",
   "display": "standalone",
-  "background_color": "#0b0f14",
-  "theme_color": "#0b0f14",
+  "background_color": "#eef1f7",
+  "theme_color": "#eef1f7",
   "icons": [
     {"src": "/pwa/icon-192.png", "sizes": "192x192", "type": "image/png"},
     {"src": "/pwa/icon-512.png", "sizes": "512x512", "type": "image/png"}

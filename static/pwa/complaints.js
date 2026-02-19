@@ -4,6 +4,7 @@
   const $ = (s) => document.querySelector(s);
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
+  const KAUtil = window.KAUtil;
   const MAX_ATTACHMENTS = 10;
   const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
   const STATUS_LABELS = {
@@ -76,15 +77,6 @@
     return !!(user && (user.is_admin || user.is_site_admin));
   }
 
-  function isSuperAdmin(user) {
-    if (!user || !user.is_admin) return false;
-    return String(user.admin_scope || "").trim().toLowerCase() === "super_admin";
-  }
-
-  function canViewSiteIdentity(user) {
-    return isSuperAdmin(user);
-  }
-
   function roleText(user) {
     return String((user && user.role) || "").trim();
   }
@@ -126,29 +118,11 @@
   }
 
   function applySiteIdentityVisibility() {
-    const show = canViewSiteIdentity(me);
+    const show = KAUtil.canViewSiteIdentity(me);
     const nameWrap = $("#siteName")?.closest(".field");
     const codeWrap = $("#siteCode")?.closest(".field");
     if (nameWrap) nameWrap.classList.toggle("hidden", !show);
     if (codeWrap) codeWrap.classList.toggle("hidden", !show);
-  }
-
-  function stripSiteIdentityFromUrl() {
-    try {
-      const u = new URL(window.location.href);
-      let changed = false;
-      if (u.searchParams.has("site_name")) {
-        u.searchParams.delete("site_name");
-        changed = true;
-      }
-      if (u.searchParams.has("site_code")) {
-        u.searchParams.delete("site_code");
-        changed = true;
-      }
-      if (!changed) return;
-      const next = `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ""}`;
-      window.history.replaceState({}, "", next);
-    } catch (_e) {}
   }
 
   function applyResidentIntakeMode() {
@@ -186,10 +160,6 @@
     if (!el) return;
     el.textContent = msg || "";
     el.classList.toggle("err", !!isErr);
-  }
-
-  async function jfetch(url, opts = {}) {
-    return KAAuth.requestJson(url, opts);
   }
 
   function toStatusLabel(status) {
@@ -342,7 +312,7 @@
     const storedSiteName = String(localStorage.getItem(SITE_NAME_KEY) || "").trim();
     const storedSiteCode = String(localStorage.getItem(SITE_CODE_KEY) || "").trim().toUpperCase();
 
-    const showSite = canViewSiteIdentity(me);
+    const showSite = KAUtil.canViewSiteIdentity(me);
     let siteName = q.site_name || ctxSiteName || storedSiteName || userSiteName || "";
     let siteCode = q.site_code || ctxSiteCode || storedSiteCode || userSiteCode || "";
 
@@ -358,7 +328,7 @@
     localStorage.setItem(SITE_NAME_KEY, siteName);
     localStorage.setItem(SITE_CODE_KEY, siteCode);
     applySiteIdentityVisibility();
-    if (!showSite) stripSiteIdentityFromUrl();
+    if (!showSite) KAUtil.stripSiteIdentityFromUrl();
   }
 
   function initUnitSelector() {
@@ -384,7 +354,7 @@
   function updateMetaLine() {
     const el = $("#metaLine");
     if (!el || !me) return;
-    const showSite = canViewSiteIdentity(me);
+    const showSite = KAUtil.canViewSiteIdentity(me);
     const level = me.is_admin ? "관리자" : (me.is_site_admin ? "단지대표자" : "일반");
     const siteCode = String(me.site_code || "").trim().toUpperCase();
     const siteName = String(me.site_name || "").trim();
@@ -408,7 +378,7 @@
   }
 
   async function loadCategories() {
-    const data = await jfetch("/api/v1/codes/complaint-categories");
+    const data = await KAUtil.authJson("/api/v1/codes/complaint-categories");
     categories = Array.isArray(data.items) ? data.items : [];
     fillCategories();
   }
@@ -447,7 +417,7 @@
   async function submitComplaint(forceEmergency = false) {
     const payload = payloadForSubmit(forceEmergency);
     const endpoint = forceEmergency || payload.scope === "EMERGENCY" ? "/api/v1/emergencies" : "/api/v1/complaints";
-    const data = await jfetch(endpoint, {
+    const data = await KAUtil.authJson(endpoint, {
       method: "POST",
       body: JSON.stringify(payload),
     });
@@ -506,7 +476,7 @@
     if (status) qs.set("status", status);
     qs.set("limit", String(clampModuleLimit(80, 80, 200)));
     const path = `/api/v1/complaints?${qs.toString()}`;
-    const data = await jfetch(path);
+    const data = await KAUtil.authJson(path);
     const rows = Array.isArray(data.items) ? data.items : [];
     const wrap = $("#myList");
     if (!wrap) return;
@@ -636,7 +606,7 @@
   async function loadComplaintDetail(id, adminMode) {
     if (!id) return;
     const endpoint = adminMode ? `/api/v1/admin/complaints/${Number(id)}` : `/api/v1/complaints/${Number(id)}`;
-    const data = await jfetch(endpoint);
+    const data = await KAUtil.authJson(endpoint);
     const item = data && data.item ? data.item : null;
     if (!item) return;
     if (adminMode) {
@@ -667,7 +637,7 @@
     }
     const id = selectedAdminComplaintId || selectedComplaintId;
     const comment = normalizeText($("#commentInput").value, 8000, "댓글 내용", true);
-    await jfetch(`/api/v1/complaints/${id}/comments`, {
+    await KAUtil.authJson(`/api/v1/complaints/${id}/comments`, {
       method: "POST",
       body: JSON.stringify({ comment }),
     });
@@ -685,14 +655,14 @@
     const scope = String($("#adminScopeFilter").value || "").trim().toUpperCase();
     const status = String($("#adminStatusFilter").value || "").trim().toUpperCase();
     const qs = new URLSearchParams();
-    if (canViewSiteIdentity(me)) {
+    if (KAUtil.canViewSiteIdentity(me)) {
       const siteCode = normalizeText($("#siteCode")?.value || "", 32, "단지코드", false).toUpperCase();
       if (siteCode) qs.set("site_code", siteCode);
     }
     if (scope) qs.set("scope", scope);
     if (status) qs.set("status", status);
     qs.set("limit", String(clampModuleLimit(120, 120, 500)));
-    const data = await jfetch(`/api/v1/admin/complaints?${qs.toString()}`);
+    const data = await KAUtil.authJson(`/api/v1/admin/complaints?${qs.toString()}`);
     const rows = Array.isArray(data.items) ? data.items : [];
     const wrap = $("#adminList");
     if (!wrap) return;
@@ -711,7 +681,7 @@
       resolution_type: String($("#triageResolution").value || "REPAIR").toUpperCase(),
       note: normalizeText($("#triageNote").value, 2000, "분류 메모", false),
     };
-    await jfetch(`/api/v1/admin/complaints/${selectedAdminComplaintId}/triage`, {
+    await KAUtil.authJson(`/api/v1/admin/complaints/${selectedAdminComplaintId}/triage`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
@@ -727,7 +697,7 @@
       assignee_user_id: uid,
       note: normalizeText($("#assignNote").value, 2000, "배정 메모", false),
     };
-    await jfetch(`/api/v1/admin/complaints/${selectedAdminComplaintId}/assign`, {
+    await KAUtil.authJson(`/api/v1/admin/complaints/${selectedAdminComplaintId}/assign`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
@@ -742,7 +712,7 @@
       status: String($("#workOrderStatus").value || "OPEN").toUpperCase(),
       result_note: normalizeText($("#workOrderNote").value, 4000, "작업 결과 메모", false),
     };
-    await jfetch(`/api/v1/admin/work-orders/${workOrderId}`, {
+    await KAUtil.authJson(`/api/v1/admin/work-orders/${workOrderId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
@@ -755,12 +725,12 @@
   async function loadStats() {
     if (!isAdmin(me)) return;
     const qs = new URLSearchParams();
-    if (canViewSiteIdentity(me)) {
+    if (KAUtil.canViewSiteIdentity(me)) {
       const siteCode = normalizeText($("#siteCode")?.value || "", 32, "단지코드", false).toUpperCase();
       if (siteCode) qs.set("site_code", siteCode);
     }
     const path = qs.toString() ? `/api/v1/admin/stats/complaints?${qs.toString()}` : "/api/v1/admin/stats/complaints";
-    const data = await jfetch(path);
+    const data = await KAUtil.authJson(path);
     const item = data && data.item ? data.item : {};
     const byStatus = Array.isArray(item.by_status)
       ? item.by_status.map((x) => `${toStatusLabel(x.status)}:${x.count}`).join(", ")
@@ -890,3 +860,4 @@
     setMsg(msg, true);
   });
 })();
+
