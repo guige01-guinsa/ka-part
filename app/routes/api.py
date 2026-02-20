@@ -5785,7 +5785,14 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
 
     for tab_key, fields in tabs.items():
         save_tab_values(entry_id, tab_key, fields, schema_defs=schema)
-        upsert_tab_domain_data(site_name, entry_date, tab_key, fields, work_type=entry_work_type)
+        upsert_tab_domain_data(
+            site_id,
+            entry_date,
+            tab_key,
+            fields,
+            work_type=entry_work_type,
+            site_name=site_name,
+        )
 
     return {
         "ok": True,

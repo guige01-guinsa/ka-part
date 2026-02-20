@@ -755,11 +755,107 @@ def _seed_module_contracts(con: sqlite3.Connection) -> None:
         )
 
 
+def _table_exists(con: sqlite3.Connection, table: str) -> bool:
+    row = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (str(table or "").strip(),),
+    ).fetchone()
+    return row is not None
+
+
+def _sync_domain_site_identity(con: sqlite3.Connection, table: str) -> None:
+    _ensure_column(con, table, "site_id INTEGER")
+    _ensure_column(con, table, "site_name TEXT")
+    if not _table_exists(con, "sites"):
+        return
+    con.execute(
+        f"""
+        UPDATE {table}
+        SET site_id=(
+          SELECT s.id
+          FROM sites s
+          WHERE s.name={table}.site_name
+          LIMIT 1
+        )
+        WHERE (site_id IS NULL OR site_id<=0)
+          AND site_name IS NOT NULL
+          AND TRIM(site_name)<>''
+          AND EXISTS(
+            SELECT 1
+            FROM sites s
+            WHERE s.name={table}.site_name
+          );
+        """
+    )
+    con.execute(
+        f"""
+        UPDATE {table}
+        SET site_name=(
+          SELECT s.name
+          FROM sites s
+          WHERE s.id={table}.site_id
+          LIMIT 1
+        )
+        WHERE site_id IS NOT NULL
+          AND site_id>0
+          AND EXISTS(
+            SELECT 1
+            FROM sites s
+            WHERE s.id={table}.site_id
+          )
+          AND TRIM(COALESCE(site_name,''))<>(
+            SELECT TRIM(COALESCE(s.name,''))
+            FROM sites s
+            WHERE s.id={table}.site_id
+            LIMIT 1
+          );
+        """
+    )
+
+
+def _dedupe_domain_rows_by_site_id(con: sqlite3.Connection, table: str, key_cols: List[str]) -> None:
+    group_cols = ", ".join(str(col) for col in key_cols)
+    if not group_cols:
+        return
+    con.execute(
+        f"""
+        DELETE FROM {table}
+        WHERE site_id IS NOT NULL
+          AND site_id>0
+          AND id NOT IN (
+            SELECT MAX(id)
+            FROM {table}
+            WHERE site_id IS NOT NULL AND site_id>0
+            GROUP BY {group_cols}
+          );
+        """
+    )
+
+
+def _migrate_domain_site_key_index(
+    con: sqlite3.Connection,
+    *,
+    table: str,
+    index_name: str,
+    key_cols: List[str],
+    legacy_indexes: Optional[List[str]] = None,
+) -> None:
+    _sync_domain_site_identity(con, table)
+    _dedupe_domain_rows_by_site_id(con, table, key_cols)
+    for old_name in legacy_indexes or []:
+        con.execute(f"DROP INDEX IF EXISTS {old_name}")
+    con.execute(f"DROP INDEX IF EXISTS {index_name}")
+    con.execute(
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table}({', '.join(key_cols)});"
+    )
+
+
 def ensure_domain_tables(con: sqlite3.Connection) -> None:
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS transformer_450_reads (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER,
           site_name TEXT NOT NULL,
           entry_date TEXT,
           lv1_l1_v REAL, lv1_l1_a REAL, lv1_l1_kw REAL,
@@ -771,21 +867,22 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "transformer_450_reads", "site_id INTEGER")
     _ensure_column(con, "transformer_450_reads", "entry_date TEXT")
     _ensure_column(con, "transformer_450_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "transformer_450_reads", "updated_at TEXT")
-    con.execute("DROP INDEX IF EXISTS ux_tr450_site_date")
-    con.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_tr450_site_date
-        ON transformer_450_reads(site_name, entry_date, work_type);
-        """
+    _migrate_domain_site_key_index(
+        con,
+        table="transformer_450_reads",
+        index_name="ux_tr450_site_date",
+        key_cols=["site_id", "entry_date", "work_type"],
     )
 
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS transformer_400_reads (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER,
           site_name TEXT NOT NULL,
           entry_date TEXT,
           lv2_l1_v REAL, lv2_l1_a REAL, lv2_l1_kw REAL,
@@ -797,21 +894,22 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "transformer_400_reads", "site_id INTEGER")
     _ensure_column(con, "transformer_400_reads", "entry_date TEXT")
     _ensure_column(con, "transformer_400_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "transformer_400_reads", "updated_at TEXT")
-    con.execute("DROP INDEX IF EXISTS ux_tr400_site_date")
-    con.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_tr400_site_date
-        ON transformer_400_reads(site_name, entry_date, work_type);
-        """
+    _migrate_domain_site_key_index(
+        con,
+        table="transformer_400_reads",
+        index_name="ux_tr400_site_date",
+        key_cols=["site_id", "entry_date", "work_type"],
     )
 
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS main_vcb_reads (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER,
           site_name TEXT NOT NULL,
           entry_date TEXT,
           main_vcb_kv REAL,
@@ -823,6 +921,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "main_vcb_reads", "site_id INTEGER")
     _ensure_column(con, "main_vcb_reads", "site_name TEXT")
     _ensure_column(con, "main_vcb_reads", "entry_date TEXT")
     _ensure_column(con, "main_vcb_reads", "main_vcb_kv REAL")
@@ -831,18 +930,18 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "main_vcb_reads", "main_vcb_l3_a REAL")
     _ensure_column(con, "main_vcb_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "main_vcb_reads", "updated_at TEXT")
-    con.execute("DROP INDEX IF EXISTS ux_main_vcb_site_date")
-    con.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_main_vcb_site_date
-        ON main_vcb_reads(site_name, entry_date, work_type);
-        """
+    _migrate_domain_site_key_index(
+        con,
+        table="main_vcb_reads",
+        index_name="ux_main_vcb_site_date",
+        key_cols=["site_id", "entry_date", "work_type"],
     )
 
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS dc_panel_reads (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER,
           site_name TEXT NOT NULL,
           entry_date TEXT,
           dc_panel_v REAL,
@@ -852,24 +951,25 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "dc_panel_reads", "site_id INTEGER")
     _ensure_column(con, "dc_panel_reads", "site_name TEXT")
     _ensure_column(con, "dc_panel_reads", "entry_date TEXT")
     _ensure_column(con, "dc_panel_reads", "dc_panel_v REAL")
     _ensure_column(con, "dc_panel_reads", "dc_panel_a REAL")
     _ensure_column(con, "dc_panel_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "dc_panel_reads", "updated_at TEXT")
-    con.execute("DROP INDEX IF EXISTS ux_dc_panel_site_date")
-    con.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_dc_panel_site_date
-        ON dc_panel_reads(site_name, entry_date, work_type);
-        """
+    _migrate_domain_site_key_index(
+        con,
+        table="dc_panel_reads",
+        index_name="ux_dc_panel_site_date",
+        key_cols=["site_id", "entry_date", "work_type"],
     )
 
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS temperature_reads (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER,
           site_name TEXT NOT NULL,
           entry_date TEXT,
           temperature_tr1 REAL,
@@ -882,6 +982,7 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "temperature_reads", "site_id INTEGER")
     _ensure_column(con, "temperature_reads", "site_name TEXT")
     _ensure_column(con, "temperature_reads", "entry_date TEXT")
     _ensure_column(con, "temperature_reads", "temperature_tr1 REAL")
@@ -891,18 +992,18 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "temperature_reads", "temperature_indoor REAL")
     _ensure_column(con, "temperature_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "temperature_reads", "updated_at TEXT")
-    con.execute("DROP INDEX IF EXISTS ux_temperature_site_date")
-    con.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_temperature_site_date
-        ON temperature_reads(site_name, entry_date, work_type);
-        """
+    _migrate_domain_site_key_index(
+        con,
+        table="temperature_reads",
+        index_name="ux_temperature_site_date",
+        key_cols=["site_id", "entry_date", "work_type"],
     )
 
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS power_meter_reads (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER,
           site_name TEXT NOT NULL,
           entry_date TEXT,
           aiss_l1_a REAL, aiss_l2_a REAL, aiss_l3_a REAL,
@@ -912,21 +1013,22 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "power_meter_reads", "site_id INTEGER")
     _ensure_column(con, "power_meter_reads", "entry_date TEXT")
     _ensure_column(con, "power_meter_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "power_meter_reads", "updated_at TEXT")
-    con.execute("DROP INDEX IF EXISTS ux_meter_site_date")
-    con.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_meter_site_date
-        ON power_meter_reads(site_name, entry_date, work_type);
-        """
+    _migrate_domain_site_key_index(
+        con,
+        table="power_meter_reads",
+        index_name="ux_meter_site_date",
+        key_cols=["site_id", "entry_date", "work_type"],
     )
 
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS facility_checks (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER,
           site_name TEXT NOT NULL,
           entry_date TEXT,
           tank_level_1 REAL, tank_level_2 REAL,
@@ -938,21 +1040,22 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "facility_checks", "site_id INTEGER")
     _ensure_column(con, "facility_checks", "entry_date TEXT")
     _ensure_column(con, "facility_checks", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "facility_checks", "updated_at TEXT")
-    con.execute("DROP INDEX IF EXISTS ux_fac_site_date")
-    con.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_fac_site_date
-        ON facility_checks(site_name, entry_date, work_type);
-        """
+    _migrate_domain_site_key_index(
+        con,
+        table="facility_checks",
+        index_name="ux_fac_site_date",
+        key_cols=["site_id", "entry_date", "work_type"],
     )
 
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS facility_subtasks (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          site_id INTEGER,
           site_name TEXT NOT NULL,
           entry_date TEXT,
           domain_key TEXT NOT NULL CHECK(domain_key IN ('fire','mechanical','telecom')),
@@ -966,15 +1069,15 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(con, "facility_subtasks", "site_id INTEGER")
     _ensure_column(con, "facility_subtasks", "entry_date TEXT")
     _ensure_column(con, "facility_subtasks", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "facility_subtasks", "updated_at TEXT")
-    con.execute("DROP INDEX IF EXISTS ux_subtasks_site_date_domain")
-    con.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_subtasks_site_date_domain
-        ON facility_subtasks(site_name, entry_date, domain_key, work_type);
-        """
+    _migrate_domain_site_key_index(
+        con,
+        table="facility_subtasks",
+        index_name="ux_subtasks_site_date_domain",
+        key_cols=["site_id", "entry_date", "domain_key", "work_type"],
     )
     con.execute(
         """
@@ -4440,30 +4543,56 @@ def load_entry_by_id(entry_id: int, *, allowed_keys_by_tab: Optional[Dict[str, s
 
 
 def upsert_tab_domain_data(
-    site_name: str,
+    site_id: Any,
     entry_date: str,
     tab_key: str,
     fields: Dict[str, Any],
     work_type: str = "",
+    *,
+    site_name: str = "",
 ) -> bool:
     clean_work_type = normalize_work_type(work_type, default=DEFAULT_WORK_TYPE)
     canonical_key = canonical_tab_key(tab_key)
     spec = TAB_STORAGE_SPECS.get(canonical_key)
     if not spec:
         return False
+    clean_site_id = _clean_site_id_value(site_id)
+    clean_site_name = str(site_name or "").strip()
+    if not clean_site_name and not clean_site_id:
+        # Backward compatibility: legacy callers passed site_name as the first positional argument.
+        legacy_site_name = str(site_id or "").strip()
+        if legacy_site_name and not _clean_site_id_value(legacy_site_name):
+            clean_site_name = legacy_site_name
+
     clean = canonicalize_tab_fields(canonical_key, fields)
-    payload: Dict[str, Any] = {"site_name": site_name, "entry_date": entry_date, "work_type": clean_work_type}
-    payload.update(dict(spec.get("fixed") or {}))
-
-    numeric_tabs = {"tr1", "tr2", "main_vcb", "dc_panel", "temperature", "meter", "facility_check"}
-    for form_key, db_col in dict(spec.get("column_map") or {}).items():
-        if form_key not in clean:
-            continue
-        raw_val = clean.get(form_key)
-        payload[db_col] = _to_float(raw_val) if canonical_key in numeric_tabs else _to_text(raw_val)
-
     con = _connect()
     try:
+        ts = now_iso()
+        if not clean_site_id:
+            if clean_site_name:
+                clean_site_id = _ensure_site_id_for_name_in_tx(con, clean_site_name, ts=ts)
+            else:
+                raise ValueError("site_id is required for domain upsert")
+        if not clean_site_name:
+            row = con.execute("SELECT name FROM sites WHERE id=? LIMIT 1", (int(clean_site_id),)).fetchone()
+            clean_site_name = str((row["name"] if row and row["name"] is not None else "") or "").strip()
+
+        payload: Dict[str, Any] = {
+            "site_id": int(clean_site_id),
+            "entry_date": entry_date,
+            "work_type": clean_work_type,
+        }
+        if clean_site_name:
+            payload["site_name"] = clean_site_name
+        payload.update(dict(spec.get("fixed") or {}))
+
+        numeric_tabs = {"tr1", "tr2", "main_vcb", "dc_panel", "temperature", "meter", "facility_check"}
+        for form_key, db_col in dict(spec.get("column_map") or {}).items():
+            if form_key not in clean:
+                continue
+            raw_val = clean.get(form_key)
+            payload[db_col] = _to_float(raw_val) if canonical_key in numeric_tabs else _to_text(raw_val)
+
         dynamic_upsert(
             con,
             str(spec["table"]),
@@ -4477,19 +4606,19 @@ def upsert_tab_domain_data(
 
 
 def upsert_transformer_450(site_name: str, entry_date: str, fields: Dict[str, Any], work_type: str = "") -> None:
-    upsert_tab_domain_data(site_name, entry_date, "tr1", fields, work_type=work_type)
+    upsert_tab_domain_data(0, entry_date, "tr1", fields, work_type=work_type, site_name=site_name)
 
 
 def upsert_transformer_400(site_name: str, entry_date: str, fields: Dict[str, Any], work_type: str = "") -> None:
-    upsert_tab_domain_data(site_name, entry_date, "tr2", fields, work_type=work_type)
+    upsert_tab_domain_data(0, entry_date, "tr2", fields, work_type=work_type, site_name=site_name)
 
 
 def upsert_power_meter(site_name: str, entry_date: str, fields: Dict[str, Any], work_type: str = "") -> None:
-    upsert_tab_domain_data(site_name, entry_date, "meter", fields, work_type=work_type)
+    upsert_tab_domain_data(0, entry_date, "meter", fields, work_type=work_type, site_name=site_name)
 
 
 def upsert_facility_check(site_name: str, entry_date: str, fields: Dict[str, Any], work_type: str = "") -> None:
-    upsert_tab_domain_data(site_name, entry_date, "facility_check", fields, work_type=work_type)
+    upsert_tab_domain_data(0, entry_date, "facility_check", fields, work_type=work_type, site_name=site_name)
 
 
 def schema_alignment_report() -> Dict[str, Any]:

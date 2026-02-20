@@ -337,7 +337,7 @@ LEGACY_FIELD_ALIASES: Dict[str, Dict[str, str]] = {
 TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     "tr1": {
         "table": "transformer_450_reads",
-        "key_cols": ["site_name", "entry_date", "work_type"],
+        "key_cols": ["site_id", "entry_date", "work_type"],
         "column_map": {
             "lv1_L1_V": "lv1_l1_v",
             "lv1_L1_A": "lv1_l1_a",
@@ -353,7 +353,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "tr2": {
         "table": "transformer_400_reads",
-        "key_cols": ["site_name", "entry_date", "work_type"],
+        "key_cols": ["site_id", "entry_date", "work_type"],
         "column_map": {
             "lv2_L1_V": "lv2_l1_v",
             "lv2_L1_A": "lv2_l1_a",
@@ -369,7 +369,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "main_vcb": {
         "table": "main_vcb_reads",
-        "key_cols": ["site_name", "entry_date", "work_type"],
+        "key_cols": ["site_id", "entry_date", "work_type"],
         "column_map": {
             "main_vcb_kv": "main_vcb_kv",
             "main_vcb_l1_a": "main_vcb_l1_a",
@@ -379,7 +379,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "dc_panel": {
         "table": "dc_panel_reads",
-        "key_cols": ["site_name", "entry_date", "work_type"],
+        "key_cols": ["site_id", "entry_date", "work_type"],
         "column_map": {
             "dc_panel_v": "dc_panel_v",
             "dc_panel_a": "dc_panel_a",
@@ -387,7 +387,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "temperature": {
         "table": "temperature_reads",
-        "key_cols": ["site_name", "entry_date", "work_type"],
+        "key_cols": ["site_id", "entry_date", "work_type"],
         "column_map": {
             "temperature_tr1": "temperature_tr1",
             "temperature_tr2": "temperature_tr2",
@@ -398,7 +398,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "meter": {
         "table": "power_meter_reads",
-        "key_cols": ["site_name", "entry_date", "work_type"],
+        "key_cols": ["site_id", "entry_date", "work_type"],
         "column_map": {
             "AISS_L1_A": "aiss_l1_a",
             "AISS_L2_A": "aiss_l2_a",
@@ -410,7 +410,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "facility_check": {
         "table": "facility_checks",
-        "key_cols": ["site_name", "entry_date", "work_type"],
+        "key_cols": ["site_id", "entry_date", "work_type"],
         "column_map": {
             "tank_level_1": "tank_level_1",
             "tank_level_2": "tank_level_2",
@@ -424,7 +424,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "facility_fire": {
         "table": "facility_subtasks",
-        "key_cols": ["site_name", "entry_date", "domain_key", "work_type"],
+        "key_cols": ["site_id", "entry_date", "domain_key", "work_type"],
         "fixed": {"domain_key": "fire"},
         "column_map": {
             "task_title": "task_title",
@@ -436,7 +436,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "facility_mechanical": {
         "table": "facility_subtasks",
-        "key_cols": ["site_name", "entry_date", "domain_key", "work_type"],
+        "key_cols": ["site_id", "entry_date", "domain_key", "work_type"],
         "fixed": {"domain_key": "mechanical"},
         "column_map": {
             "task_title": "task_title",
@@ -448,7 +448,7 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "facility_telecom": {
         "table": "facility_subtasks",
-        "key_cols": ["site_name", "entry_date", "domain_key", "work_type"],
+        "key_cols": ["site_id", "entry_date", "domain_key", "work_type"],
         "fixed": {"domain_key": "telecom"},
         "column_map": {
             "task_title": "task_title",
