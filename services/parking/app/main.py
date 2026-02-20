@@ -2287,7 +2287,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       <p class="hint">촬영 저장 없이 현재 카메라 프레임을 메모리에서만 읽어 즉시 분석합니다.</p>
       <div class="camera-wrap">
         <video id="video" playsinline autoplay muted></video>
-        <div class="plate-guide" aria-hidden="true"></div>
+        <div id="plateGuide" class="plate-guide" aria-hidden="true"></div>
       </div>
       <canvas id="canvas" hidden></canvas>
       <div class="row">
@@ -2335,22 +2335,30 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       autoScan: false,
       autoScanTimer: null,
       ocrBusy: false,
+      ocrLoadingPromise: null,
+      ocrScriptUrl: "",
       lastAutoPlate: "",
       lastAutoAt: 0,
+      autoScanErrorStreak: 0,
+      autoScanNoPlateStreak: 0,
     };
     const ILLEGAL = new Set(["UNREGISTERED", "BLOCKED", "EXPIRED"]);
     const VERDICT_KO = { OK:"정상등록", UNREGISTERED:"미등록", BLOCKED:"차단차량", EXPIRED:"기간만료", TEMP:"임시등록" };
     const ROI_RECT = { x: 0.16, y: 0.52, w: 0.68, h: 0.30 };
     const AUTO_SCAN_INTERVAL_MS = 1400;
     const AUTO_SCAN_DEDUP_MS = 4500;
+    const AUTO_SCAN_MAX_ERROR_STREAK = 3;
+    const AUTO_SCAN_MAX_NO_PLATE_STREAK = 6;
     const CAMERA_READY_TIMEOUT_MS = 7000;
     const OCR_READY_TIMEOUT_MS = 12000;
     const OCR_READY_POLL_MS = 250;
+    const OCR_SCRIPT_TIMEOUT_MS = 8000;
     const OCR_PLATE_WHITELIST = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ가나다라마바사아자차카타파하거너더러머버서어저처커터퍼허고노도로모보소오조초코토포호";
     const boot = window.__BOOT__ || {};
 
     const video = $("video");
     const canvas = $("canvas");
+    const plateGuide = $("plateGuide");
     const plateInput = $("plateInput");
     const hintLine = $("hintLine");
     const result = $("result");
@@ -2423,6 +2431,8 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
 
     async function ensureOcrReady(timeoutMs = OCR_READY_TIMEOUT_MS) {
       if (window.Tesseract && typeof window.Tesseract.recognize === "function") return true;
+      const loaded = await ensureOcrScriptLoaded();
+      if (!loaded) return false;
       const timeout = Math.max(1000, Number(timeoutMs) || OCR_READY_TIMEOUT_MS);
       const startAt = Date.now();
       while ((Date.now() - startAt) < timeout) {
@@ -2430,6 +2440,88 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
         if (window.Tesseract && typeof window.Tesseract.recognize === "function") return true;
       }
       return false;
+    }
+
+    function ocrScriptCandidates() {
+      const candidates = [];
+      const custom = String(boot.ocr_script_url || "").trim();
+      if (custom) candidates.push(custom);
+      candidates.push("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js");
+      candidates.push("https://unpkg.com/tesseract.js@5/dist/tesseract.min.js");
+      return [...new Set(candidates)];
+    }
+
+    function findScriptBySrc(src) {
+      const abs = new URL(src, location.href).toString();
+      for (const tag of document.querySelectorAll("script[src]")) {
+        if (String(tag.src || "").trim() === abs) return tag;
+      }
+      return null;
+    }
+
+    async function loadScriptBySrc(src, timeoutMs = OCR_SCRIPT_TIMEOUT_MS) {
+      const abs = new URL(src, location.href).toString();
+      if (window.Tesseract && typeof window.Tesseract.recognize === "function") return true;
+      return await new Promise((resolve, reject) => {
+        let script = findScriptBySrc(abs);
+        if (!script) {
+          script = document.createElement("script");
+          script.src = abs;
+          script.async = true;
+          script.defer = true;
+          script.crossOrigin = "anonymous";
+          document.head.appendChild(script);
+        }
+
+        const cleanup = () => {
+          clearTimeout(timer);
+          script.removeEventListener("load", onLoad);
+          script.removeEventListener("error", onError);
+        };
+        const onLoad = () => {
+          cleanup();
+          resolve(true);
+        };
+        const onError = () => {
+          cleanup();
+          reject(new Error(`OCR script load failed: ${abs}`));
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error(`OCR script load timeout: ${abs}`));
+        }, Math.max(1000, Number(timeoutMs) || OCR_SCRIPT_TIMEOUT_MS));
+
+        script.addEventListener("load", onLoad, { once: true });
+        script.addEventListener("error", onError, { once: true });
+      });
+    }
+
+    async function ensureOcrScriptLoaded() {
+      if (window.Tesseract && typeof window.Tesseract.recognize === "function") return true;
+      if (state.ocrLoadingPromise) return await state.ocrLoadingPromise;
+
+      const run = (async () => {
+        const candidates = ocrScriptCandidates();
+        for (const src of candidates) {
+          try {
+            await loadScriptBySrc(src, OCR_SCRIPT_TIMEOUT_MS);
+            if (window.Tesseract && typeof window.Tesseract.recognize === "function") {
+              state.ocrScriptUrl = src;
+              return true;
+            }
+          } catch (_e) {}
+        }
+        return false;
+      })();
+
+      state.ocrLoadingPromise = run;
+      try {
+        return await run;
+      } finally {
+        if (!(window.Tesseract && typeof window.Tesseract.recognize === "function")) {
+          state.ocrLoadingPromise = null;
+        }
+      }
     }
 
     function stopCamera({ clearHint = false } = {}) {
@@ -2538,6 +2630,41 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       return Math.max(min, Math.min(max, v));
     }
 
+    function resolveGuideRoiOnSource(srcW, srcH) {
+      const fallbackX = _clamp(Math.floor(srcW * ROI_RECT.x), 0, srcW - 2);
+      const fallbackY = _clamp(Math.floor(srcH * ROI_RECT.y), 0, srcH - 2);
+      const fallbackW = _clamp(Math.floor(srcW * ROI_RECT.w), 2, srcW - fallbackX);
+      const fallbackH = _clamp(Math.floor(srcH * ROI_RECT.h), 2, srcH - fallbackY);
+      const fallback = { x: fallbackX, y: fallbackY, w: fallbackW, h: fallbackH };
+
+      if (!video || !plateGuide || srcW < 2 || srcH < 2) return fallback;
+      const videoRect = video.getBoundingClientRect();
+      const guideRect = plateGuide.getBoundingClientRect();
+      const renderW = Number(videoRect.width || 0);
+      const renderH = Number(videoRect.height || 0);
+      if (renderW < 2 || renderH < 2) return fallback;
+
+      // video uses object-fit: cover; convert guide box(render coords) -> source frame coords.
+      const scale = Math.max(renderW / srcW, renderH / srcH);
+      if (!(scale > 0)) return fallback;
+      const drawnW = srcW * scale;
+      const drawnH = srcH * scale;
+      const cropX = Math.max(0, (drawnW - renderW) / 2);
+      const cropY = Math.max(0, (drawnH - renderH) / 2);
+
+      const gx = _clamp(guideRect.left - videoRect.left, 0, renderW - 2);
+      const gy = _clamp(guideRect.top - videoRect.top, 0, renderH - 2);
+      const gw = _clamp(guideRect.width, 2, renderW - gx);
+      const gh = _clamp(guideRect.height, 2, renderH - gy);
+
+      const sx = _clamp(Math.floor((gx + cropX) / scale), 0, srcW - 2);
+      const sy = _clamp(Math.floor((gy + cropY) / scale), 0, srcH - 2);
+      const sw = _clamp(Math.floor(gw / scale), 2, srcW - sx);
+      const sh = _clamp(Math.floor(gh / scale), 2, srcH - sy);
+
+      return { x: sx, y: sy, w: sw, h: sh };
+    }
+
     function capturePlateRoiCanvas() {
       const w = Number(video.videoWidth || 0);
       const h = Number(video.videoHeight || 0);
@@ -2554,10 +2681,11 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
         throw new Error("카메라 프레임 캡처에 실패했습니다. 잠시 후 다시 시도하세요.");
       }
 
-      const rx = _clamp(Math.floor(w * ROI_RECT.x), 0, w - 2);
-      const ry = _clamp(Math.floor(h * ROI_RECT.y), 0, h - 2);
-      const rw = _clamp(Math.floor(w * ROI_RECT.w), 2, w - rx);
-      const rh = _clamp(Math.floor(h * ROI_RECT.h), 2, h - ry);
+      const roiRect = resolveGuideRoiOnSource(w, h);
+      const rx = roiRect.x;
+      const ry = roiRect.y;
+      const rw = roiRect.w;
+      const rh = roiRect.h;
 
       const roi = document.createElement("canvas");
       roi.width = rw * 2;
@@ -2680,10 +2808,16 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     async function analyzeAndCheck(source) {
       await startCamera();
       const plate = await runOcr();
-      if (!plate) return false;
+      if (!plate) {
+        if (source === "AUTO") {
+          state.autoScanNoPlateStreak = Number(state.autoScanNoPlateStreak || 0) + 1;
+        }
+        return false;
+      }
 
       const now = Date.now();
       if (source === "AUTO") {
+        state.autoScanNoPlateStreak = 0;
         if (state.lastAutoPlate === plate && (now - state.lastAutoAt) < AUTO_SCAN_DEDUP_MS) {
           return false;
         }
@@ -2758,6 +2892,8 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
         clearTimeout(state.autoScanTimer);
         state.autoScanTimer = null;
       }
+      state.autoScanErrorStreak = 0;
+      state.autoScanNoPlateStreak = 0;
       setAutoScanMode(false);
     }
 
@@ -2767,12 +2903,28 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
         if (!hasLiveStream(state.stream)) {
           await startCamera();
         }
-        await analyzeAndCheck("AUTO");
+        const found = await analyzeAndCheck("AUTO");
+        if (found) {
+          state.autoScanErrorStreak = 0;
+        } else if (state.autoScanNoPlateStreak >= AUTO_SCAN_MAX_NO_PLATE_STREAK) {
+          stopAutoScan();
+          setHint("번호판 인식 실패가 반복되어 즉시스캔을 자동 중지했습니다. 가이드 박스에 번호판을 맞춘 뒤 다시 시작하세요.");
+          return;
+        }
       } catch (e) {
         const msg = String(e && e.message ? e.message : e);
-        setHint(`즉시스캔 오류: ${msg}`);
-        if (msg.includes("권한") || msg.includes("지원하지") || msg.includes("보안")) {
+        state.autoScanErrorStreak = Number(state.autoScanErrorStreak || 0) + 1;
+        setHint(`즉시스캔 오류(${state.autoScanErrorStreak}/${AUTO_SCAN_MAX_ERROR_STREAK}): ${msg}`);
+        const fatalByMsg =
+          msg.includes("권한") ||
+          msg.includes("지원하지") ||
+          msg.includes("보안") ||
+          msg.includes("OCR 엔진 로딩");
+        if (fatalByMsg || state.autoScanErrorStreak >= AUTO_SCAN_MAX_ERROR_STREAK) {
           stopAutoScan();
+          if (!fatalByMsg) {
+            setHint("즉시스캔 오류가 반복되어 자동 중지했습니다. 잠시 후 다시 시도하세요.");
+          }
         }
       } finally {
         if (state.autoScan) {
@@ -2814,6 +2966,10 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
           clearTimeout(state.autoScanTimer);
           state.autoScanTimer = null;
         }
+        state.autoScanErrorStreak = 0;
+        state.autoScanNoPlateStreak = 0;
+        state.lastAutoPlate = "";
+        state.lastAutoAt = 0;
         setAutoScanMode(true);
         setHint("즉시스캔 시작: 촬영 저장 없이 현재 프레임을 반복 분석합니다.");
         await autoScanTick();
