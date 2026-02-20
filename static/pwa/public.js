@@ -40,11 +40,11 @@
   }
 
   function renderNotices(items) {
-    const wrap = $("#notices");
+    const wrap = $("#noticesList");
     if (!wrap) return;
     const rows = Array.isArray(items) ? items : [];
     if (!rows.length) {
-      wrap.innerHTML = '<div class="muted">공지 항목이 없습니다.</div>';
+      wrap.innerHTML = '<div class="feed-empty">공지 항목이 없습니다.</div>';
       return;
     }
     wrap.innerHTML = rows
@@ -53,16 +53,16 @@
         const content = escapeHtml(it.content || "");
         const pinned = !!it.is_pinned;
         const publishedAt = formatDateTime(it.published_at || it.created_at);
-        const badge = pinned ? '<span class="badge">PIN</span>' : "";
-        const metaRight = publishedAt ? escapeHtml(publishedAt) : "";
+        const badge = pinned ? '<span class="pin-badge">PIN</span>' : "";
+        const metaRight = publishedAt ? `<span>${escapeHtml(publishedAt)}</span>` : "";
         return `
-          <article class="item">
-            <div class="meta">
+          <article class="feed-card">
+            <div class="feed-meta">
               <div>${badge}</div>
               <div>${metaRight}</div>
             </div>
-            <h4>${title}</h4>
-            <p class="body">${content}</p>
+            <h4 class="feed-title">${title}</h4>
+            <p class="feed-body">${content}</p>
           </article>
         `;
       })
@@ -74,7 +74,7 @@
     if (!wrap) return;
     const rows = Array.isArray(items) ? items : [];
     if (!rows.length) {
-      wrap.innerHTML = '<div class="muted">FAQ 항목이 없습니다.</div>';
+      wrap.innerHTML = '<div class="feed-empty">FAQ 항목이 없습니다.</div>';
       return;
     }
     wrap.innerHTML = rows
@@ -82,15 +82,14 @@
         const q = escapeHtml(it.question || "-");
         const a = escapeHtml(it.answer || "");
         return `
-          <details class="item">
+          <details class="faq-entry">
             <summary>
-              <div class="meta">
-                <div><strong>${q}</strong></div>
-                <div class="muted">열기</div>
+              <div class="faq-row">
+                <div class="faq-question">${q}</div>
+                <div class="faq-toggle">열기</div>
               </div>
             </summary>
-            <div class="spacer" aria-hidden="true"></div>
-            <p class="body">${a}</p>
+            <p class="faq-answer">${a}</p>
           </details>
         `;
       })

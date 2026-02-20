@@ -10,112 +10,146 @@
   />
   <meta name="theme-color" content="#eef1f7" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=2" />
-  <link rel="stylesheet" href="/pwa/public.css?v=20260215b" />
   <link rel="stylesheet" href="/pwa/light_theme.css?v=20260220a" />
+  <link rel="stylesheet" href="/pwa/public.css?v=20260220c" />
 </head>
-<body>
-  <header class="top" id="top">
-    <div class="brand">
-      <div class="kicker">Public</div>
-      <div class="title">아파트 시설관리 안내</div>
-      <div class="sub">로그인 없이 볼 수 있는 공지/FAQ 및 기본 안내입니다.</div>
+<body class="public-landing">
+  <header class="landing-top" id="top">
+    <div class="brand-wrap">
+      <div class="brand-pill">KA-PART Public</div>
+      <div class="brand-title">아파트 시설관리 안내</div>
+      <p class="brand-sub">첫 화면에서 공지, FAQ, 긴급 연락처, 수리 구분 정보를 한 번에 확인할 수 있습니다.</p>
     </div>
 
-    <nav class="nav">
-      <a class="btn" href="/pwa/">로그인 없이 바로 사용</a>
-      <a class="btn ghost" href="/pwa/login.html">로그인</a>
-      <a class="btn ghost" href="/pwa/login.html#signupCard">신규가입</a>
+    <nav class="top-actions">
+      <a class="action-btn primary" href="/pwa/">로그인 없이 바로 사용</a>
+      <a class="action-btn" href="/pwa/login.html">로그인</a>
+      <a class="action-btn" href="/pwa/login.html#signupCard">신규가입</a>
     </nav>
   </header>
 
-  <main class="wrap">
-    <section class="card">
-      <h2>공용시설과 세대 내부 수리 구분</h2>
-      <p class="lead">
-        아파트 공용시설은 공동체 자산이며 관리사무소가 유지·보수 책임을 갖습니다. 세대 내부(가구·전등·콘센트·변기·주방/욕실 기구 등)는 개인 생활영역으로,
-        관리사무소는 직접 수리 대신 사용 안내/조언 범위에서만 지원합니다.
-      </p>
-      <div class="grid2">
-        <div class="box">
-          <h3>공용(관리)</h3>
-          <ul class="list">
+  <main class="landing-main">
+    <section class="surface hero">
+      <div class="hero-copy">
+        <p class="hero-kicker">Apartment Facility Management</p>
+        <h1 class="hero-title">시설관리 정보를 가장 빠르게 확인하는 첫 화면</h1>
+        <p class="hero-desc">
+          입주민과 관리사무소가 같은 기준으로 움직일 수 있도록 공지, FAQ, 긴급 대응, 수리 책임 범위를 명확하게 정리했습니다.
+        </p>
+        <div class="hero-actions">
+          <a class="action-btn primary" href="/pwa/">로그인 없이 바로 사용</a>
+          <a class="action-btn" href="#notices">공지 확인</a>
+          <a class="action-btn" href="#faqs">FAQ 보기</a>
+        </div>
+      </div>
+      <div class="hero-panel">
+        <article class="hero-stat">
+          <h3>24/7 안내 접근</h3>
+          <p>로그인 없이도 공지와 기본 운영 안내를 즉시 확인할 수 있습니다.</p>
+        </article>
+        <article class="hero-stat">
+          <h3>긴급 대응 우선</h3>
+          <p>화재, 정전, 가스, 누수 상황에서 필요한 연락 흐름을 첫 화면에 배치했습니다.</p>
+        </article>
+        <article class="hero-stat">
+          <h3>역할 구분 명확화</h3>
+          <p>공용시설 책임과 세대 내부 조치 범위를 구분해 문의 혼선을 줄입니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="surface">
+      <div class="section-head">
+        <h2>공용시설과 세대 내부 수리 구분</h2>
+        <p>
+          아파트 공용시설은 공동체 자산으로 관리사무소가 유지·보수 책임을 갖습니다. 세대 내부는 개인 생활영역으로,
+          관리사무소는 직접 수리 대신 사용 안내/조언 범위에서 지원합니다.
+        </p>
+      </div>
+      <div class="split-grid">
+        <article class="info-card">
+          <h3>공용(관리사무소 책임)</h3>
+          <ul class="bullet-list">
             <li>전기 수배전 설비, 소방시설, 비상발전</li>
             <li>급수·배수·저수조, 하수 처리, 정화조</li>
             <li>승강기, 주차 관리 장치, 경비 시스템</li>
             <li>외등·복도/계단등, 조경, 휴게소 등</li>
           </ul>
-        </div>
-        <div class="box">
-          <h3>세대 내부(개인)</h3>
-          <ul class="list">
+        </article>
+        <article class="info-card">
+          <h3>세대 내부(개인 책임)</h3>
+          <ul class="bullet-list">
             <li>전등/스위치/콘센트, 가구류</li>
             <li>변기/세면대/주방·욕실 기구</li>
             <li>개인 공간 내 경미 수리</li>
             <li>필요 시 전문업체/AS 이용</li>
           </ul>
-        </div>
+        </article>
       </div>
-      <div class="note">
+      <p class="inline-note">
         세대 방문은 소방시설 점검 또는 이웃 피해/정전·급수 시설 파손 등 긴급조치가 필요한 경우로 제한됩니다.
-      </div>
+      </p>
     </section>
 
-    <section class="card">
-      <h2>연락처/비상 대응</h2>
-      <div class="grid2">
-        <div class="box">
-          <h3>긴급 상황</h3>
-          <ul class="list">
-            <li>화재·구조·응급: 119</li>
-            <li>정전(한국전력): 123</li>
-            <li>가스 사고: 지역 도시가스 긴급번호</li>
-            <li>누수·침수: 관리사무소(단지 안내문 확인)</li>
+    <section class="surface">
+      <div class="section-head">
+        <h2>연락처 및 비상 대응</h2>
+        <p>긴급 상황은 즉시 신고를 우선하고, 단지 관련 문제는 관리사무소/운영 정책 채널로 문의해 주세요.</p>
+      </div>
+      <div class="split-grid">
+        <article class="info-card">
+          <h3>긴급 상황 연락</h3>
+          <ul class="contact-list">
+            <li><span>화재·구조·응급</span><strong>119</strong></li>
+            <li><span>정전(한국전력)</span><strong>123</strong></li>
+            <li><span>가스 사고</span><strong>지역 도시가스 긴급번호</strong></li>
+            <li><span>누수·침수</span><strong>관리사무소(단지 안내문)</strong></li>
           </ul>
-        </div>
-        <div class="box">
+        </article>
+        <article class="info-card">
           <h3>일반 문의</h3>
-          <ul class="list">
+          <ul class="bullet-list">
             <li>민원/주차/시설일지: 로그인 없이도 메인 화면에서 진입 가능</li>
             <li>계정 로그인 시 사용자별 식별/개인화 정보가 함께 적용</li>
             <li>운영 정책 문의: 최고관리자 또는 단지대표자에게 문의</li>
           </ul>
-        </div>
+        </article>
       </div>
-      <div class="note">
+      <p class="inline-note">
         이 화면은 공개 안내 페이지입니다. 메인 사용은 상단의 [로그인 없이 바로 사용] 버튼으로 이동할 수 있습니다.
-      </div>
+      </p>
     </section>
 
-    <section class="card">
-      <div class="headrow">
+    <section class="surface feed-surface" id="notices">
+      <div class="feed-head">
         <h2>공지</h2>
-        <a class="btn ghost" href="#faqs">FAQ로 이동</a>
+        <a class="action-btn" href="#faqs">FAQ로 이동</a>
       </div>
-      <div id="noticesMsg" class="msg"></div>
-      <div id="notices" class="stack" aria-live="polite"></div>
+      <div id="noticesMsg" class="feed-msg"></div>
+      <div id="noticesList" class="feed-stack" aria-live="polite"></div>
     </section>
 
-    <section class="card" id="faqs">
-      <div class="headrow">
+    <section class="surface feed-surface" id="faqs">
+      <div class="feed-head">
         <h2>FAQ</h2>
-        <a class="btn ghost" href="#top">위로</a>
+        <a class="action-btn" href="#top">위로</a>
       </div>
-      <div id="faqsMsg" class="msg"></div>
-      <div id="faqsList" class="stack" aria-live="polite"></div>
+      <div id="faqsMsg" class="feed-msg"></div>
+      <div id="faqsList" class="feed-stack" aria-live="polite"></div>
     </section>
   </main>
 
-  <footer class="foot">
-    <div class="foot-inner">
-      <div class="muted">로그인 없이도 메인 화면 접근이 가능합니다.</div>
+  <footer class="landing-foot">
+    <div class="foot-wrap">
+      <p class="foot-text">로그인 없이도 메인 화면 접근이 가능합니다.</p>
       <div class="foot-actions">
-        <a class="btn" href="/pwa/">로그인 없이 바로 사용</a>
-        <a class="btn ghost" href="/pwa/login.html">로그인</a>
+        <a class="action-btn primary" href="/pwa/">로그인 없이 바로 사용</a>
+        <a class="action-btn" href="/pwa/login.html">로그인</a>
       </div>
     </div>
   </footer>
 
-  <script src="/pwa/public.js?v=20260215a"></script>
+  <script src="/pwa/public.js?v=20260220b"></script>
 </body>
 </html>
 

@@ -410,4 +410,4 @@ _mount_parking_if_enabled()
 
 @app.get("/")
 def root():
-    return RedirectResponse(url="/pwa/")
+    return RedirectResponse(url="/pwa/public.html")
