@@ -31,7 +31,7 @@
   let baseSchema = {};
   let activeSchema = {};
   let handlingSiteCodeConflict = false;
-  const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnGoMain"];
+  const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnPreview", "btnGoMain"];
 
   function canManageSpecEnv(user) {
     return !!(user && (user.is_admin || user.is_site_admin));
@@ -1153,27 +1153,35 @@
   }
 
   async function previewSchema() {
+    if (!baseSchema || !Object.keys(baseSchema).length) {
+      await loadBaseSchema();
+    }
+
+    // Site identity sync is best-effort; preview itself should work without it.
     const rawSite = getSiteName();
     const rawSiteCode = getSiteCode();
     const rawSiteId = getSiteId();
-    if (!rawSite && !rawSiteCode && rawSiteId <= 0) {
-      setMsg("site_name 또는 site_code를 입력하세요.", true);
-      return;
+    if (rawSite || rawSiteCode || rawSiteId > 0) {
+      await syncSiteIdentity(true).catch(() => {});
     }
-    await syncSiteIdentity(true);
+
     const siteId = getSiteId();
     const site = getSiteName();
     const siteCode = getSiteCode();
-    if (!site && siteId <= 0) {
-      setMsg("site_name/site_id를 확인하세요.", true);
+
+    let cfg = {};
+    try {
+      cfg = compactConfig(getConfigFromEditor());
+    } catch (e) {
+      setMsg(`JSON 파싱 오류: ${e.message}`, true);
       return;
     }
-    const data = await jfetch(withSitePath("/api/schema", { site_name: site, site_code: siteCode, site_id: siteId }));
-    if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
-    if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
-    setActiveSchema(data.schema || {});
-    renderPreview({ site_name: site, site_code: data.site_code || siteCode, schema: data.schema || {} });
-    setMsg("미리보기를 갱신했습니다.");
+
+    const schema = applyConfigToSchema(baseSchema || {}, cfg || {});
+    setActiveSchema(schema);
+    renderPreview({ site_id: siteId, site_name: site, site_code: siteCode, schema });
+    markActionSuccess($("#btnPreview"), "✓");
+    setMsg("양식 미리보기를 갱신했습니다. (현재 편집 중인 JSON 기준)");
   }
 
   function wire() {
