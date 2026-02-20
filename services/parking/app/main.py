@@ -2353,6 +2353,10 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     const OCR_READY_TIMEOUT_MS = 12000;
     const OCR_READY_POLL_MS = 250;
     const OCR_SCRIPT_TIMEOUT_MS = 8000;
+    const OCR_AUTO_ROI_SCALE = 1.55;
+    const OCR_MANUAL_ROI_SCALE = 2.0;
+    const OCR_AUTO_ACCEPT_CONFIDENCE = 66;
+    const OCR_MANUAL_ACCEPT_CONFIDENCE = 58;
     const OCR_PLATE_WHITELIST = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ가나다라마바사아자차카타파하거너더러머버서어저처커터퍼허고노도로모보소오조초코토포호";
     const boot = window.__BOOT__ || {};
 
@@ -2541,6 +2545,97 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       return String(raw || "").replace(/[^0-9A-Za-z가-힣]/g, "").toUpperCase().trim();
     }
 
+    function normalizeDigitLikeChar(ch) {
+      const c = String(ch || "").trim().toUpperCase();
+      if (/^\d$/.test(c)) return c;
+      const map = {
+        O: "0",
+        Q: "0",
+        D: "0",
+        I: "1",
+        L: "1",
+        Z: "2",
+        S: "5",
+        B: "8",
+        G: "6",
+        T: "7",
+      };
+      return map[c] || "";
+    }
+
+    function normalizeMiddleChar(ch) {
+      const c = String(ch || "").trim().toUpperCase();
+      if (/^[가-힣A-Z]$/.test(c)) return c;
+      const map = {
+        "0": "O",
+        "1": "I",
+        "2": "Z",
+        "5": "S",
+        "6": "G",
+        "8": "B",
+      };
+      return map[c] || "";
+    }
+
+    function parseLoosePlateWindow(win, prefixLen) {
+      const txt = String(win || "");
+      if (!txt) return null;
+      const needLen = prefixLen + 1 + 4;
+      if (txt.length !== needLen) return null;
+
+      let penalty = 0;
+      let front = "";
+      for (let i = 0; i < prefixLen; i += 1) {
+        const raw = txt[i];
+        const d = normalizeDigitLikeChar(raw);
+        if (!d) return null;
+        if (d !== raw) penalty += 1;
+        front += d;
+      }
+
+      const rawMid = txt[prefixLen];
+      const mid = normalizeMiddleChar(rawMid);
+      if (!mid) return null;
+      if (mid !== rawMid) penalty += 2;
+      if (!/^[가-힣]$/.test(mid)) penalty += 1;
+
+      let rear = "";
+      for (let i = prefixLen + 1; i < txt.length; i += 1) {
+        const raw = txt[i];
+        const d = normalizeDigitLikeChar(raw);
+        if (!d) return null;
+        if (d !== raw) penalty += 1;
+        rear += d;
+      }
+
+      return { plate: `${front}${mid}${rear}`, penalty };
+    }
+
+    function findLoosePlate(raw) {
+      const txt = norm(raw);
+      if (!txt) return "";
+      const chunks = txt.match(/[0-9A-Z가-힣]{7,12}/g) || [];
+      if (!chunks.length) return "";
+
+      let best = null;
+      for (const chunk of chunks) {
+        for (const prefixLen of [3, 2]) {
+          const windowLen = prefixLen + 5;
+          if (chunk.length < windowLen) continue;
+          for (let i = 0; i <= (chunk.length - windowLen); i += 1) {
+            const parsed = parseLoosePlateWindow(chunk.slice(i, i + windowLen), prefixLen);
+            if (!parsed) continue;
+            const score = parsed.penalty;
+            if (!best || score < best.score) {
+              best = { plate: parsed.plate, score };
+            }
+            if (score <= 0) return parsed.plate;
+          }
+        }
+      }
+      return best ? best.plate : "";
+    }
+
     function findPlate(raw) {
       const txt = norm(raw);
       if (!txt) return "";
@@ -2548,7 +2643,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       if (ko && ko.length) return ko[0];
       const latin = txt.match(/\d{2,3}[A-Z]\d{4}/g);
       if (latin && latin.length) return latin[0];
-      return "";
+      return findLoosePlate(txt);
     }
 
     function setResult(kind, text) {
@@ -2665,7 +2760,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       return { x: sx, y: sy, w: sw, h: sh };
     }
 
-    function capturePlateRoiCanvas() {
+    function capturePlateRoiCanvas(scaleFactor = OCR_MANUAL_ROI_SCALE) {
       const w = Number(video.videoWidth || 0);
       const h = Number(video.videoHeight || 0);
       if ((video.readyState || 0) < 2 || w < 2 || h < 2) {
@@ -2686,10 +2781,11 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       const ry = roiRect.y;
       const rw = roiRect.w;
       const rh = roiRect.h;
+      const scale = Math.max(1, Number(scaleFactor) || OCR_MANUAL_ROI_SCALE);
 
       const roi = document.createElement("canvas");
-      roi.width = rw * 2;
-      roi.height = rh * 2;
+      roi.width = Math.max(2, Math.floor(rw * scale));
+      roi.height = Math.max(2, Math.floor(rh * scale));
       const rctx = roi.getContext("2d");
       rctx.imageSmoothingEnabled = false;
       rctx.drawImage(canvas, rx, ry, rw, rh, 0, 0, roi.width, roi.height);
@@ -2739,7 +2835,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       return { plate, confidence, pass: passName };
     }
 
-    async function runOcr() {
+    async function runOcr(source = "AUTO") {
       const ocrReady = await ensureOcrReady();
       if (!ocrReady) {
         throw new Error("OCR 엔진 로딩이 지연되고 있습니다. 네트워크 상태를 확인한 뒤 다시 시도하세요.");
@@ -2748,32 +2844,39 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       state.ocrBusy = true;
       try {
         setHint("번호판 영역을 즉시 분석 중...");
-        const roi = capturePlateRoiCanvas();
-        const variants = [
-          { pass: "raw", canvas: roi },
-          { pass: "bw", canvas: buildOcrVariant(roi, { invert: false }) },
-          { pass: "inv", canvas: buildOcrVariant(roi, { invert: true }) },
-        ];
+        const autoMode = String(source || "").trim().toUpperCase() === "AUTO";
+        const roi = capturePlateRoiCanvas(autoMode ? OCR_AUTO_ROI_SCALE : OCR_MANUAL_ROI_SCALE);
+        const passPlan = autoMode
+          ? [
+              { pass: "bw_fast", accept: OCR_AUTO_ACCEPT_CONFIDENCE, getCanvas: () => buildOcrVariant(roi, { invert: false }) },
+              { pass: "raw", accept: 72, getCanvas: () => roi },
+            ]
+          : [
+              { pass: "bw", accept: OCR_MANUAL_ACCEPT_CONFIDENCE, getCanvas: () => buildOcrVariant(roi, { invert: false }) },
+              { pass: "raw", accept: 68, getCanvas: () => roi },
+              { pass: "inv", accept: 74, getCanvas: () => buildOcrVariant(roi, { invert: true }) },
+            ];
+
         let bestPlate = "";
         let bestConfidence = -1;
         let bestPass = "";
 
-        for (const variant of variants) {
-          const r = await recognizePlateFromCanvas(variant.canvas, variant.pass);
+        for (const plan of passPlan) {
+          const r = await recognizePlateFromCanvas(plan.getCanvas(), plan.pass);
           if (!r.plate) continue;
           if (r.confidence > bestConfidence) {
             bestPlate = r.plate;
             bestConfidence = r.confidence;
             bestPass = r.pass;
           }
-          if (r.confidence >= 70) break;
+          if (r.confidence >= Number(plan.accept || 70)) break;
         }
 
         if (!bestPlate) {
           setHint("번호판을 찾지 못했습니다. 가이드 박스에 번호판을 맞춰주세요.");
           return "";
         }
-        setHint(`OCR 추출: ${bestPlate} (${bestPass})`);
+        setHint(`OCR 추출: ${bestPlate} (${bestPass}, ${Math.max(0, Math.round(bestConfidence))}%)`);
         return bestPlate;
       } finally {
         state.ocrBusy = false;
@@ -2807,7 +2910,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
 
     async function analyzeAndCheck(source) {
       await startCamera();
-      const plate = await runOcr();
+      const plate = await runOcr(source);
       if (!plate) {
         if (source === "AUTO") {
           state.autoScanNoPlateStreak = Number(state.autoScanNoPlateStreak || 0) + 1;
