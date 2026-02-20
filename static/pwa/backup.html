@@ -30,6 +30,7 @@
       <div id="targetList" class="target-list"></div>
       <div class="hint">최고/운영관리자는 대상 DB를 선택해 전체 또는 단지코드 범위 백업을 실행할 수 있습니다.</div>
       <div class="hint">단지관리자(단지대표자 포함)는 소속 단지코드 범위 백업만 실행/조회/다운로드할 수 있습니다.</div>
+      <div class="hint">단지대표자 백업은 논리백업(ZIP/JSON)만 허용되며 DB 파일 원본 복구는 최고관리자 승인 후 진행합니다.</div>
       <div class="hint">아파트 사용자관리 DB(사용자정보)는 최고/운영관리자만 백업/복구/다운로드할 수 있습니다.</div>
     </section>
 
@@ -61,6 +62,7 @@
       </div>
       <div id="scheduleInfo" class="hint"></div>
       <div class="hint">`backup_APT` 폴더가 없으면 안내 후 자동 생성합니다. (브라우저 지원 시)</div>
+      <div class="hint">다운로드 링크는 1회성으로 발급되며 기본 10분 후 만료됩니다.</div>
       <div id="msg" class="msg"></div>
     </section>
 
@@ -68,7 +70,7 @@
       <h2>백업 이력</h2>
       <div class="hint">최신 백업 파일을 내려받을 수 있습니다.</div>
       <div class="hint">최고/운영관리자는 전체(full) 또는 단지코드(site) 백업 파일 복구를 실행할 수 있습니다.</div>
-      <div class="hint">단지관리자(단지대표자 포함)는 본인 단지코드(site) 백업 파일 중 사용자정보가 제외된 파일만 복구할 수 있습니다.</div>
+      <div class="hint">단지대표자(단지관리자 포함)는 직접 복구할 수 없으며, 본인 단지코드 백업 파일에 대해 복구요청만 등록할 수 있습니다.</div>
       <div id="restoreUploadWrap" class="restore-upload">
         <label class="field grow">
           <span>PC/단말기 백업 ZIP 복구</span>
@@ -83,7 +85,7 @@
   <script src="/pwa/auth.js?v=20260218a"></script>
   <script src="/pwa/common_utils.js?v=20260220a"></script>
   <script src="/pwa/module_base.js?v=20260219a"></script>
-  <script src="/pwa/backup.js?v=20260220b"></script>
+  <script src="/pwa/backup.js?v=20260220c"></script>
 </body>
 </html>
 

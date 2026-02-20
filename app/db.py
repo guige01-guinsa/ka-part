@@ -4588,6 +4588,206 @@ def schema_alignment_report() -> Dict[str, Any]:
         con.close()
 
 
+def site_identity_consistency_report(*, limit: int = 200) -> Dict[str, Any]:
+    safe_limit = max(10, min(int(limit), 2000))
+    con = _connect()
+    con.row_factory = sqlite3.Row
+    try:
+        issues: List[Dict[str, Any]] = []
+
+        def _add(section: str, rows: List[sqlite3.Row], mapper) -> None:
+            for row in rows:
+                item = mapper(row)
+                if isinstance(item, dict):
+                    out = dict(item)
+                    out["section"] = section
+                    issues.append(out)
+
+        def _exists(table_name: str) -> bool:
+            row = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+                (str(table_name or "").strip(),),
+            ).fetchone()
+            return row is not None
+
+        if _exists("site_registry"):
+            rows_dup_code = con.execute(
+                """
+                SELECT
+                  REPLACE(REPLACE(UPPER(TRIM(COALESCE(site_code,''))), '-', ''), ' ', '') AS code_norm,
+                  COUNT(DISTINCT site_id) AS site_id_count,
+                  GROUP_CONCAT(DISTINCT site_id) AS site_ids,
+                  GROUP_CONCAT(DISTINCT site_name) AS site_names
+                FROM site_registry
+                WHERE site_code IS NOT NULL
+                  AND TRIM(site_code)<>''
+                  AND site_id IS NOT NULL
+                  AND site_id>0
+                GROUP BY code_norm
+                HAVING COUNT(DISTINCT site_id) > 1
+                ORDER BY code_norm ASC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+            _add(
+                "registry_duplicate_code",
+                rows_dup_code,
+                lambda r: {
+                    "site_code": str(r["code_norm"] or "").strip(),
+                    "site_id_count": int(r["site_id_count"] or 0),
+                    "site_ids": str(r["site_ids"] or ""),
+                    "site_names": str(r["site_names"] or ""),
+                },
+            )
+
+        if _exists("sites") and _exists("site_registry"):
+            rows_orphan_site = con.execute(
+                """
+                SELECT s.id AS site_id, s.name AS site_name
+                FROM sites s
+                LEFT JOIN site_registry r
+                  ON r.site_id=s.id
+                 AND r.site_code IS NOT NULL
+                 AND TRIM(r.site_code)<>''
+                WHERE r.id IS NULL
+                ORDER BY s.id ASC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+            _add(
+                "sites_without_registry_code",
+                rows_orphan_site,
+                lambda r: {
+                    "site_id": int(r["site_id"] or 0),
+                    "site_name": str(r["site_name"] or ""),
+                },
+            )
+
+        if _exists("staff_users") and _exists("site_registry"):
+            rows_staff_mismatch = con.execute(
+                """
+                WITH reg AS (
+                  SELECT site_id, MIN(site_code) AS site_code
+                  FROM site_registry
+                  WHERE site_id IS NOT NULL
+                    AND site_id>0
+                    AND site_code IS NOT NULL
+                    AND TRIM(site_code)<>''
+                  GROUP BY site_id
+                )
+                SELECT
+                  u.id AS user_id,
+                  u.login_id,
+                  u.site_id,
+                  u.site_name,
+                  u.site_code AS user_site_code,
+                  r.site_code AS expected_site_code
+                FROM staff_users u
+                JOIN reg r ON r.site_id=u.site_id
+                WHERE u.site_id IS NOT NULL
+                  AND u.site_id>0
+                  AND REPLACE(REPLACE(UPPER(TRIM(COALESCE(u.site_code,''))), '-', ''), ' ', '')
+                      <> REPLACE(REPLACE(UPPER(TRIM(COALESCE(r.site_code,''))), '-', ''), ' ', '')
+                ORDER BY u.id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+            _add(
+                "staff_users_code_mismatch",
+                rows_staff_mismatch,
+                lambda r: {
+                    "user_id": int(r["user_id"] or 0),
+                    "login_id": str(r["login_id"] or ""),
+                    "site_id": int(r["site_id"] or 0),
+                    "site_name": str(r["site_name"] or ""),
+                    "user_site_code": str(r["user_site_code"] or ""),
+                    "expected_site_code": str(r["expected_site_code"] or ""),
+                },
+            )
+
+            rows_staff_missing_site_id = con.execute(
+                """
+                SELECT id AS user_id, login_id, site_name, site_code
+                FROM staff_users
+                WHERE (site_id IS NULL OR site_id<=0)
+                  AND site_code IS NOT NULL
+                  AND TRIM(site_code)<>''
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+            _add(
+                "staff_users_missing_site_id",
+                rows_staff_missing_site_id,
+                lambda r: {
+                    "user_id": int(r["user_id"] or 0),
+                    "login_id": str(r["login_id"] or ""),
+                    "site_name": str(r["site_name"] or ""),
+                    "site_code": str(r["site_code"] or ""),
+                },
+            )
+
+        if _exists("site_env_configs") and _exists("site_registry"):
+            rows_env_mismatch = con.execute(
+                """
+                WITH reg AS (
+                  SELECT site_id, MIN(site_code) AS site_code
+                  FROM site_registry
+                  WHERE site_id IS NOT NULL
+                    AND site_id>0
+                    AND site_code IS NOT NULL
+                    AND TRIM(site_code)<>''
+                  GROUP BY site_id
+                )
+                SELECT
+                  e.id AS env_id,
+                  e.site_id,
+                  e.site_name,
+                  e.site_code AS env_site_code,
+                  r.site_code AS expected_site_code
+                FROM site_env_configs e
+                JOIN reg r ON r.site_id=e.site_id
+                WHERE e.site_id IS NOT NULL
+                  AND e.site_id>0
+                  AND REPLACE(REPLACE(UPPER(TRIM(COALESCE(e.site_code,''))), '-', ''), ' ', '')
+                      <> REPLACE(REPLACE(UPPER(TRIM(COALESCE(r.site_code,''))), '-', ''), ' ', '')
+                ORDER BY e.id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+            _add(
+                "site_env_code_mismatch",
+                rows_env_mismatch,
+                lambda r: {
+                    "env_id": int(r["env_id"] or 0),
+                    "site_id": int(r["site_id"] or 0),
+                    "site_name": str(r["site_name"] or ""),
+                    "env_site_code": str(r["env_site_code"] or ""),
+                    "expected_site_code": str(r["expected_site_code"] or ""),
+                },
+            )
+
+        section_counts: Dict[str, int] = {}
+        for item in issues:
+            key = str(item.get("section") or "")
+            section_counts[key] = int(section_counts.get(key) or 0) + 1
+
+        return {
+            "ok": len(issues) == 0,
+            "issue_count": len(issues),
+            "limit": safe_limit,
+            "section_counts": section_counts,
+            "issues": issues,
+        }
+    finally:
+        con.close()
+
+
 def list_staff_users(*, active_only: bool = False) -> List[Dict[str, Any]]:
     con = _connect()
     try:

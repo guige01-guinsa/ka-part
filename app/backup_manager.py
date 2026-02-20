@@ -720,6 +720,7 @@ def _metadata_base(
     trigger: str,
     actor: str,
     target_items: List[Dict[str, Any]],
+    site_id: int = 0,
     site_code: str = "",
     site_name: str = "",
     maintenance_enabled: bool = False,
@@ -735,6 +736,7 @@ def _metadata_base(
         "trigger_label": _trigger_label(trigger),
         "actor": actor,
         "created_at": created_at,
+        "site_id": int(site_id or 0),
         "site_code": site_code,
         "site_name": site_name,
         "target_keys": [str(x["key"]) for x in target_items],
@@ -866,6 +868,7 @@ def _run_site_backup(
     target_items: List[Dict[str, Any]],
     trigger: str,
     actor: str,
+    site_id: int,
     site_code: str,
     site_name: str,
     include_user_tables: bool,
@@ -883,6 +886,7 @@ def _run_site_backup(
         trigger=trigger,
         actor=actor,
         target_items=target_items,
+        site_id=int(site_id or 0),
         site_code=clean_code,
         site_name=clean_name,
         maintenance_enabled=False,
@@ -929,6 +933,7 @@ def run_manual_backup(
     trigger: str = "manual",
     target_keys: Iterable[str] | None = None,
     scope: str = "full",
+    site_id: int = 0,
     site_code: str = "",
     site_name: str = "",
     with_maintenance: bool = False,
@@ -938,10 +943,17 @@ def run_manual_backup(
     if clean_scope not in {"full", "site"}:
         raise ValueError("scope must be 'full' or 'site'")
     if clean_scope == "site":
+        try:
+            clean_site_id = int(site_id or 0)
+        except Exception as e:
+            raise ValueError("site_id must be integer") from e
+        if clean_site_id < 0:
+            raise ValueError("site_id must be positive")
         clean_site_code = str(site_code or "").strip().upper()
         if not clean_site_code:
             raise ValueError("site_code is required for site backup")
     else:
+        clean_site_id = 0
         clean_site_code = ""
 
     selected = _resolve_selected_targets(target_keys, clean_scope)
@@ -963,6 +975,7 @@ def run_manual_backup(
             target_items=selected,
             trigger=trigger,
             actor=actor,
+            site_id=clean_site_id,
             site_code=clean_site_code,
             site_name=str(site_name or "").strip(),
             include_user_tables=bool(include_user_tables),
@@ -1540,7 +1553,7 @@ def list_backup_history(
             if str(item.get("site_code") or "").strip().upper() != clean_code:
                 continue
         out.append(item)
-    safe_limit = max(1, min(int(limit), 200))
+    safe_limit = max(1, min(int(limit), 5000))
     return out[:safe_limit]
 
 

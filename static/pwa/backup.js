@@ -166,7 +166,7 @@
 
     applySiteIdentityVisibility();
     if (!KAUtil.canViewSiteIdentity(me)) KAUtil.stripSiteIdentityFromUrl();
-    $("#restoreUploadWrap")?.classList.toggle("hidden", !canManageBackup(me));
+    $("#restoreUploadWrap")?.classList.toggle("hidden", !isAdmin(me));
   }
 
   function renderScheduleInfo(schedules) {
@@ -184,12 +184,25 @@
     el.innerHTML = `${body}${tz}`;
   }
 
+  async function issueDownloadLink(path) {
+    const safePath = String(path || "").trim();
+    if (!safePath) throw new Error("다운로드 경로가 없습니다.");
+    const data = await KAUtil.authJson("/api/backup/download/request", {
+      method: "POST",
+      body: JSON.stringify({ path: safePath }),
+    });
+    const download = data && data.download ? data.download : {};
+    const url = String(download.url || "").trim();
+    if (!url) throw new Error("다운로드 링크 발급에 실패했습니다.");
+    return { ...download, url };
+  }
+
   async function fetchBackupBlob(path) {
+    const issued = await issueDownloadLink(path);
     const token = KAAuth.getToken();
     const headers = {};
     if (token) headers.Authorization = `Bearer ${token}`;
-    const url = `/api/backup/download?path=${encodeURIComponent(path)}`;
-    const res = await fetch(url, { headers });
+    const res = await fetch(String(issued.url || ""), { headers });
     if (res.status === 401) {
       KAAuth.clearSession();
       KAAuth.redirectLogin("/pwa/backup.html");
@@ -286,14 +299,16 @@
     const mySiteCode = String(me?.site_code || "").trim().toUpperCase();
     const itemSiteCode = String(item.site_code || "").trim().toUpperCase();
     const canDownloadItem = isAdmin(me) || !hasUserData;
-    const canRestoreItem = isAdmin(me)
-      ? (rawScope === "full" || rawScope === "site")
-      : (!hasUserData && rawScope === "site" && mySiteCode && itemSiteCode === mySiteCode);
+    const canRestoreItem = isAdmin(me) && (rawScope === "full" || rawScope === "site");
+    const canRestoreRequestItem = !isAdmin(me) && !hasUserData && rawScope === "site" && mySiteCode && itemSiteCode === mySiteCode;
     const downloadBtn = canDownloadItem
       ? `<button class="btn" type="button" data-download="${rel}">다운로드</button>`
       : "";
     const restoreBtn = canRestoreItem
       ? `<button class="btn danger" type="button" data-restore="${rel}" data-restore-scope="${escapeHtml(rawScope)}">복구</button>`
+      : "";
+    const restoreRequestBtn = canRestoreRequestItem
+      ? `<button class="btn" type="button" data-restore-request="${rel}">복구요청</button>`
       : "";
     const userDataTag = hasUserData ? `<span class="tag">사용자정보 포함(관리자 전용)</span>` : "";
     return `
@@ -304,6 +319,7 @@
             <span class="tag">${scope}</span>
             ${userDataTag}
             ${downloadBtn}
+            ${restoreRequestBtn}
             ${restoreBtn}
           </div>
         </div>
@@ -429,7 +445,8 @@
       return;
     }
     if (!isAdmin(me)) {
-      setMsg("단지관리자는 본인 단지코드(site) 백업 파일만 복구할 수 있습니다.");
+      setMsg("단지대표자는 직접 복구할 수 없습니다. 복구요청을 이용하세요.", true);
+      return;
     }
     const fileEl = $("#restoreFile");
     const file = fileEl?.files?.[0];
@@ -480,6 +497,34 @@
     setMsg(parts.join(" / "));
     if (fileEl) fileEl.value = "";
     await Promise.all([loadHistory(), refreshStatus()]);
+  }
+
+  async function requestRestore(path) {
+    const safePath = String(path || "").trim();
+    if (!safePath) {
+      setMsg("복구 요청 대상 경로가 없습니다.", true);
+      return;
+    }
+    if (isAdmin(me)) {
+      setMsg("관리자는 복구 요청 없이 직접 복구를 실행할 수 있습니다.");
+      return;
+    }
+    const reasonRaw = window.prompt("복구 요청 사유를 입력하세요.", "단지 운영 데이터 복구 요청");
+    if (reasonRaw === null) return;
+    const reason = String(reasonRaw || "").trim();
+    setMsg("복구 요청 등록 중입니다...");
+    const data = await KAUtil.authJson("/api/backup/restore/request", {
+      method: "POST",
+      body: JSON.stringify({
+        path: safePath,
+        reason,
+      }),
+    });
+    const req = data && data.request ? data.request : {};
+    const reqId = Number(req.id || 0);
+    const status = String(req.status || "pending");
+    setMsg(`복구 요청이 등록되었습니다. 요청번호: ${reqId > 0 ? reqId : "-"} / 상태: ${status}`);
+    await loadHistory();
   }
 
   async function downloadBackup(path) {
@@ -536,11 +581,18 @@
         return;
       }
       const restoreBtn = e.target.closest("button[data-restore]");
-      if (!restoreBtn) return;
-      const path = String(restoreBtn.dataset.restore || "").trim();
-      const scope = String(restoreBtn.dataset.restoreScope || "").trim().toLowerCase();
+      if (restoreBtn) {
+        const path = String(restoreBtn.dataset.restore || "").trim();
+        const scope = String(restoreBtn.dataset.restoreScope || "").trim().toLowerCase();
+        if (!path) return;
+        restoreBackup(path, scope).catch((err) => setMsg(err.message || String(err), true));
+        return;
+      }
+      const requestBtn = e.target.closest("button[data-restore-request]");
+      if (!requestBtn) return;
+      const path = String(requestBtn.dataset.restoreRequest || "").trim();
       if (!path) return;
-      restoreBackup(path, scope).catch((err) => setMsg(err.message || String(err), true));
+      requestRestore(path).catch((err) => setMsg(err.message || String(err), true));
     });
   }
 

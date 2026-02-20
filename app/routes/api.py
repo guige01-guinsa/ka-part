@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Tuple
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from itsdangerous import URLSafeTimedSerializer
 
 from ..backup_manager import (
@@ -53,7 +53,6 @@ from ..db import (
     delete_entry,
     delete_site_env_config,
     delete_staff_user,
-    ensure_site,
     find_site_code_by_id,
     get_auth_user_by_token,
     get_privileged_change_request,
@@ -92,6 +91,7 @@ from ..db import (
     rollback_site_env_config_version,
     save_tab_values,
     schema_alignment_report,
+    site_identity_consistency_report,
     set_staff_user_site_code,
     set_staff_user_password,
     touch_signup_phone_verification_attempt,
@@ -190,6 +190,8 @@ BACKUP_RESTORE_UPLOAD_MAX_BYTES = max(
     10 * 1024 * 1024,
     int(os.getenv("KA_BACKUP_RESTORE_UPLOAD_MAX_BYTES", str(1024 * 1024 * 1024))),
 )
+_BACKUP_DOWNLOAD_TOKEN_LOCK = threading.Lock()
+_BACKUP_DOWNLOAD_TOKENS: Dict[str, Dict[str, Any]] = {}
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -213,6 +215,9 @@ AUTH_COOKIE_SECURE = _env_enabled("KA_AUTH_COOKIE_SECURE", True)
 AUTH_COOKIE_MAX_AGE = _safe_int_env("KA_AUTH_COOKIE_MAX_AGE", 43200, 300)
 SITE_CODE_AUTOCREATE_NON_ADMIN = _env_enabled("KA_SITE_CODE_AUTOCREATE_NON_ADMIN", False)
 ALLOW_QUERY_ACCESS_TOKEN = _env_enabled("KA_ALLOW_QUERY_ACCESS_TOKEN", False)
+BACKUP_DOWNLOAD_LINK_TTL_SEC = _safe_int_env("KA_BACKUP_DOWNLOAD_LINK_TTL_SEC", 600, 60)
+BACKUP_SITE_DAILY_MAX_RUNS = _safe_int_env("KA_BACKUP_SITE_DAILY_MAX_RUNS", 5, 0)
+BACKUP_SITE_DAILY_MAX_BYTES = _safe_int_env("KA_BACKUP_SITE_DAILY_MAX_BYTES", 2 * 1024 * 1024 * 1024, 0)
 if AUTH_COOKIE_SAMESITE == "none":
     # Modern browsers require Secure when SameSite=None.
     AUTH_COOKIE_SECURE = True
@@ -1941,6 +1946,211 @@ def _can_manage_backup(user: Dict[str, Any]) -> bool:
     return _permission_level_from_user(user) in {"admin", "site_admin"}
 
 
+def _user_site_identity(user: Dict[str, Any]) -> Dict[str, Any]:
+    clean_code = _clean_site_code(user.get("site_code"), required=False)
+    clean_name = str(user.get("site_name") or "").strip()
+    clean_site_id = _clean_site_id(user.get("site_id"), required=False)
+    if clean_site_id <= 0 and clean_code:
+        try:
+            resolved = resolve_site_identity(
+                site_code=clean_code,
+                site_name=clean_name,
+                create_site_if_missing=False,
+            )
+        except Exception:
+            resolved = {}
+        clean_site_id = _clean_site_id((resolved or {}).get("site_id"), required=False)
+        if not clean_name:
+            clean_name = str((resolved or {}).get("site_name") or "").strip()
+    if not clean_code and clean_site_id > 0:
+        clean_code = _clean_site_code(find_site_code_by_id(clean_site_id), required=False)
+    return {
+        "site_id": int(clean_site_id or 0),
+        "site_code": clean_code,
+        "site_name": clean_name,
+    }
+
+
+def _site_id_from_identity(site_code: Any, site_name: Any = "") -> int:
+    clean_code = _clean_site_code(site_code, required=False)
+    if not clean_code:
+        return 0
+    try:
+        resolved = resolve_site_identity(
+            site_code=clean_code,
+            site_name=str(site_name or "").strip(),
+            create_site_if_missing=False,
+        )
+    except Exception:
+        return 0
+    return _clean_site_id((resolved or {}).get("site_id"), required=False)
+
+
+def _site_backup_usage_today(site_code: str) -> Dict[str, Any]:
+    clean_code = _clean_site_code(site_code, required=False)
+    today = datetime.now().strftime("%Y-%m-%d")
+    if not clean_code:
+        return {"date": today, "runs": 0, "size_bytes": 0}
+
+    history = list_backup_history(limit=5000, scope="site", site_code=clean_code)
+    runs = 0
+    size_bytes = 0
+    for item in history:
+        created_at = str(item.get("created_at") or "").strip()
+        if len(created_at) < 10 or created_at[:10] != today:
+            continue
+        runs += 1
+        try:
+            size_bytes += max(0, int(item.get("file_size_bytes") or 0))
+        except Exception:
+            pass
+    return {"date": today, "runs": runs, "size_bytes": size_bytes}
+
+
+def _enforce_site_backup_daily_limits(site_code: str) -> Dict[str, Any]:
+    usage = _site_backup_usage_today(site_code)
+    max_runs = int(BACKUP_SITE_DAILY_MAX_RUNS or 0)
+    max_bytes = int(BACKUP_SITE_DAILY_MAX_BYTES or 0)
+    if max_runs > 0 and int(usage.get("runs") or 0) >= max_runs:
+        raise HTTPException(
+            status_code=429,
+            detail=f"일일 백업 횟수 제한({max_runs}회)에 도달했습니다. 내일 다시 시도해 주세요.",
+        )
+    if max_bytes > 0 and int(usage.get("size_bytes") or 0) >= max_bytes:
+        raise HTTPException(
+            status_code=429,
+            detail=f"일일 백업 용량 제한({max_bytes} bytes)에 도달했습니다. 내일 다시 시도해 주세요.",
+        )
+    return usage
+
+
+def _prune_backup_download_tokens_locked(now_ts: float | None = None) -> None:
+    cutoff = float(now_ts if now_ts is not None else time.time())
+    stale = [
+        token
+        for token, payload in _BACKUP_DOWNLOAD_TOKENS.items()
+        if float(payload.get("expires_at_ts") or 0.0) <= cutoff
+    ]
+    for token in stale:
+        _BACKUP_DOWNLOAD_TOKENS.pop(token, None)
+
+
+def _issue_backup_download_token(*, user: Dict[str, Any], relative_path: str) -> Dict[str, Any]:
+    clean_rel = str(relative_path or "").strip().replace("\\", "/")
+    if not clean_rel:
+        raise HTTPException(status_code=400, detail="path is required")
+    now_ts = time.time()
+    expires_at_ts = now_ts + float(BACKUP_DOWNLOAD_LINK_TTL_SEC)
+    token = secrets.token_urlsafe(32)
+    with _BACKUP_DOWNLOAD_TOKEN_LOCK:
+        _prune_backup_download_tokens_locked(now_ts)
+        _BACKUP_DOWNLOAD_TOKENS[token] = {
+            "relative_path": clean_rel,
+            "user_id": int(user.get("id") or 0),
+            "actor_login": _clean_login_id(user.get("login_id") or ""),
+            "issued_at_ts": now_ts,
+            "expires_at_ts": expires_at_ts,
+        }
+    expires_at = datetime.fromtimestamp(expires_at_ts).replace(microsecond=0).isoformat(sep=" ")
+    return {
+        "token": token,
+        "url": f"/api/backup/download?token={urllib.parse.quote(token)}",
+        "expires_in_sec": int(BACKUP_DOWNLOAD_LINK_TTL_SEC),
+        "expires_at": expires_at,
+    }
+
+
+def _consume_backup_download_token(*, user: Dict[str, Any], token: str) -> Dict[str, Any]:
+    clean_token = str(token or "").strip()
+    if not clean_token:
+        raise HTTPException(status_code=400, detail="token is required")
+
+    now_ts = time.time()
+    with _BACKUP_DOWNLOAD_TOKEN_LOCK:
+        _prune_backup_download_tokens_locked(now_ts)
+        payload = _BACKUP_DOWNLOAD_TOKENS.pop(clean_token, None)
+
+    if not payload:
+        raise HTTPException(status_code=410, detail="다운로드 링크가 만료되었거나 이미 사용되었습니다.")
+    if float(payload.get("expires_at_ts") or 0.0) <= now_ts:
+        raise HTTPException(status_code=410, detail="다운로드 링크가 만료되었습니다.")
+
+    expected_user_id = int(payload.get("user_id") or 0)
+    if expected_user_id > 0 and expected_user_id != int(user.get("id") or 0):
+        raise HTTPException(status_code=403, detail="발급받은 사용자만 다운로드할 수 있습니다.")
+
+    expected_login = str(payload.get("actor_login") or "").strip().lower()
+    actor_login = _clean_login_id(user.get("login_id") or "")
+    if expected_login and actor_login and expected_login != actor_login:
+        raise HTTPException(status_code=403, detail="발급받은 사용자만 다운로드할 수 있습니다.")
+
+    return payload
+
+
+def _resolve_backup_item_permission(
+    *,
+    user: Dict[str, Any],
+    item: Dict[str, Any],
+    requested_path: str = "",
+) -> Dict[str, Any]:
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+
+    rel = str(item.get("relative_path") or requested_path or "").strip()
+    if not rel:
+        raise HTTPException(status_code=400, detail="backup path is required")
+
+    manifest: Dict[str, Any] = {}
+    try:
+        manifest = _validate_uploaded_restore_backup(rel)
+    except HTTPException:
+        # Sidecar metadata only file can still be downloaded by admin.
+        if int(user.get("is_admin") or 0) != 1:
+            raise
+        manifest = {}
+
+    item_scope = str(item.get("scope") or manifest.get("scope") or "").strip().lower()
+    item_code = _clean_site_code(item.get("site_code"), required=False) or _clean_site_code(manifest.get("site_code"), required=False)
+    item_name = str(item.get("site_name") or manifest.get("site_name") or "").strip()
+    contains_user_data = bool(item.get("contains_user_data")) or bool(manifest.get("contains_user_data"))
+    if not item_scope:
+        item_scope = "site" if item_code else "full"
+
+    is_admin = int(user.get("is_admin") or 0) == 1
+    if not is_admin:
+        assigned = _user_site_identity(user)
+        assigned_code = str(assigned.get("site_code") or "").strip().upper()
+        assigned_site_id = int(assigned.get("site_id") or 0)
+        if not assigned_code:
+            raise HTTPException(status_code=403, detail="소속 단지코드가 없어 다운로드할 수 없습니다.")
+        if item_scope != "site":
+            raise HTTPException(status_code=403, detail="소속 단지코드 백업파일만 다운로드할 수 있습니다.")
+        if not item_code:
+            raise HTTPException(status_code=400, detail="백업 파일에 단지코드(site_code)가 없습니다.")
+        if item_code != assigned_code:
+            raise HTTPException(status_code=403, detail="소속 단지코드 백업파일만 다운로드할 수 있습니다.")
+        if contains_user_data:
+            raise HTTPException(status_code=403, detail="사용자정보 포함 백업파일은 최고/운영관리자만 다운로드할 수 있습니다.")
+
+        if assigned_site_id > 0:
+            item_site_id = _clean_site_id(item.get("site_id"), required=False)
+            if item_site_id <= 0:
+                item_site_id = _clean_site_id(manifest.get("site_id"), required=False)
+            if item_site_id <= 0:
+                item_site_id = _site_id_from_identity(item_code, item_name)
+            if item_site_id > 0 and item_site_id != assigned_site_id:
+                raise HTTPException(status_code=403, detail="소속 단지(site_id) 백업파일만 다운로드할 수 있습니다.")
+
+    return {
+        "relative_path": rel,
+        "scope": item_scope,
+        "site_code": item_code,
+        "site_name": item_name,
+        "contains_user_data": contains_user_data,
+        "manifest": manifest,
+    }
+
+
 def _store_uploaded_restore_backup(upload: UploadFile, actor_login: str) -> Dict[str, Any]:
     if upload is None:
         raise HTTPException(status_code=400, detail="backup_file is required")
@@ -2091,21 +2301,10 @@ def _enforce_restore_permission(user: Dict[str, Any], manifest: Dict[str, Any]) 
     if is_admin:
         return
 
-    scope = str(manifest.get("scope") or "").strip().lower() or "full"
-    if scope != "site":
-        raise HTTPException(status_code=403, detail="단지관리자는 단지코드(site) 백업만 복구할 수 있습니다.")
-    if bool(manifest.get("contains_user_data")):
-        raise HTTPException(status_code=403, detail="사용자정보 포함 백업파일은 최고/운영관리자만 복구할 수 있습니다.")
-
-    assigned_code = _clean_site_code(user.get("site_code"), required=False)
-    if not assigned_code:
-        raise HTTPException(status_code=403, detail="소속 단지코드가 없어 복구할 수 없습니다.")
-
-    backup_code = _clean_site_code(manifest.get("site_code"), required=False)
-    if not backup_code:
-        raise HTTPException(status_code=400, detail="복구 파일에 단지코드(site_code)가 없습니다.")
-    if backup_code != assigned_code:
-        raise HTTPException(status_code=403, detail="소속 단지코드 백업파일만 복구할 수 있습니다.")
+    raise HTTPException(
+        status_code=403,
+        detail="단지대표자는 직접 복구할 수 없습니다. 복구 요청을 등록하고 최고관리자 승인을 받으세요.",
+    )
 
 
 def _home_only_site_env_config() -> Dict[str, Any]:
@@ -2199,6 +2398,24 @@ def _resolve_main_site_target(
     *,
     required: bool = False,
 ) -> Tuple[str, str]:
+    ident = _resolve_main_site_identity(
+        user,
+        requested_site_name,
+        requested_site_code,
+        requested_site_id,
+        required=required,
+    )
+    return str(ident.get("site_name") or ""), str(ident.get("site_code") or "")
+
+
+def _resolve_main_site_identity(
+    user: Dict[str, Any],
+    requested_site_name: Any,
+    requested_site_code: Any,
+    requested_site_id: Any = 0,
+    *,
+    required: bool = False,
+) -> Dict[str, Any]:
     clean_site_name, clean_site_code = _resolve_site_identity_for_main(
         user,
         requested_site_name,
@@ -2248,7 +2465,29 @@ def _resolve_main_site_target(
     if required and not clean_site_name:
         raise HTTPException(status_code=400, detail="site_name 또는 site_code를 확인하세요.")
 
-    return clean_site_name, clean_site_code
+    allow_create_site = int(user.get("is_admin") or 0) == 1 and _is_super_admin(user)
+    resolved = resolve_site_identity(
+        site_name=clean_site_name,
+        site_code=clean_site_code,
+        create_site_if_missing=bool(allow_create_site),
+    )
+    resolved_site_id = _clean_site_id((resolved or {}).get("site_id"), required=False)
+    resolved_site_name = _clean_site_name((resolved or {}).get("site_name"), required=False)
+    resolved_site_code = _clean_site_code((resolved or {}).get("site_code"), required=False)
+
+    if resolved_site_name:
+        clean_site_name = resolved_site_name
+    if resolved_site_code:
+        clean_site_code = resolved_site_code
+
+    if required and (not clean_site_name or resolved_site_id <= 0):
+        raise HTTPException(status_code=404, detail="단지 식별정보(site_id/site_code)를 확인하세요.")
+
+    return {
+        "site_id": int(resolved_site_id or 0),
+        "site_name": clean_site_name,
+        "site_code": clean_site_code,
+    }
 
 
 @router.get("/health")
@@ -2279,15 +2518,16 @@ def parking_context(
         requested_site_code = str(user.get("site_code") or "").strip().upper()
         requested_site_id = _clean_site_id(user.get("site_id"), required=False)
 
-    clean_site_name, clean_site_code = _resolve_main_site_target(
+    site_ident = _resolve_main_site_identity(
         user,
         requested_site_name,
         requested_site_code,
         requested_site_id,
         required=False,
     )
-    clean_site_name = _clean_site_name(clean_site_name, required=False)
-    clean_site_code = _clean_site_code(clean_site_code, required=False)
+    clean_site_name = _clean_site_name(site_ident.get("site_name"), required=False)
+    clean_site_code = _clean_site_code(site_ident.get("site_code"), required=False)
+    resolved_site_id = _clean_site_id(site_ident.get("site_id"), required=False)
 
     if clean_site_code and not clean_site_name:
         mapped = find_site_name_by_code(clean_site_code)
@@ -2329,12 +2569,13 @@ def parking_context(
     if uid > 0 and not is_admin_user and not user_site_code:
         set_staff_user_site_code(uid, clean_site_code)
 
-    resolved_identity = resolve_site_identity(
-        site_name=clean_site_name,
-        site_code=clean_site_code,
-        create_site_if_missing=False,
-    )
-    resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
+    if resolved_site_id <= 0:
+        resolved_identity = resolve_site_identity(
+            site_name=clean_site_name,
+            site_code=clean_site_code,
+            create_site_if_missing=False,
+        )
+        resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
 
     serializer = URLSafeTimedSerializer(_parking_context_secret(), salt="parking-context")
     ctx = serializer.dumps(
@@ -2368,9 +2609,12 @@ def parking_context(
 @router.get("/schema")
 def api_schema(request: Request, site_name: str = Query(default=""), site_code: str = Query(default="")):
     user, _token = _require_auth(request)
-    clean_site_name, resolved_site_code = _resolve_main_site_target(
+    site_ident = _resolve_main_site_identity(
         user, site_name, site_code, required=False
     )
+    clean_site_name = str(site_ident.get("site_name") or "")
+    resolved_site_code = str(site_ident.get("site_code") or "")
+    resolved_site_id = int(site_ident.get("site_id") or 0)
     schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
 
     # On first login for the first site registrant, show only the Home tab
@@ -2384,7 +2628,13 @@ def api_schema(request: Request, site_name: str = Query(default=""), site_code: 
                 site_env_config=merge_site_env_configs(default_site_env_config(), env_cfg),
             )
 
-    return {"schema": schema, "site_name": clean_site_name, "site_code": resolved_site_code, "site_env_config": env_cfg}
+    return {
+        "schema": schema,
+        "site_id": resolved_site_id,
+        "site_name": clean_site_name,
+        "site_code": resolved_site_code,
+        "site_env_config": env_cfg,
+    }
 
 
 @router.get("/schema_alignment")
@@ -2482,21 +2732,11 @@ def api_site_identity(
     site_id: int = Query(default=0),
 ):
     user, _token = _require_auth(request)
-    clean_site_name, clean_site_code = _resolve_site_identity_for_main(user, site_name, site_code, site_id)
+    ident = _resolve_main_site_identity(user, site_name, site_code, site_id, required=False)
+    clean_site_name = str(ident.get("site_name") or "")
+    clean_site_code = str(ident.get("site_code") or "")
+    resolved_site_id = int(ident.get("site_id") or 0)
     admin_scope = _admin_scope_from_user(user)
-    resolved = resolve_site_identity(
-        site_id=_clean_site_id(site_id, required=False),
-        site_name=clean_site_name,
-        site_code=clean_site_code,
-        create_site_if_missing=False,
-    )
-    canonical_name = _clean_site_name(resolved.get("site_name"), required=False)
-    canonical_code = _clean_site_code(resolved.get("site_code"), required=False)
-    if canonical_name:
-        clean_site_name = canonical_name
-    if canonical_code:
-        clean_site_code = canonical_code
-    resolved_site_id = _clean_site_id(resolved.get("site_id"), required=False)
     if resolved_site_id <= 0:
         try:
             parsed = int(user.get("site_id") or 0)
@@ -2512,6 +2752,16 @@ def api_site_identity(
         "site_code_editable": admin_scope == "super_admin",
         "admin_scope": admin_scope,
     }
+
+
+@router.get("/site_identity/diagnostics")
+def api_site_identity_diagnostics(
+    request: Request,
+    limit: int = Query(default=200),
+):
+    _require_admin(request)
+    report = site_identity_consistency_report(limit=max(10, min(int(limit), 2000)))
+    return {"ok": True, "report": report}
 
 
 def _site_registry_request_status_label(status: str) -> str:
@@ -3508,12 +3758,19 @@ def api_site_code_migration_execute(request: Request, payload: Dict[str, Any] = 
 @router.get("/backup/status")
 def api_backup_status(request: Request):
     user, _token = _require_auth(request)
+    is_admin = int(user.get("is_admin") or 0) == 1
     return {
         "ok": True,
         "timezone": backup_timezone_name(),
         "maintenance": get_maintenance_status(),
         "can_manage_backup": _can_manage_backup(user),
+        "can_restore_direct": is_admin,
         "permission_level": _permission_level_from_user(user),
+        "download_link_ttl_sec": int(BACKUP_DOWNLOAD_LINK_TTL_SEC),
+        "site_daily_limits": {
+            "max_runs": int(BACKUP_SITE_DAILY_MAX_RUNS),
+            "max_bytes": int(BACKUP_SITE_DAILY_MAX_BYTES),
+        },
         "schedules": [
             {"key": "daily_full", "label": "전체 시스템 DB 자동백업", "when": f"매일 00:00 ({backup_timezone_name()})"},
             {"key": "weekly_site", "label": "단지관리자 단지코드 자동백업", "when": f"매주 금요일 00:20 ({backup_timezone_name()})"},
@@ -3528,8 +3785,10 @@ def api_backup_options(request: Request):
         raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
 
     is_admin = int(user.get("is_admin") or 0) == 1
-    site_code = _clean_site_code(user.get("site_code"), required=False)
-    site_name = _clean_site_name(user.get("site_name"), required=False)
+    assigned = _user_site_identity(user)
+    site_id = int(assigned.get("site_id") or 0)
+    site_code = _clean_site_code(assigned.get("site_code"), required=False)
+    site_name = _clean_site_name(assigned.get("site_name"), required=False)
     targets = list_backup_targets()
     if not is_admin:
         if not site_code:
@@ -3539,8 +3798,15 @@ def api_backup_options(request: Request):
     return {
         "ok": True,
         "is_admin": is_admin,
+        "site_id": int(site_id or 0),
         "site_code": site_code,
         "site_name": site_name,
+        "can_restore_direct": is_admin,
+        "download_link_ttl_sec": int(BACKUP_DOWNLOAD_LINK_TTL_SEC),
+        "site_daily_limits": {
+            "max_runs": int(BACKUP_SITE_DAILY_MAX_RUNS),
+            "max_bytes": int(BACKUP_SITE_DAILY_MAX_BYTES),
+        },
         "allowed_scopes": ["full", "site"] if is_admin else ["site"],
         "targets": targets,
     }
@@ -3550,6 +3816,13 @@ def api_backup_options(request: Request):
 def api_backup_run(request: Request, payload: Dict[str, Any] = Body(default={})):
     user, _token = _require_auth(request)
     if not _can_manage_backup(user):
+        _audit_security(
+            user=user,
+            event_type="backup_run",
+            severity="WARN",
+            outcome="denied",
+            detail={"reason": "permission_denied"},
+        )
         raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
 
     is_admin = int(user.get("is_admin") or 0) == 1
@@ -3580,16 +3853,48 @@ def api_backup_run(request: Request, payload: Dict[str, Any] = Body(default={}))
     if not selected_keys:
         raise HTTPException(status_code=400, detail="선택 가능한 백업 대상이 없습니다.")
 
+    usage_before: Dict[str, Any] = {}
+    site_id = 0
     if scope == "site":
         if is_admin:
             site_code = _clean_site_code(payload.get("site_code"), required=True)
             site_name = _clean_site_name(payload.get("site_name"), required=False)
+            request_site_id = _clean_site_id(payload.get("site_id"), required=False)
+            if request_site_id > 0:
+                resolved_site_id = _site_id_from_identity(site_code, site_name)
+                if resolved_site_id > 0 and resolved_site_id != request_site_id:
+                    raise HTTPException(status_code=409, detail="site_id와 site_code가 일치하지 않습니다.")
+                site_id = request_site_id
+            else:
+                site_id = _site_id_from_identity(site_code, site_name)
         else:
-            site_code = _clean_site_code(user.get("site_code"), required=False)
-            site_name = _clean_site_name(user.get("site_name"), required=False)
+            assigned = _user_site_identity(user)
+            site_code = _clean_site_code(assigned.get("site_code"), required=False)
+            site_name = _clean_site_name(assigned.get("site_name"), required=False)
+            site_id = int(assigned.get("site_id") or 0)
             if not site_code:
                 raise HTTPException(status_code=403, detail="소속 단지코드가 없어 백업할 수 없습니다.")
+            payload_site_code = _clean_site_code(payload.get("site_code"), required=False)
+            payload_site_id = _clean_site_id(payload.get("site_id"), required=False)
+            if payload_site_code and payload_site_code != site_code:
+                raise HTTPException(status_code=403, detail="소속 단지코드(site_code) 백업만 실행할 수 있습니다.")
+            if payload_site_id > 0 and site_id > 0 and payload_site_id != site_id:
+                raise HTTPException(status_code=403, detail="소속 단지(site_id) 백업만 실행할 수 있습니다.")
+            try:
+                usage_before = _enforce_site_backup_daily_limits(site_code)
+            except HTTPException as e:
+                _audit_security(
+                    user=user,
+                    event_type="backup_run",
+                    severity="WARN",
+                    outcome="denied",
+                    target_site_code=site_code,
+                    target_site_name=site_name,
+                    detail={"scope": scope, "targets": selected_keys, "reason": str(e.detail or "daily_limit")},
+                )
+                raise
     else:
+        site_id = 0
         site_code = ""
         site_name = ""
 
@@ -3600,19 +3905,68 @@ def api_backup_run(request: Request, payload: Dict[str, Any] = Body(default={}))
             trigger="manual",
             target_keys=selected_keys,
             scope=scope,
+            site_id=site_id,
             site_code=site_code,
             site_name=site_name,
             with_maintenance=(scope == "full"),
             include_user_tables=bool(is_admin),
         )
     except RuntimeError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_run",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=site_code,
+            target_site_name=site_name,
+            detail={"scope": scope, "targets": selected_keys, "error": str(e)},
+        )
         raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_run",
+            severity="WARN",
+            outcome="error",
+            target_site_code=site_code,
+            target_site_name=site_name,
+            detail={"scope": scope, "targets": selected_keys, "error": str(e)},
+        )
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
+        _audit_security(
+            user=user,
+            event_type="backup_run",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=site_code,
+            target_site_name=site_name,
+            detail={"scope": scope, "targets": selected_keys, "error": str(e)},
+        )
         raise HTTPException(status_code=500, detail=f"backup failed: {e}") from e
 
-    return {"ok": True, "result": result, "maintenance": get_maintenance_status()}
+    _audit_security(
+        user=user,
+        event_type="backup_run",
+        severity="INFO",
+        outcome="ok",
+        target_site_code=site_code,
+        target_site_name=site_name,
+        detail={
+            "scope": scope,
+            "targets": selected_keys,
+            "relative_path": str(result.get("relative_path") or ""),
+            "file_size_bytes": int(result.get("file_size_bytes") or 0),
+        },
+    )
+    usage_after = _site_backup_usage_today(site_code) if scope == "site" else {}
+    return {
+        "ok": True,
+        "result": result,
+        "maintenance": get_maintenance_status(),
+        "site_daily_usage_before": usage_before,
+        "site_daily_usage_after": usage_after,
+    }
 
 
 @router.get("/backup/history")
@@ -3627,6 +3981,8 @@ def api_backup_history(
         raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
 
     is_admin = int(user.get("is_admin") or 0) == 1
+    assigned = _user_site_identity(user)
+    assigned_site_id = int(assigned.get("site_id") or 0)
     clean_scope = str(scope or "").strip().lower()
     if clean_scope and clean_scope not in {"full", "site"}:
         raise HTTPException(status_code=400, detail="scope must be full or site")
@@ -3635,7 +3991,7 @@ def api_backup_history(
         clean_site_code = _clean_site_code(site_code, required=False)
     else:
         clean_scope = "site"
-        clean_site_code = _clean_site_code(user.get("site_code"), required=False)
+        clean_site_code = _clean_site_code(assigned.get("site_code"), required=False)
         if not clean_site_code:
             raise HTTPException(status_code=403, detail="소속 단지코드가 없어 백업이력을 조회할 수 없습니다.")
 
@@ -3647,67 +4003,176 @@ def api_backup_history(
     if not is_admin:
         filtered: List[Dict[str, Any]] = []
         for item in items:
-            scope_value = str(item.get("scope") or "").strip().lower()
-            if scope_value != "site":
-                continue
-            rel = str(item.get("relative_path") or "").strip()
-            if not rel:
-                continue
             try:
-                manifest = _validate_uploaded_restore_backup(rel)
-            except Exception:
+                perm = _resolve_backup_item_permission(user=user, item=item)
+            except HTTPException:
                 continue
-            if bool(manifest.get("contains_user_data")):
-                continue
+            manifest = perm.get("manifest") if isinstance(perm.get("manifest"), dict) else {}
             merged = dict(item)
-            merged["contains_user_data"] = bool(manifest.get("contains_user_data"))
+            merged["scope"] = str(perm.get("scope") or merged.get("scope") or "").strip().lower()
+            merged["site_code"] = str(perm.get("site_code") or merged.get("site_code") or "").strip().upper()
+            merged["site_name"] = str(perm.get("site_name") or merged.get("site_name") or "").strip()
+            merged["contains_user_data"] = bool(perm.get("contains_user_data"))
+            item_site_id = _clean_site_id(merged.get("site_id"), required=False)
+            if item_site_id <= 0:
+                item_site_id = _clean_site_id(manifest.get("site_id"), required=False)
+            if item_site_id <= 0 and merged.get("site_code"):
+                item_site_id = _site_id_from_identity(merged.get("site_code"), merged.get("site_name"))
+            if assigned_site_id > 0 and item_site_id > 0 and item_site_id != assigned_site_id:
+                continue
+            if item_site_id > 0:
+                merged["site_id"] = item_site_id
             filtered.append(merged)
         items = filtered
     return {"ok": True, "count": len(items), "items": items}
 
 
-@router.get("/backup/download")
-def api_backup_download(request: Request, path: str = Query(...)):
+@router.post("/backup/download/request")
+def api_backup_download_request(request: Request, payload: Dict[str, Any] = Body(default={})):
     user, _token = _require_auth(request)
     if not _can_manage_backup(user):
+        _audit_security(
+            user=user,
+            event_type="backup_download_issue",
+            severity="WARN",
+            outcome="denied",
+            detail={"reason": "permission_denied"},
+        )
         raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
 
-    item = get_backup_item(path)
-    if not item:
-        raise HTTPException(status_code=404, detail="backup file not found")
-
-    is_admin = int(user.get("is_admin") or 0) == 1
-    if not is_admin:
-        assigned_code = _clean_site_code(user.get("site_code"), required=False)
-        item_scope = str(item.get("scope") or "").strip().lower()
-        item_code = str(item.get("site_code") or "").strip().upper()
-        if not assigned_code:
-            raise HTTPException(status_code=403, detail="소속 단지코드가 없어 다운로드할 수 없습니다.")
-        if item_scope != "site" or item_code != assigned_code:
-            raise HTTPException(status_code=403, detail="소속 단지코드 백업파일만 다운로드할 수 있습니다.")
-        manifest = _validate_uploaded_restore_backup(str(item.get("relative_path") or path))
-        if bool(manifest.get("contains_user_data")):
-            raise HTTPException(status_code=403, detail="사용자정보 포함 백업파일은 최고/운영관리자만 다운로드할 수 있습니다.")
-
+    path = str(payload.get("path") or "").strip()
     try:
-        target = resolve_backup_file(str(item.get("relative_path") or path))
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        item = get_backup_item(path)
+        if not item:
+            raise HTTPException(status_code=404, detail="backup file not found")
+        perm = _resolve_backup_item_permission(user=user, item=item, requested_path=path)
+        ticket = _issue_backup_download_token(user=user, relative_path=str(perm.get("relative_path") or ""))
+    except HTTPException as e:
+        _audit_security(
+            user=user,
+            event_type="backup_download_issue",
+            severity="WARN",
+            outcome="denied",
+            detail={"path": path, "reason": str(e.detail or "download_issue_denied")},
+        )
+        raise
 
-    filename = str(item.get("download_name") or target.name)
-    return FileResponse(
-        path=target,
-        media_type="application/zip",
-        filename=filename,
+    _audit_security(
+        user=user,
+        event_type="backup_download_issue",
+        severity="INFO",
+        outcome="ok",
+        target_site_code=str(perm.get("site_code") or ""),
+        target_site_name=str(perm.get("site_name") or ""),
+        detail={
+            "relative_path": str(perm.get("relative_path") or ""),
+            "scope": str(perm.get("scope") or ""),
+            "expires_in_sec": int(BACKUP_DOWNLOAD_LINK_TTL_SEC),
+        },
     )
+    return {"ok": True, "download": ticket}
+
+
+@router.get("/backup/download")
+def api_backup_download(
+    request: Request,
+    token: str = Query(default=""),
+    path: str = Query(default=""),
+):
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        _audit_security(
+            user=user,
+            event_type="backup_download",
+            severity="WARN",
+            outcome="denied",
+            detail={"reason": "permission_denied"},
+        )
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+
+    clean_token = str(token or "").strip()
+    clean_path = str(path or "").strip()
+    try:
+        if clean_path and not clean_token:
+            # Backward compatibility: path 요청은 1회성 토큰 URL로 리다이렉트합니다.
+            item = get_backup_item(clean_path)
+            if not item:
+                raise HTTPException(status_code=404, detail="backup file not found")
+            perm = _resolve_backup_item_permission(user=user, item=item, requested_path=clean_path)
+            ticket = _issue_backup_download_token(user=user, relative_path=str(perm.get("relative_path") or ""))
+            _audit_security(
+                user=user,
+                event_type="backup_download_issue",
+                severity="INFO",
+                outcome="ok",
+                target_site_code=str(perm.get("site_code") or ""),
+                target_site_name=str(perm.get("site_name") or ""),
+                detail={
+                    "relative_path": str(perm.get("relative_path") or ""),
+                    "scope": str(perm.get("scope") or ""),
+                    "expires_in_sec": int(BACKUP_DOWNLOAD_LINK_TTL_SEC),
+                    "legacy_path": True,
+                },
+            )
+            return RedirectResponse(url=str(ticket.get("url") or "/api/backup/download"), status_code=307)
+
+        token_payload = _consume_backup_download_token(user=user, token=clean_token)
+        relative_path = str(token_payload.get("relative_path") or "").strip()
+        item = get_backup_item(relative_path)
+        if not item:
+            raise HTTPException(status_code=404, detail="backup file not found")
+        perm = _resolve_backup_item_permission(user=user, item=item, requested_path=relative_path)
+
+        try:
+            target = resolve_backup_file(str(perm.get("relative_path") or relative_path))
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        filename = str(item.get("download_name") or target.name)
+        _audit_security(
+            user=user,
+            event_type="backup_download",
+            severity="INFO",
+            outcome="ok",
+            target_site_code=str(perm.get("site_code") or ""),
+            target_site_name=str(perm.get("site_name") or ""),
+            detail={
+                "relative_path": str(perm.get("relative_path") or ""),
+                "scope": str(perm.get("scope") or ""),
+                "file_size_bytes": int(item.get("file_size_bytes") or 0),
+            },
+        )
+        return FileResponse(
+            path=target,
+            media_type="application/zip",
+            filename=filename,
+        )
+    except HTTPException as e:
+        _audit_security(
+            user=user,
+            event_type="backup_download",
+            severity="WARN",
+            outcome="denied",
+            detail={"path": clean_path, "token_used": bool(clean_token), "reason": str(e.detail or "download_denied")},
+        )
+        raise
 
 
 @router.post("/backup/restore")
 def api_backup_restore(request: Request, payload: Dict[str, Any] = Body(default={})):
     user, _token = _require_auth(request)
     if not _can_manage_backup(user):
+        _audit_security(
+            user=user,
+            event_type="backup_restore",
+            severity="WARN",
+            outcome="denied",
+            detail={"reason": "permission_denied"},
+        )
         raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
 
     path = str(payload.get("path") or "").strip()
@@ -3715,7 +4180,19 @@ def api_backup_restore(request: Request, payload: Dict[str, Any] = Body(default=
         raise HTTPException(status_code=400, detail="path is required")
 
     manifest = _validate_uploaded_restore_backup(path)
-    _enforce_restore_permission(user, manifest)
+    try:
+        _enforce_restore_permission(user, manifest)
+    except HTTPException as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore",
+            severity="WARN",
+            outcome="denied",
+            target_site_code=str(manifest.get("site_code") or ""),
+            target_site_name=str(manifest.get("site_name") or ""),
+            detail={"path": path, "reason": str(e.detail or "restore_forbidden")},
+        )
+        raise
 
     target_payload = payload.get("target_keys", payload.get("targets", []))
     if isinstance(target_payload, str):
@@ -3737,15 +4214,289 @@ def api_backup_restore(request: Request, payload: Dict[str, Any] = Body(default=
             include_user_tables=bool(is_admin),
         )
     except RuntimeError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=str(manifest.get("site_code") or ""),
+            target_site_name=str(manifest.get("site_name") or ""),
+            detail={"path": path, "error": str(e)},
+        )
         raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore",
+            severity="WARN",
+            outcome="error",
+            target_site_code=str(manifest.get("site_code") or ""),
+            target_site_name=str(manifest.get("site_name") or ""),
+            detail={"path": path, "error": str(e)},
+        )
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileNotFoundError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore",
+            severity="WARN",
+            outcome="error",
+            target_site_code=str(manifest.get("site_code") or ""),
+            target_site_name=str(manifest.get("site_name") or ""),
+            detail={"path": path, "error": str(e)},
+        )
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=str(manifest.get("site_code") or ""),
+            target_site_name=str(manifest.get("site_name") or ""),
+            detail={"path": path, "error": str(e)},
+        )
         raise HTTPException(status_code=500, detail=f"restore failed: {e}") from e
 
+    _audit_security(
+        user=user,
+        event_type="backup_restore",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=str(manifest.get("site_code") or ""),
+        target_site_name=str(manifest.get("site_name") or ""),
+        detail={
+            "path": path,
+            "scope": str(manifest.get("scope") or ""),
+            "targets": target_keys,
+            "rollback_relative_path": str(result.get("rollback_relative_path") or ""),
+        },
+    )
     return {"ok": True, "result": result, "maintenance": get_maintenance_status()}
+
+
+@router.post("/backup/restore/request")
+def api_backup_restore_request(request: Request, payload: Dict[str, Any] = Body(default={})):
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+    if int(user.get("is_admin") or 0) == 1:
+        raise HTTPException(status_code=400, detail="관리자는 복구 요청이 아니라 직접 복구를 실행하세요.")
+
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="path is required")
+    reason = str(payload.get("reason") or "").strip()
+    if len(reason) < 4:
+        reason = "단지대표자 복구 요청"
+
+    item = get_backup_item(path)
+    if not item:
+        raise HTTPException(status_code=404, detail="backup file not found")
+    perm = _resolve_backup_item_permission(user=user, item=item, requested_path=path)
+    if str(perm.get("scope") or "").strip().lower() != "site":
+        raise HTTPException(status_code=403, detail="단지코드(site) 백업 파일만 복구 요청할 수 있습니다.")
+
+    actor_login = _clean_login_id(user.get("login_id") or "site-admin")
+    req = create_privileged_change_request(
+        change_type="backup_restore_site",
+        payload={
+            "path": str(perm.get("relative_path") or ""),
+            "scope": "site",
+            "site_code": str(perm.get("site_code") or ""),
+            "site_name": str(perm.get("site_name") or ""),
+            "requested_by": actor_login,
+            "reason": reason,
+        },
+        requested_by_user_id=int(user.get("id") or 0),
+        requested_by_login=actor_login,
+        target_site_name=str(perm.get("site_name") or ""),
+        target_site_code=str(perm.get("site_code") or ""),
+        reason=reason,
+        expires_hours=max(1, min(int(payload.get("expires_hours") or 24), 72)),
+    )
+    _audit_security(
+        user=user,
+        event_type="backup_restore_request",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=str(perm.get("site_code") or ""),
+        target_site_name=str(perm.get("site_name") or ""),
+        request_id=int(req.get("id") or 0),
+        detail={"path": str(perm.get("relative_path") or ""), "reason": reason},
+    )
+    return {"ok": True, "request": req}
+
+
+@router.get("/backup/restore/requests")
+def api_backup_restore_requests(
+    request: Request,
+    status: str = Query(default=""),
+    limit: int = Query(default=100),
+):
+    _user, _token = _require_super_admin(request)
+    items = list_privileged_change_requests(
+        change_type="backup_restore_site",
+        status=str(status or "").strip().lower(),
+        limit=max(1, min(int(limit), 300)),
+    )
+    return {"ok": True, "count": len(items), "items": items}
+
+
+@router.post("/backup/restore/request/approve")
+def api_backup_restore_request_approve(request: Request, payload: Dict[str, Any] = Body(default={})):
+    user, _token = _require_super_admin(request)
+    request_id = int(payload.get("request_id") or 0)
+    if request_id <= 0:
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    req = get_privileged_change_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="request not found")
+    if str(req.get("change_type") or "").strip().lower() != "backup_restore_site":
+        raise HTTPException(status_code=400, detail="invalid request type")
+
+    actor_login = _clean_login_id(user.get("login_id") or "admin")
+    try:
+        item = approve_privileged_change_request(
+            request_id=request_id,
+            approver_user_id=int(user.get("id") or 0),
+            approver_login=actor_login,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    _audit_security(
+        user=user,
+        event_type="backup_restore_request_approve",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=str(item.get("target_site_code") or ""),
+        target_site_name=str(item.get("target_site_name") or ""),
+        request_id=request_id,
+        detail={"status": item.get("status")},
+    )
+    return {"ok": True, "request": item}
+
+
+@router.post("/backup/restore/request/execute")
+def api_backup_restore_request_execute(request: Request, payload: Dict[str, Any] = Body(default={})):
+    user, _token = _require_super_admin(request)
+    request_id = int(payload.get("request_id") or 0)
+    if request_id <= 0:
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    req = get_privileged_change_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="request not found")
+    if str(req.get("change_type") or "").strip().lower() != "backup_restore_site":
+        raise HTTPException(status_code=400, detail="invalid request type")
+    if str(req.get("status") or "").strip().lower() != "approved":
+        raise HTTPException(status_code=409, detail="request is not approved")
+
+    req_payload = req.get("payload") if isinstance(req.get("payload"), dict) else {}
+    path = str(req_payload.get("path") or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="restore request payload.path is required")
+
+    manifest = _validate_uploaded_restore_backup(path)
+    scope = str(manifest.get("scope") or "").strip().lower() or "full"
+    if scope != "site":
+        raise HTTPException(status_code=409, detail="backup_restore_site 요청은 site 백업 파일만 실행할 수 있습니다.")
+    if bool(manifest.get("contains_user_data")):
+        raise HTTPException(status_code=409, detail="사용자정보 포함 백업파일은 승인 실행 대상에서 제외됩니다.")
+
+    requested_code = _clean_site_code(
+        req.get("target_site_code") or req_payload.get("site_code"),
+        required=False,
+    )
+    manifest_code = _clean_site_code(manifest.get("site_code"), required=False)
+    if requested_code and manifest_code and requested_code != manifest_code:
+        raise HTTPException(status_code=409, detail="요청 단지코드와 백업파일 단지코드가 일치하지 않습니다.")
+
+    actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
+    with_maintenance = _clean_bool(payload.get("with_maintenance"), default=False)
+    try:
+        result = restore_backup_zip(
+            actor=actor_login,
+            relative_path=path,
+            target_keys=[],
+            with_maintenance=with_maintenance,
+            include_user_tables=False,
+        )
+    except RuntimeError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_request_execute",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=manifest_code,
+            target_site_name=str(manifest.get("site_name") or ""),
+            request_id=request_id,
+            detail={"path": path, "error": str(e)},
+        )
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_request_execute",
+            severity="WARN",
+            outcome="error",
+            target_site_code=manifest_code,
+            target_site_name=str(manifest.get("site_name") or ""),
+            request_id=request_id,
+            detail={"path": path, "error": str(e)},
+        )
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_request_execute",
+            severity="WARN",
+            outcome="error",
+            target_site_code=manifest_code,
+            target_site_name=str(manifest.get("site_name") or ""),
+            request_id=request_id,
+            detail={"path": path, "error": str(e)},
+        )
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_request_execute",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=manifest_code,
+            target_site_name=str(manifest.get("site_name") or ""),
+            request_id=request_id,
+            detail={"path": path, "error": str(e)},
+        )
+        raise HTTPException(status_code=500, detail=f"restore execute failed: {e}") from e
+
+    executed = mark_privileged_change_request_executed(
+        request_id=request_id,
+        executed_by_user_id=int(user.get("id") or 0),
+        executed_by_login=actor_login,
+        result={
+            "path": path,
+            "scope": "site",
+            "restore": result,
+        },
+    )
+    _audit_security(
+        user=user,
+        event_type="backup_restore_request_execute",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=manifest_code,
+        target_site_name=str(manifest.get("site_name") or ""),
+        request_id=request_id,
+        detail={
+            "path": path,
+            "rollback_relative_path": str((result or {}).get("rollback_relative_path") or ""),
+        },
+    )
+    return {"ok": True, "request": executed, "result": result, "maintenance": get_maintenance_status()}
 
 
 @router.post("/backup/restore/upload")
@@ -3756,13 +4507,31 @@ async def api_backup_restore_upload(
 ):
     user, _token = _require_auth(request)
     if not _can_manage_backup(user):
+        _audit_security(
+            user=user,
+            event_type="backup_restore_upload",
+            severity="WARN",
+            outcome="denied",
+            detail={"reason": "permission_denied"},
+        )
         raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+    if int(user.get("is_admin") or 0) != 1:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_upload",
+            severity="WARN",
+            outcome="denied",
+            detail={"reason": "site_admin_restore_forbidden"},
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="단지대표자는 직접 복구할 수 없습니다. 복구 요청을 등록하고 최고관리자 승인을 받으세요.",
+        )
 
     actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
     saved = _store_uploaded_restore_backup(backup_file, actor_login=actor_login)
     manifest = _validate_uploaded_restore_backup(str(saved.get("relative_path") or ""))
     _enforce_restore_permission(user, manifest)
-    is_admin = int(user.get("is_admin") or 0) == 1
 
     try:
         result = restore_backup_zip(
@@ -3770,17 +4539,66 @@ async def api_backup_restore_upload(
             relative_path=str(saved.get("relative_path") or ""),
             target_keys=[],
             with_maintenance=_clean_bool(with_maintenance, default=True),
-            include_user_tables=bool(is_admin),
+            include_user_tables=True,
         )
     except RuntimeError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_upload",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=str(manifest.get("site_code") or ""),
+            target_site_name=str(manifest.get("site_name") or ""),
+            detail={"path": str(saved.get("relative_path") or ""), "error": str(e)},
+        )
         raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_upload",
+            severity="WARN",
+            outcome="error",
+            target_site_code=str(manifest.get("site_code") or ""),
+            target_site_name=str(manifest.get("site_name") or ""),
+            detail={"path": str(saved.get("relative_path") or ""), "error": str(e)},
+        )
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileNotFoundError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_upload",
+            severity="WARN",
+            outcome="error",
+            target_site_code=str(manifest.get("site_code") or ""),
+            target_site_name=str(manifest.get("site_name") or ""),
+            detail={"path": str(saved.get("relative_path") or ""), "error": str(e)},
+        )
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_upload",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=str(manifest.get("site_code") or ""),
+            target_site_name=str(manifest.get("site_name") or ""),
+            detail={"path": str(saved.get("relative_path") or ""), "error": str(e)},
+        )
         raise HTTPException(status_code=500, detail=f"restore failed: {e}") from e
 
+    _audit_security(
+        user=user,
+        event_type="backup_restore_upload",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=str(manifest.get("site_code") or ""),
+        target_site_name=str(manifest.get("site_name") or ""),
+        detail={
+            "path": str(saved.get("relative_path") or ""),
+            "scope": str(manifest.get("scope") or ""),
+            "rollback_relative_path": str(result.get("rollback_relative_path") or ""),
+        },
+    )
     return {
         "ok": True,
         "uploaded": saved,
@@ -4943,9 +5761,12 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
     user, _token = _require_auth(request)
     if _is_public_access_user(user):
         raise HTTPException(status_code=403, detail="로그인 없이 사용자는 저장할 수 없습니다. 신규가입 후 사용해 주세요.")
-    site_name, site_code = _resolve_main_site_target(
+    site_ident = _resolve_main_site_identity(
         user, payload.get("site_name"), payload.get("site_code"), required=True
     )
+    site_id = int(site_ident.get("site_id") or 0)
+    site_name = str(site_ident.get("site_name") or "")
+    site_code = str(site_ident.get("site_code") or "")
     entry_date = safe_ymd(payload.get("date") or "")
 
     raw_tabs = payload.get("tabs") or {}
@@ -4960,7 +5781,6 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
         tabs["home"]["work_type"] = entry_work_type
     ignored_tabs = sorted(set(str(k) for k in raw_tabs.keys()) - set(tabs.keys()))
 
-    site_id = ensure_site(site_name)
     entry_id = upsert_entry(site_id, entry_date, entry_work_type)
 
     for tab_key, fields in tabs.items():
@@ -4969,6 +5789,7 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
 
     return {
         "ok": True,
+        "site_id": site_id,
         "site_name": site_name,
         "site_code": site_code,
         "date": entry_date,
@@ -4987,10 +5808,12 @@ def api_load(
     work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
-    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
+    site_ident = _resolve_main_site_identity(user, site_name, site_code, required=True)
+    site_id = int(site_ident.get("site_id") or 0)
+    site_name = str(site_ident.get("site_name") or "")
+    site_code = str(site_ident.get("site_code") or "")
     entry_date = safe_ymd(date)
     entry_work_type = _clean_work_type(work_type, default="일일")
-    site_id = ensure_site(site_name)
     schema, _env_cfg = _site_schema_and_env(site_name, site_code)
     tabs = load_entry(
         site_id,
@@ -5005,6 +5828,7 @@ def api_load(
             home["work_type"] = str(home.get("work_type") or entry_work_type).strip() or entry_work_type
     return {
         "ok": True,
+        "site_id": site_id,
         "site_name": site_name,
         "site_code": site_code,
         "date": entry_date,
@@ -5022,12 +5846,14 @@ def api_delete(
     work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
-    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
+    site_ident = _resolve_main_site_identity(user, site_name, site_code, required=True)
+    site_id = int(site_ident.get("site_id") or 0)
+    site_name = str(site_ident.get("site_name") or "")
+    site_code = str(site_ident.get("site_code") or "")
     entry_date = safe_ymd(date)
     entry_work_type = _clean_work_type(work_type, default="일일")
-    site_id = ensure_site(site_name)
     ok = delete_entry(site_id, entry_date, entry_work_type)
-    return {"ok": ok, "site_name": site_name, "site_code": site_code, "work_type": entry_work_type}
+    return {"ok": ok, "site_id": site_id, "site_name": site_name, "site_code": site_code, "work_type": entry_work_type}
 
 
 @router.get("/list_range")
@@ -5040,17 +5866,20 @@ def api_list_range(
     work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
-    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
+    site_ident = _resolve_main_site_identity(user, site_name, site_code, required=True)
+    site_id = int(site_ident.get("site_id") or 0)
+    site_name = str(site_ident.get("site_name") or "")
+    site_code = str(site_ident.get("site_code") or "")
     df = safe_ymd(date_from) if date_from else today_ymd()
     dt = safe_ymd(date_to) if date_to else today_ymd()
     if df > dt:
         df, dt = dt, df
     entry_work_type = _clean_work_type(work_type, default="일일")
-    site_id = ensure_site(site_name)
     entries = list_entries(site_id, df, dt, entry_work_type)
     dates = [e["entry_date"] for e in entries]
     return {
         "ok": True,
+        "site_id": site_id,
         "site_name": site_name,
         "site_code": site_code,
         "work_type": entry_work_type,
@@ -5070,14 +5899,16 @@ def api_export(
     work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
-    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
+    site_ident = _resolve_main_site_identity(user, site_name, site_code, required=True)
+    site_id = int(site_ident.get("site_id") or 0)
+    site_name = str(site_ident.get("site_name") or "")
+    site_code = str(site_ident.get("site_code") or "")
     df = safe_ymd(date_from) if date_from else today_ymd()
     dt = safe_ymd(date_to) if date_to else today_ymd()
     if df > dt:
         df, dt = dt, df
 
     entry_work_type = _clean_work_type(work_type, default="일일")
-    site_id = ensure_site(site_name)
     schema, _env_cfg = _site_schema_and_env(site_name, site_code)
     allowed = _schema_allowed_keys(schema)
     entries = list_entries(site_id, df, dt, entry_work_type)
@@ -5113,10 +5944,12 @@ def api_pdf(
     work_type: str = Query(default=""),
 ):
     user, _token = _require_auth(request)
-    site_name, site_code = _resolve_main_site_target(user, site_name, site_code, required=True)
+    site_ident = _resolve_main_site_identity(user, site_name, site_code, required=True)
+    site_id = int(site_ident.get("site_id") or 0)
+    site_name = str(site_ident.get("site_name") or "")
+    site_code = str(site_ident.get("site_code") or "")
     entry_date = safe_ymd(date)
     entry_work_type = _clean_work_type(work_type, default="일일")
-    site_id = ensure_site(site_name)
     schema, _env_cfg = _site_schema_and_env(site_name, site_code)
     tabs = load_entry(
         site_id,
