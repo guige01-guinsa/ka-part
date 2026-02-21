@@ -297,19 +297,36 @@ def _seed_defaults(con: sqlite3.Connection) -> None:
             ),
         )
 
+    # Legacy English FAQ rows are translated in-place so existing DB data is updated automatically.
+    faq_legacy_map = [
+        (
+            "Can management office replace indoor lights?",
+            "실내 조명 교체를 관리사무소가 해주나요?",
+            "아니요. 실내 전등/스위치/콘센트 등은 세대 내부(개인) 영역입니다. 관리사무소는 사용 안내를 도와드릴 수 있습니다.",
+            10,
+        ),
+        (
+            "When can staff enter a unit?",
+            "직원이 세대에 방문할 수 있는 경우는 언제인가요?",
+            "소방시설 점검, 이웃 피해 예방, 정전·누수 등 긴급 시설 조치가 필요한 경우에 한해 가능합니다.",
+            20,
+        ),
+    ]
+    for old_q, new_q, new_a, order_no in faq_legacy_map:
+        con.execute(
+            """
+            UPDATE complaint_faqs
+               SET question=?,
+                   answer=?,
+                   display_order=?,
+                   is_active=1
+             WHERE question=?
+            """,
+            (new_q, new_a, order_no, old_q),
+        )
+
     if not con.execute("SELECT 1 FROM complaint_faqs LIMIT 1").fetchone():
-        faq_seed = [
-            (
-                "Can management office replace indoor lights?",
-                "No. Indoor lights/switches/outlets are private areas. Guidance can be provided.",
-                10,
-            ),
-            (
-                "When can staff enter a unit?",
-                "Only for fire-system checks, neighbor-damage prevention, or emergency infrastructure actions.",
-                20,
-            ),
-        ]
+        faq_seed = [(x[1], x[2], x[3]) for x in faq_legacy_map]
         for q, a, order_no in faq_seed:
             con.execute(
                 """

@@ -22,15 +22,15 @@ const state = {
   faqs: [
     {
       id: 1,
-      question: "Can management office replace indoor lights?",
-      answer: "No. Indoor fixtures are private. Guidance can be provided.",
+      question: "실내 조명 교체를 관리사무소가 해주나요?",
+      answer: "아니요. 실내 설비는 세대 내부(개인) 영역입니다. 관리사무소는 사용 안내를 도와드릴 수 있습니다.",
       display_order: 10,
       is_active: true
     },
     {
       id: 2,
-      question: "When can staff enter a unit?",
-      answer: "Only for fire checks, neighbor-damage prevention, or emergency infrastructure actions.",
+      question: "직원이 세대에 방문할 수 있는 경우는 언제인가요?",
+      answer: "소방시설 점검, 이웃 피해 예방, 정전·누수 등 긴급 시설 조치가 필요한 경우에 한해 가능합니다.",
       display_order: 20,
       is_active: true
     }
