@@ -107,9 +107,7 @@ from ..db import (
     delete_site_apartment_profile,
 )
 from ..schema_defs import (
-    DEFAULT_INITIAL_VISIBLE_TAB_KEYS,
     SCHEMA_DEFS,
-    SCHEMA_TAB_ORDER,
     build_effective_schema,
     default_site_env_config,
     merge_site_env_configs,
@@ -2307,19 +2305,6 @@ def _enforce_restore_permission(user: Dict[str, Any], manifest: Dict[str, Any]) 
     )
 
 
-def _home_only_site_env_config() -> Dict[str, Any]:
-    visible = set(DEFAULT_INITIAL_VISIBLE_TAB_KEYS)
-    hide_tabs = [tab for tab in SCHEMA_TAB_ORDER if tab not in visible]
-    return normalize_site_env_config(
-        {
-            "hide_tabs": hide_tabs,
-            "tabs": {
-                "home": {"title": "홈"},
-            },
-        }
-    )
-
-
 def _verify_first_site_registrant_for_spec_env(user: Dict[str, Any], site_name: str, site_code: str = "") -> Dict[str, Any]:
     target_site_name = _clean_site_name(site_name, required=True)
     target_site_code = _clean_site_code(site_code, required=False)
@@ -2617,17 +2602,6 @@ def api_schema(request: Request, site_name: str = Query(default=""), site_code: 
     resolved_site_id = int(site_ident.get("site_id") or 0)
     schema, env_cfg = _site_schema_and_env(clean_site_name, resolved_site_code)
 
-    # On first login for the first site registrant, show only the Home tab
-    # until the site env is explicitly saved.
-    if clean_site_name and int(user.get("is_site_admin") or 0) == 1 and _is_first_site_registrant(user, clean_site_name, resolved_site_code):
-        row = get_site_env_record(clean_site_name, site_code=resolved_site_code or None)
-        if row is None:
-            env_cfg = _home_only_site_env_config()
-            schema = build_effective_schema(
-                base_schema=SCHEMA_DEFS,
-                site_env_config=merge_site_env_configs(default_site_env_config(), env_cfg),
-            )
-
     return {
         "schema": schema,
         "site_id": resolved_site_id,
@@ -2707,12 +2681,6 @@ def api_site_env(
         create_site_if_missing=False,
     )
     resolved_site_id = _clean_site_id(resolved_identity.get("site_id"), required=False)
-    if row is None and int(user.get("is_site_admin") or 0) == 1 and int(user.get("is_admin") or 0) != 1:
-        env_cfg = _home_only_site_env_config()
-        schema = build_effective_schema(
-            base_schema=SCHEMA_DEFS,
-            site_env_config=merge_site_env_configs(default_site_env_config(), env_cfg),
-        )
     return {
         "ok": True,
         "site_id": resolved_site_id,

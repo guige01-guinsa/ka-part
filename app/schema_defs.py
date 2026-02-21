@@ -242,9 +242,8 @@ SCHEMA_DEFS = {
     },
 }
 
-DEFAULT_SITE_ENV_CONFIG: Dict[str, Any] = {
-    "hide_tabs": list(DEFAULT_HIDDEN_TAB_KEYS),
-}
+# If no site-specific setting exists, use full base schema (no hidden tabs).
+DEFAULT_SITE_ENV_CONFIG: Dict[str, Any] = {}
 
 SITE_ENV_TEMPLATE: Dict[str, Any] = {
     "hide_tabs": [],
