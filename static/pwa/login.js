@@ -54,6 +54,17 @@
     };
   }
 
+  function forceStayOnLoginPage() {
+    const u = new URL(window.location.href);
+    const force = String(u.searchParams.get("force") || "").trim().toLowerCase();
+    const mode = String(u.searchParams.get("mode") || "").trim().toLowerCase();
+    const hash = String(u.hash || "").trim().toLowerCase();
+    if (force === "1" || force === "true" || force === "yes" || force === "y") return true;
+    if (mode === "login" || mode === "signup") return true;
+    if (hash === "#signupcard" || hash.startsWith("#signup")) return true;
+    return false;
+  }
+
   function enableSignupReadyMode(opts = {}) {
     signupReadyMode = true;
     const card = $("#signupCard");
@@ -661,6 +672,7 @@
   }
 
   async function checkAlreadyLoggedIn() {
+    if (forceStayOnLoginPage()) return;
     const token = KAAuth.getToken();
     try {
       const me = await KAAuth.requestJson("/api/auth/me", { noAuth: !token });
