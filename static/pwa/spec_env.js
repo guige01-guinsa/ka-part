@@ -882,6 +882,19 @@
     });
   }
 
+  function buildAllSelectionFromSchema(scopedSchema) {
+    const tabs = new Set();
+    const fieldsByTab = {};
+    for (const [tabKey, tabDef] of Object.entries(scopedSchema || {})) {
+      tabs.add(tabKey);
+      const fields = Array.isArray((tabDef || {}).fields) ? tabDef.fields : [];
+      fieldsByTab[tabKey] = new Set(
+        fields.map((f) => String((f || {}).k || "").trim()).filter(Boolean)
+      );
+    }
+    return { tabs, fieldsByTab };
+  }
+
   function mergeConfig(baseCfg, applyCfg) {
     const out = compactConfig(baseCfg || {});
     const add = compactConfig(applyCfg || {});
@@ -952,25 +965,22 @@
   async function applySelectedTemplate(opts = {}) {
     const allowDirectSaveOnNoSelection = !!(opts && opts.allowDirectSaveOnNoSelection);
     const t = getSelectedTemplate();
-    if (!t) {
-      if (allowDirectSaveOnNoSelection) {
-        await saveConfig();
-        return;
-      }
-      setMsg("템플릿을 선택하세요.", true);
-      return;
+    const templateCfg = t && t.config ? t.config : {};
+    const templateSchema = buildScopeSchema(templateCfg);
+    let selection = collectTemplateSelection();
+    if (!selection.tabs.size && allowDirectSaveOnNoSelection) {
+      selection = buildAllSelectionFromSchema(templateSchema);
     }
-    const selection = collectTemplateSelection();
     if (!selection.tabs.size) {
       if (allowDirectSaveOnNoSelection) {
-        await saveConfig();
+        setMsg("선택 범위가 비어 있어 전체 탭/항목 기준으로 저장합니다...");
+        selection = buildAllSelectionFromSchema(templateSchema);
+      } else {
+        setMsg("최소 1개 탭을 선택하세요.", true);
         return;
       }
-      setMsg("최소 1개 탭을 선택하세요.", true);
-      return;
     }
-    const templateSchema = buildScopeSchema(t.config || {});
-    const filtered = filterTemplateConfigBySelection(t.config || {}, selection);
+    const filtered = filterTemplateConfigBySelection(templateCfg, selection);
     const visibility = buildVisibilityConfigBySelection(selection, templateSchema);
     const templateScoped = mergeConfig(filtered, visibility);
     const scopeTabs = Object.keys(templateSchema || {});
