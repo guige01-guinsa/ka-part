@@ -63,6 +63,51 @@ h4,
   color: #b43a52 !important;
 }
 
+@keyframes kaNoticePulse {
+  0% {
+    outline: 0 solid rgba(33, 91, 214, 0);
+    box-shadow: 0 0 0 0 rgba(33, 91, 214, 0);
+    filter: saturate(100%) brightness(100%);
+  }
+  35% {
+    outline: 2px solid rgba(33, 91, 214, 0.32);
+    box-shadow: 0 0 0 4px rgba(33, 91, 214, 0.14);
+    filter: saturate(110%) brightness(104%);
+  }
+  100% {
+    outline: 0 solid rgba(33, 91, 214, 0);
+    box-shadow: 0 0 0 0 rgba(33, 91, 214, 0);
+    filter: saturate(100%) brightness(100%);
+  }
+}
+
+@keyframes kaNoticePulseErr {
+  0% {
+    outline: 0 solid rgba(196, 58, 85, 0);
+    box-shadow: 0 0 0 0 rgba(196, 58, 85, 0);
+    filter: saturate(100%) brightness(100%);
+  }
+  35% {
+    outline: 2px solid rgba(196, 58, 85, 0.32);
+    box-shadow: 0 0 0 4px rgba(196, 58, 85, 0.14);
+    filter: saturate(110%) brightness(104%);
+  }
+  100% {
+    outline: 0 solid rgba(196, 58, 85, 0);
+    box-shadow: 0 0 0 0 rgba(196, 58, 85, 0);
+    filter: saturate(100%) brightness(100%);
+  }
+}
+
+.msg-attention {
+  animation: kaNoticePulse 760ms ease-out !important;
+  border-radius: 10px;
+}
+
+.msg-attention.msg-attention-err {
+  animation: kaNoticePulseErr 760ms ease-out !important;
+}
+
 .card,
 .panel,
 .menu-section,
@@ -235,4 +280,3 @@ textarea::placeholder {
   border-top: 1px solid #d9e0ee !important;
   background: #f7f9fc !important;
 }
-
