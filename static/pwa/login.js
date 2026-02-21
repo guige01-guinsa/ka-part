@@ -722,7 +722,6 @@
 
     const payload = {
       site_name: siteName,
-      site_code: siteCode,
       requester_name: signup.name,
       requester_phone: signup.phone,
       requester_login_id: signup.login_id,
@@ -738,6 +737,7 @@
       signup_office_phone: signup.office_phone,
       signup_office_fax: signup.office_fax,
     };
+    if (siteCode) payload.site_code = siteCode;
     const data = await KAAuth.requestJson("/api/site_registry/request", {
       method: "POST",
       noAuth: true,
