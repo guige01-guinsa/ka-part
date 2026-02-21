@@ -782,30 +782,8 @@
     const tabEls = [...document.querySelectorAll("#templateScopeWrap input.tpl-tab")];
     const fieldEls = [...document.querySelectorAll("#templateScopeWrap input.tpl-field")];
     if (!tabEls.length && !fieldEls.length) return;
-
-    if (!Object.keys(activeSchema || {}).length) {
-      // Default scope for first-time setup: all tabs/fields selected.
-      setTemplateSelectionAll(true);
-      syncTemplateFieldDisables();
-      return;
-    }
-
-    const activeFieldMap = {};
-    for (const [tabKey, tabDef] of Object.entries(activeSchema || {})) {
-      const fields = Array.isArray((tabDef || {}).fields) ? tabDef.fields : [];
-      activeFieldMap[tabKey] = new Set(fields.map((f) => String((f || {}).k || "").trim()).filter(Boolean));
-    }
-
-    for (const t of tabEls) {
-      const tab = String(t.dataset.tab || "").trim();
-      t.checked = !!activeFieldMap[tab];
-    }
-    for (const f of fieldEls) {
-      const tab = String(f.dataset.tab || "").trim();
-      const key = String(f.dataset.field || "").trim();
-      const set = activeFieldMap[tab];
-      f.checked = !!set && set.has(key);
-    }
+    // Default mode is always "all tabs/fields selected" for predictable apply behavior.
+    setTemplateSelectionAll(true);
     syncTemplateFieldDisables();
   }
 
@@ -1213,7 +1191,7 @@
     $("#btnPreview").addEventListener("click", () => previewSchema().catch((e) => setMsg(e.message || String(e), true)));
 
     $("#templateSelect").addEventListener("change", updateTemplateDescAndScope);
-    $("#btnTemplateApply").addEventListener("click", () =>
+    $("#btnTemplateApply")?.addEventListener("click", () =>
       applySelectedTemplate().catch((e) => setMsg(e.message || String(e), true))
     );
     $("#siteName")?.addEventListener("change", () => {
