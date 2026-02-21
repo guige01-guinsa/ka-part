@@ -442,6 +442,39 @@
     });
   }
 
+  function applyIssuedVerificationCode(data) {
+    const code = String((data && data.debug_code) || "").trim();
+    if (!/^\d{6}$/.test(code)) return false;
+    const codeEl = $("#suCode");
+    if (codeEl) codeEl.value = code;
+    const hint = "인증번호가 자동 입력되었습니다. [인증확인]을 누르세요.";
+    const current = String($("#signupMsg")?.textContent || "").trim();
+    if (!current) setMsg($("#signupMsg"), hint);
+    else if (!current.includes("인증번호가 자동 입력되었습니다")) setMsg($("#signupMsg"), `${current} ${hint}`);
+    focusSignupStep("btnVerifySignup");
+    return true;
+  }
+
+  function moveToLoginCardForSignin(loginId, password, note = "") {
+    const cleanLoginId = String(loginId || "").trim();
+    const cleanPassword = String(password || "").trim();
+    if (cleanLoginId && $("#loginId")) $("#loginId").value = cleanLoginId;
+    if (cleanPassword && $("#password")) $("#password").value = cleanPassword;
+    setMsg($("#loginMsg"), note || "가입 완료. 로그인 버튼을 누르면 바로 접속됩니다.");
+    const btn = $("#btnLogin");
+    const card = btn ? btn.closest(".card") : null;
+    if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (btn) {
+      window.setTimeout(() => {
+        try {
+          btn.focus({ preventScroll: true });
+        } catch (_e) {
+          try { btn.focus(); } catch (_e2) {}
+        }
+      }, card ? 220 : 0);
+    }
+  }
+
   function applySignupPasswordPolicy(policy) {
     if (policy && typeof policy === "object") {
       signupPasswordPolicy = {
@@ -609,7 +642,7 @@
       if (data.debug_code) msg += ` (개발용 인증번호: ${data.debug_code})`;
       setMsg($("#signupMsg"), msg);
       showSignupResult("문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.");
-      if (SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suCode");
+      if (!applyIssuedVerificationCode(data) && SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suCode");
       return;
     }
     const missingNormalFields =
@@ -645,7 +678,7 @@
           if (data.debug_code) msg += ` (개발용 인증번호: ${data.debug_code})`;
           setMsg($("#signupMsg"), msg);
           showSignupResult("문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.");
-          if (SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suCode");
+          if (!applyIssuedVerificationCode(data) && SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suCode");
           return;
         } catch (_e) {
           // fall through: user is in normal signup flow
@@ -684,7 +717,7 @@
     if (data.debug_code) msg += ` (개발용 인증번호: ${data.debug_code})`;
     setMsg($("#signupMsg"), msg);
     showSignupResult("");
-    if (SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suCode");
+    if (!applyIssuedVerificationCode(data) && SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suCode");
   }
 
   async function verifySignupAndIssueId() {
@@ -794,9 +827,15 @@
     lines.push("설정한 비밀번호로 로그인하세요.");
     showSignupResult(lines.join("\n"));
     setMsg($("#signupMsg"), "가입 완료");
-    setSignupCompleteMsg("가입이 완료되었습니다.");
-    if (data.login_id) $("#loginId").value = String(data.login_id);
-    $("#password").value = password;
+    setSignupCompleteMsg("");
+    const finalLoginId = String(data.login_id || loginId || "").trim();
+    moveToLoginCardForSignin(
+      finalLoginId,
+      password,
+      finalLoginId
+        ? `가입 완료. 아이디 ${finalLoginId}로 로그인 버튼만 누르시면 됩니다.`
+        : "가입 완료. 로그인 버튼만 누르시면 됩니다."
+    );
     resetSignupFinalizeState();
   }
 
