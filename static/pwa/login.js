@@ -18,6 +18,11 @@
     ],
   };
   const SIGNUP_LOGIN_ID_REGEX = /^[a-z0-9][a-z0-9_]{7,24}$/;
+  const SIGNUP_TUTORIAL_AUTO_ADVANCE = (() => {
+    const u = new URL(window.location.href);
+    const flag = String(u.searchParams.get("tutorial") || "").trim().toLowerCase();
+    return flag === "1" || flag === "true" || flag === "yes" || flag === "y";
+  })();
 
   function normalizePath(raw) {
     const txt = String(raw || "").trim();
@@ -262,6 +267,181 @@
     return String(value || "").replace(/\D/g, "");
   }
 
+  function isLikelyValidPhone(value) {
+    const digits = phoneDigits(value);
+    return digits.length >= 9 && digits.length <= 11;
+  }
+
+  function isLikelyValidUnitLabel(value) {
+    const compact = String(value || "").trim().replace(/\s+/g, "");
+    if (!compact) return false;
+    return /^(\d{2,4}[-/]\d{3,4}|\d{2,4}동\d{3,4}호?)$/.test(compact);
+  }
+
+  function isStepFocusable(el) {
+    if (!el) return false;
+    if (el.disabled) return false;
+    if (el.closest(".hidden")) return false;
+    return true;
+  }
+
+  function focusSignupStep(stepId) {
+    const el = $(`#${stepId}`);
+    if (!isStepFocusable(el)) return false;
+    try {
+      el.focus({ preventScroll: false });
+    } catch (_e) {
+      try {
+        el.focus();
+      } catch (_e2) {}
+    }
+    if (
+      typeof el.select === "function" &&
+      (el.tagName === "INPUT" || el.tagName === "TEXTAREA") &&
+      (el.type || "").toLowerCase() !== "date"
+    ) {
+      try {
+        el.select();
+      } catch (_e) {}
+    }
+    return true;
+  }
+
+  function signupTutorialStepOrder() {
+    const role = String($("#suRole")?.value || "").trim();
+    const order = ["suName", "suPhone", "suLoginId", "suSiteName", "suRole"];
+    if (isResidentRoleText(role)) order.push("suUnitLabel");
+    order.push("suAddress", "suOfficePhone", "suOfficeFax", "btnReqCode", "suCode", "btnVerifySignup");
+    if (!$("#signupPasswordPanel")?.classList.contains("hidden")) {
+      order.push("suPassword", "suPassword2", "btnCompleteSignup");
+    }
+    return order;
+  }
+
+  function nextSignupTutorialStepId(currentId) {
+    const order = signupTutorialStepOrder();
+    const idx = order.indexOf(String(currentId || "").trim());
+    if (idx < 0) return "";
+    for (let i = idx + 1; i < order.length; i += 1) {
+      const stepId = order[i];
+      const el = $(`#${stepId}`);
+      if (isStepFocusable(el)) return stepId;
+    }
+    return "";
+  }
+
+  function isSignupStepValidForTutorial(stepId) {
+    const id = String(stepId || "").trim();
+    const role = String($("#suRole")?.value || "").trim();
+    switch (id) {
+      case "suName":
+        return String($("#suName")?.value || "").trim().length >= 2;
+      case "suPhone":
+        return isLikelyValidPhone($("#suPhone")?.value || "");
+      case "suLoginId":
+        return !validateSignupLoginIdFormat(signupLoginId());
+      case "suSiteName":
+        return String($("#suSiteName")?.value || "").trim().length >= 2;
+      case "suRole":
+        return !!role;
+      case "suUnitLabel":
+        if (!isResidentRoleText(role)) return true;
+        return isLikelyValidUnitLabel($("#suUnitLabel")?.value || "");
+      case "suAddress":
+        return String($("#suAddress")?.value || "").trim().length >= 5;
+      case "suOfficePhone":
+        return isLikelyValidPhone($("#suOfficePhone")?.value || "");
+      case "suOfficeFax":
+        return isLikelyValidPhone($("#suOfficeFax")?.value || "");
+      case "suCode":
+        return /^\d{6}$/.test(String($("#suCode")?.value || "").trim());
+      case "suPassword":
+        return String($("#suPassword")?.value || "").trim().length >= Number(signupPasswordPolicy.min_length || 10);
+      case "suPassword2": {
+        const pw = String($("#suPassword")?.value || "").trim();
+        const pw2 = String($("#suPassword2")?.value || "").trim();
+        return !!pw && pw === pw2;
+      }
+      default:
+        return true;
+    }
+  }
+
+  async function tryTutorialAutoAdvance(stepId) {
+    if (!SIGNUP_TUTORIAL_AUTO_ADVANCE) return;
+    const id = String(stepId || "").trim();
+    if (!id) return;
+    if (!isSignupStepValidForTutorial(id)) return;
+    if (id === "suLoginId") {
+      try {
+        const available = await checkSignupLoginIdAvailability({ force: true });
+        if (!available) return;
+      } catch (e) {
+        setLoginIdMsg(e.message || String(e), true);
+        return;
+      }
+    }
+    const nextId = nextSignupTutorialStepId(id);
+    if (!nextId) return;
+    focusSignupStep(nextId);
+  }
+
+  function focusTutorialStartField() {
+    if (!SIGNUP_TUTORIAL_AUTO_ADVANCE) return;
+    if (signupReadyMode) {
+      focusSignupStep("suCode");
+      return;
+    }
+    const u = new URL(window.location.href);
+    const mode = String(u.searchParams.get("mode") || "").trim().toLowerCase();
+    const hash = String(u.hash || "").trim().toLowerCase();
+    if (mode !== "signup" && !hash.startsWith("#signup")) return;
+    const order = signupTutorialStepOrder();
+    for (const id of order) {
+      if (id.startsWith("btn")) continue;
+      const el = $(`#${id}`);
+      if (!isStepFocusable(el)) continue;
+      const value = "value" in el ? String(el.value || "").trim() : "";
+      if (!value) {
+        focusSignupStep(id);
+        return;
+      }
+    }
+  }
+
+  function wireSignupTutorialAutoAdvance() {
+    if (!SIGNUP_TUTORIAL_AUTO_ADVANCE) return;
+    const simpleStepIds = [
+      "suName",
+      "suPhone",
+      "suLoginId",
+      "suSiteName",
+      "suAddress",
+      "suOfficePhone",
+      "suOfficeFax",
+      "suUnitLabel",
+      "suPassword",
+      "suPassword2",
+      "suCode",
+    ];
+    for (const stepId of simpleStepIds) {
+      const el = $(`#${stepId}`);
+      if (!el) continue;
+      el.addEventListener("blur", () => {
+        tryTutorialAutoAdvance(stepId).catch(() => {});
+      });
+      el.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        if (stepId === "suCode" || stepId === "suPassword2") return;
+        e.preventDefault();
+        tryTutorialAutoAdvance(stepId).catch(() => {});
+      });
+    }
+    $("#suRole")?.addEventListener("change", () => {
+      tryTutorialAutoAdvance("suRole").catch(() => {});
+    });
+  }
+
   function applySignupPasswordPolicy(policy) {
     if (policy && typeof policy === "object") {
       signupPasswordPolicy = {
@@ -429,6 +609,7 @@
       if (data.debug_code) msg += ` (개발용 인증번호: ${data.debug_code})`;
       setMsg($("#signupMsg"), msg);
       showSignupResult("문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.");
+      if (SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suCode");
       return;
     }
     const missingNormalFields =
@@ -464,6 +645,7 @@
           if (data.debug_code) msg += ` (개발용 인증번호: ${data.debug_code})`;
           setMsg($("#signupMsg"), msg);
           showSignupResult("문자로 받은 인증번호를 입력하고 [인증확인]을 누르세요.");
+          if (SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suCode");
           return;
         } catch (_e) {
           // fall through: user is in normal signup flow
@@ -502,6 +684,7 @@
     if (data.debug_code) msg += ` (개발용 인증번호: ${data.debug_code})`;
     setMsg($("#signupMsg"), msg);
     showSignupResult("");
+    if (SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suCode");
   }
 
   async function verifySignupAndIssueId() {
@@ -547,6 +730,7 @@
     lines.push("비밀번호를 설정하면 가입이 완료됩니다.");
     showSignupResult(lines.join("\n"));
     refreshSignupPasswordStrength();
+    if (SIGNUP_TUTORIAL_AUTO_ADVANCE) focusSignupStep("suPassword");
   }
 
   async function completeSignup() {
@@ -789,7 +973,11 @@
       completeSignup().catch((e) => setSignupCompleteMsg(e.message || String(e), true));
     });
     $("#btnCheckLoginId")?.addEventListener("click", () => {
-      checkSignupLoginIdAvailability({ force: true }).catch((e) => setLoginIdMsg(e.message || String(e), true));
+      checkSignupLoginIdAvailability({ force: true })
+        .then((available) => {
+          if (available) tryTutorialAutoAdvance("suLoginId").catch(() => {});
+        })
+        .catch((e) => setLoginIdMsg(e.message || String(e), true));
     });
     $("#suLoginId")?.addEventListener("input", () => {
       scheduleSignupLoginIdCheck();
@@ -823,6 +1011,7 @@
     $("#bsPassword2").addEventListener("keydown", (e) => {
       if (e.key === "Enter") bootstrap().catch((err) => setMsg($("#bootstrapMsg"), err.message || String(err), true));
     });
+    wireSignupTutorialAutoAdvance();
   }
 
   async function init() {
@@ -836,6 +1025,7 @@
     applySignupReadyContext();
     await loadBootstrapStatus();
     await checkAlreadyLoggedIn();
+    focusTutorialStartField();
   }
 
   try {
