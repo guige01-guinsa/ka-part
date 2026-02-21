@@ -31,6 +31,16 @@
   let baseSchema = {};
   let activeSchema = {};
   let handlingSiteCodeConflict = false;
+  let specEnvManageCodePolicy = {
+    loaded: false,
+    enabled: false,
+    required: false,
+    role_bucket: "",
+    role_label: "",
+    ttl_sec: 0,
+  };
+  let specEnvManageCodeToken = "";
+  let specEnvManageCodeTokenExpiresAtTs = 0;
   const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnPreview", "btnGoMain"];
 
   function canManageSpecEnv(user) {
@@ -69,6 +79,38 @@
     if (!el) return;
     el.textContent = msg || "";
     el.classList.toggle("err", !!isErr);
+  }
+
+  function resetSpecEnvManageCodeToken() {
+    specEnvManageCodeToken = "";
+    specEnvManageCodeTokenExpiresAtTs = 0;
+  }
+
+  function setSpecEnvManageCodeToken(token, expiresAt, expiresInSec = 0) {
+    const cleanToken = String(token || "").trim();
+    const tsFromDate = Date.parse(String(expiresAt || "").trim());
+    const nowMs = Date.now();
+    let expiresMs = Number.isFinite(tsFromDate) ? tsFromDate : 0;
+    if (expiresMs <= nowMs) {
+      const addSec = Number(expiresInSec || 0);
+      if (Number.isFinite(addSec) && addSec > 0) {
+        expiresMs = nowMs + addSec * 1000;
+      }
+    }
+    specEnvManageCodeToken = cleanToken;
+    specEnvManageCodeTokenExpiresAtTs = expiresMs > nowMs ? expiresMs : 0;
+  }
+
+  function hasValidSpecEnvManageCodeToken() {
+    const token = String(specEnvManageCodeToken || "").trim();
+    if (!token) return false;
+    if (specEnvManageCodeTokenExpiresAtTs <= 0) return false;
+    return Date.now() + 1500 < specEnvManageCodeTokenExpiresAtTs;
+  }
+
+  function isSpecEnvManageCodeErrorMessage(msg) {
+    const text = String(msg || "").toLowerCase();
+    return text.includes("관리코드") || text.includes("manage code");
   }
 
   function showMigrationCard(scrollIntoView = false) {
@@ -641,6 +683,49 @@
     }
   }
 
+  async function loadSpecEnvManageCodePolicy(force = false) {
+    if (!force && specEnvManageCodePolicy.loaded) return specEnvManageCodePolicy;
+    const data = await jfetch("/api/site_env/manage_code/policy");
+    specEnvManageCodePolicy = {
+      loaded: true,
+      enabled: !!(data && data.enabled),
+      required: !!(data && data.required),
+      role_bucket: String((data && data.role_bucket) || ""),
+      role_label: String((data && data.role_label) || ""),
+      ttl_sec: Number((data && data.ttl_sec) || 0),
+    };
+    if (!specEnvManageCodePolicy.required) resetSpecEnvManageCodeToken();
+    return specEnvManageCodePolicy;
+  }
+
+  async function ensureSpecEnvManageCodeToken() {
+    const policy = await loadSpecEnvManageCodePolicy();
+    if (!policy.required) return "";
+    if (hasValidSpecEnvManageCodeToken()) return specEnvManageCodeToken;
+    const roleLabel = String(policy.role_label || "").trim();
+    const msg = roleLabel
+      ? `${roleLabel} 제원설정 관리코드를 입력하세요.`
+      : "제원설정 관리코드를 입력하세요.";
+    const raw = window.prompt(msg, "");
+    if (raw == null) throw new Error("제원설정 관리코드 입력이 취소되었습니다.");
+    const code = String(raw || "").trim();
+    if (!code) throw new Error("제원설정 관리코드를 입력하세요.");
+    const data = await jfetch("/api/site_env/manage_code/verify", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+    if (data && data.required === false) {
+      specEnvManageCodePolicy = { ...specEnvManageCodePolicy, required: false };
+      resetSpecEnvManageCodeToken();
+      return "";
+    }
+    setSpecEnvManageCodeToken(data && data.token, data && data.expires_at, data && data.expires_in_sec);
+    if (!hasValidSpecEnvManageCodeToken()) {
+      throw new Error("제원설정 관리코드 인증 토큰을 발급받지 못했습니다. 다시 시도하세요.");
+    }
+    return specEnvManageCodeToken;
+  }
+
   async function loadBaseSchema() {
     const data = await jfetch("/api/base_schema");
     baseSchema = (data && data.schema) || {};
@@ -782,9 +867,39 @@
     const tabEls = [...document.querySelectorAll("#templateScopeWrap input.tpl-tab")];
     const fieldEls = [...document.querySelectorAll("#templateScopeWrap input.tpl-field")];
     if (!tabEls.length && !fieldEls.length) return;
-    // Default mode is always "all tabs/fields selected" for predictable apply behavior.
-    setTemplateSelectionAll(true);
-    syncTemplateFieldDisables();
+    const schema = activeSchema && typeof activeSchema === "object" ? activeSchema : {};
+    const activeTabKeys = Object.keys(schema);
+
+    if (!activeTabKeys.length) {
+      const rawEditor = ($("#envJson")?.value || "").trim();
+      // Before loading any site config, keep all selected as an initial default.
+      if (!rawEditor) {
+        setTemplateSelectionAll(true);
+        syncTemplateFieldDisables();
+        return;
+      }
+    }
+
+    const fieldsByTab = {};
+    for (const [tabKey, tabDef] of Object.entries(schema)) {
+      const fields = Array.isArray((tabDef || {}).fields) ? tabDef.fields : [];
+      fieldsByTab[tabKey] = new Set(fields.map((f) => String((f || {}).k || "").trim()).filter(Boolean));
+    }
+
+    for (const t of tabEls) {
+      const tabKey = String(t.dataset.tab || "").trim();
+      const activeFields = tabKey ? fieldsByTab[tabKey] : null;
+      t.checked = !!(activeFields && activeFields.size);
+    }
+
+    for (const f of fieldEls) {
+      const tabKey = String(f.dataset.tab || "").trim();
+      const fieldKey = String(f.dataset.field || "").trim();
+      const activeFields = tabKey ? fieldsByTab[tabKey] : null;
+      const tabOn = !!(activeFields && activeFields.size);
+      f.disabled = !tabOn;
+      f.checked = !!(tabOn && fieldKey && activeFields.has(fieldKey));
+    }
   }
 
   function collectTemplateSelection() {
@@ -1092,17 +1207,34 @@
       setMsg(`JSON 파싱 오류: ${e.message}`, true);
       return;
     }
-    const data = await jfetch("/api/site_env", {
-      method: "PUT",
-      body: JSON.stringify({
-        site_id: siteId || 0,
-        site_name: site,
-        site_code: siteCode || "",
-        config: cfg,
-        mfa_confirmed: true,
-        reason: "spec_env_save",
-      }),
-    });
+
+    let manageCodeToken = "";
+    try {
+      manageCodeToken = await ensureSpecEnvManageCodeToken();
+    } catch (e) {
+      setMsg(e.message || String(e), true);
+      return;
+    }
+
+    let data = null;
+    try {
+      data = await jfetch("/api/site_env", {
+        method: "PUT",
+        body: JSON.stringify({
+          site_id: siteId || 0,
+          site_name: site,
+          site_code: siteCode || "",
+          config: cfg,
+          mfa_confirmed: true,
+          manage_code_token: manageCodeToken || "",
+          reason: "spec_env_save",
+        }),
+      });
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err || "");
+      if (isSpecEnvManageCodeErrorMessage(msg)) resetSpecEnvManageCodeToken();
+      throw err;
+    }
     if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
@@ -1132,10 +1264,29 @@
     }
     const ok = confirm(`${site}${siteCode ? ` [${siteCode}]` : ""} 단지의 제원설정을 삭제할까요?`);
     if (!ok) return;
-    const del = await jfetch(withSitePath("/api/site_env", { site_name: site, site_code: siteCode, site_id: siteId }), {
-      method: "DELETE",
-      headers: { "X-KA-MFA-VERIFIED": "1" },
-    });
+
+    let manageCodeToken = "";
+    try {
+      manageCodeToken = await ensureSpecEnvManageCodeToken();
+    } catch (e) {
+      setMsg(e.message || String(e), true);
+      return;
+    }
+
+    const headers = { "X-KA-MFA-VERIFIED": "1" };
+    if (manageCodeToken) headers["X-KA-SPEC-ENV-CODE-TOKEN"] = manageCodeToken;
+
+    let del = null;
+    try {
+      del = await jfetch(withSitePath("/api/site_env", { site_name: site, site_code: siteCode, site_id: siteId }), {
+        method: "DELETE",
+        headers,
+      });
+    } catch (err) {
+      const msg = err && err.message ? String(err.message) : String(err || "");
+      if (isSpecEnvManageCodeErrorMessage(msg)) resetSpecEnvManageCodeToken();
+      throw err;
+    }
     if (del && Object.prototype.hasOwnProperty.call(del, "site_id")) setSiteId(del.site_id);
     const data = await jfetch(withSitePath("/api/schema", { site_name: site, site_code: siteCode, site_id: siteId }));
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(data.site_name || "");
@@ -1350,6 +1501,7 @@
     enforceSitePolicy();
 
     wire();
+    loadSpecEnvManageCodePolicy().catch(() => {});
     if (canManageSiteCodeMigration(me)) {
       await prefillMigrationContext().catch(() => {});
       await loadMigrationRequests().catch(() => {});

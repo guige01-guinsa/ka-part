@@ -190,6 +190,10 @@ BACKUP_RESTORE_UPLOAD_MAX_BYTES = max(
 )
 _BACKUP_DOWNLOAD_TOKEN_LOCK = threading.Lock()
 _BACKUP_DOWNLOAD_TOKENS: Dict[str, Dict[str, Any]] = {}
+_SPEC_ENV_MANAGE_CODE_TOKEN_LOCK = threading.Lock()
+_SPEC_ENV_MANAGE_CODE_TOKENS: Dict[str, Dict[str, Any]] = {}
+_SPEC_ENV_MANAGE_CODE_FAIL_LOCK = threading.Lock()
+_SPEC_ENV_MANAGE_CODE_FAIL_STATE: Dict[str, deque[float]] = {}
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
@@ -216,6 +220,9 @@ ALLOW_QUERY_ACCESS_TOKEN = _env_enabled("KA_ALLOW_QUERY_ACCESS_TOKEN", False)
 BACKUP_DOWNLOAD_LINK_TTL_SEC = _safe_int_env("KA_BACKUP_DOWNLOAD_LINK_TTL_SEC", 600, 60)
 BACKUP_SITE_DAILY_MAX_RUNS = _safe_int_env("KA_BACKUP_SITE_DAILY_MAX_RUNS", 5, 0)
 BACKUP_SITE_DAILY_MAX_BYTES = _safe_int_env("KA_BACKUP_SITE_DAILY_MAX_BYTES", 2 * 1024 * 1024 * 1024, 0)
+SPEC_ENV_MANAGE_CODE_TTL_SEC = max(60, min(3600, _safe_int_env("KA_SPEC_ENV_MANAGE_CODE_TTL_SEC", 600, 60)))
+SPEC_ENV_MANAGE_CODE_WINDOW_SEC = max(30, min(3600, _safe_int_env("KA_SPEC_ENV_MANAGE_CODE_WINDOW_SEC", 300, 30)))
+SPEC_ENV_MANAGE_CODE_MAX_FAILURES = max(1, min(20, _safe_int_env("KA_SPEC_ENV_MANAGE_CODE_MAX_FAILURES", 5, 1)))
 if AUTH_COOKIE_SAMESITE == "none":
     # Modern browsers require Secure when SameSite=None.
     AUTH_COOKIE_SECURE = True
@@ -1940,6 +1947,218 @@ def _require_site_env_manager(request: Request) -> Tuple[Dict[str, Any], str]:
     return user, token
 
 
+def _spec_env_manage_code_feature_enabled() -> bool:
+    if _env_enabled("KA_SPEC_ENV_MANAGE_CODE_ENABLED", False):
+        return True
+    for key in (
+        "KA_SPEC_ENV_MANAGE_CODE_ADMIN",
+        "KA_SPEC_ENV_MANAGE_CODE_SUPER_ADMIN",
+        "KA_SPEC_ENV_MANAGE_CODE_SITE_ADMIN",
+        "KA_SPEC_ENV_MANAGE_CODE_COMMON",
+    ):
+        if str(os.getenv(key) or "").strip():
+            return True
+    return False
+
+
+def _spec_env_manage_code_bucket(user: Dict[str, Any]) -> str:
+    if int(user.get("is_admin") or 0) == 1:
+        return "admin"
+    if int(user.get("is_site_admin") or 0) == 1:
+        return "site_admin"
+    return ""
+
+
+def _spec_env_manage_code_role_label(bucket: str) -> str:
+    clean = str(bucket or "").strip().lower()
+    if clean == "admin":
+        return "최고/운영관리자"
+    if clean == "site_admin":
+        return "단지대표자"
+    return "-"
+
+
+def _spec_env_manage_code_value(bucket: str) -> str:
+    clean = str(bucket or "").strip().lower()
+    if clean == "admin":
+        raw = (
+            os.getenv("KA_SPEC_ENV_MANAGE_CODE_ADMIN")
+            or os.getenv("KA_SPEC_ENV_MANAGE_CODE_SUPER_ADMIN")
+            or os.getenv("KA_SPEC_ENV_MANAGE_CODE_COMMON")
+            or ""
+        )
+        return str(raw).strip()
+    if clean == "site_admin":
+        raw = os.getenv("KA_SPEC_ENV_MANAGE_CODE_SITE_ADMIN") or os.getenv("KA_SPEC_ENV_MANAGE_CODE_COMMON") or ""
+        return str(raw).strip()
+    return ""
+
+
+def _spec_env_manage_code_policy(user: Dict[str, Any]) -> Dict[str, Any]:
+    enabled = _spec_env_manage_code_feature_enabled()
+    bucket = _spec_env_manage_code_bucket(user)
+    role_label = _spec_env_manage_code_role_label(bucket)
+    expected_code = _spec_env_manage_code_value(bucket) if enabled else ""
+    if enabled and bucket and not expected_code:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "제원설정 관리코드가 역할별로 설정되지 않았습니다. "
+                "KA_SPEC_ENV_MANAGE_CODE_ADMIN / KA_SPEC_ENV_MANAGE_CODE_SITE_ADMIN "
+                "(또는 KA_SPEC_ENV_MANAGE_CODE_COMMON) 값을 확인하세요."
+            ),
+        )
+    return {
+        "enabled": bool(enabled),
+        "required": bool(enabled and bucket and expected_code),
+        "role_bucket": bucket,
+        "role_label": role_label,
+        "ttl_sec": int(SPEC_ENV_MANAGE_CODE_TTL_SEC),
+        "expected_code": expected_code,
+    }
+
+
+def _spec_env_manage_code_fail_key(request: Request, user: Dict[str, Any]) -> str:
+    ip = _client_ip(request) or "unknown"
+    uid = int(user.get("id") or 0)
+    login = _clean_login_id(user.get("login_id") or "")
+    role = _spec_env_manage_code_bucket(user) or "-"
+    return f"{ip}:{uid}:{login}:{role}"
+
+
+def _check_spec_env_manage_code_rate_limit(request: Request, user: Dict[str, Any]) -> None:
+    key = _spec_env_manage_code_fail_key(request, user)
+    now_ts = time.time()
+    cutoff = now_ts - float(SPEC_ENV_MANAGE_CODE_WINDOW_SEC)
+    with _SPEC_ENV_MANAGE_CODE_FAIL_LOCK:
+        dq = _SPEC_ENV_MANAGE_CODE_FAIL_STATE.get(key)
+        if not dq:
+            return
+        while dq and float(dq[0]) < cutoff:
+            dq.popleft()
+        if len(dq) < int(SPEC_ENV_MANAGE_CODE_MAX_FAILURES):
+            return
+        wait = int(max(1, float(dq[0]) + float(SPEC_ENV_MANAGE_CODE_WINDOW_SEC) - now_ts))
+    raise HTTPException(status_code=429, detail=f"관리코드 인증 시도가 너무 많습니다. {wait}초 후 다시 시도하세요.")
+
+
+def _record_spec_env_manage_code_failure(request: Request, user: Dict[str, Any]) -> None:
+    key = _spec_env_manage_code_fail_key(request, user)
+    now_ts = time.time()
+    cutoff = now_ts - float(SPEC_ENV_MANAGE_CODE_WINDOW_SEC)
+    with _SPEC_ENV_MANAGE_CODE_FAIL_LOCK:
+        dq = _SPEC_ENV_MANAGE_CODE_FAIL_STATE.setdefault(key, deque())
+        while dq and float(dq[0]) < cutoff:
+            dq.popleft()
+        dq.append(now_ts)
+
+
+def _clear_spec_env_manage_code_failures(request: Request, user: Dict[str, Any]) -> None:
+    key = _spec_env_manage_code_fail_key(request, user)
+    with _SPEC_ENV_MANAGE_CODE_FAIL_LOCK:
+        _SPEC_ENV_MANAGE_CODE_FAIL_STATE.pop(key, None)
+
+
+def _prune_spec_env_manage_code_tokens_locked(now_ts: float | None = None) -> None:
+    cutoff = float(now_ts if now_ts is not None else time.time())
+    stale = [
+        token
+        for token, payload in _SPEC_ENV_MANAGE_CODE_TOKENS.items()
+        if float(payload.get("expires_at_ts") or 0.0) <= cutoff
+    ]
+    for token in stale:
+        _SPEC_ENV_MANAGE_CODE_TOKENS.pop(token, None)
+
+
+def _issue_spec_env_manage_code_token(*, user: Dict[str, Any], role_bucket: str) -> Dict[str, Any]:
+    token = secrets.token_urlsafe(32)
+    now_ts = time.time()
+    expires_at_ts = now_ts + float(SPEC_ENV_MANAGE_CODE_TTL_SEC)
+    with _SPEC_ENV_MANAGE_CODE_TOKEN_LOCK:
+        _prune_spec_env_manage_code_tokens_locked(now_ts)
+        _SPEC_ENV_MANAGE_CODE_TOKENS[token] = {
+            "user_id": int(user.get("id") or 0),
+            "actor_login": _clean_login_id(user.get("login_id") or ""),
+            "role_bucket": str(role_bucket or "").strip().lower(),
+            "issued_at_ts": now_ts,
+            "expires_at_ts": expires_at_ts,
+        }
+    expires_at = datetime.fromtimestamp(expires_at_ts).replace(microsecond=0).isoformat(sep=" ")
+    return {
+        "token": token,
+        "expires_in_sec": int(SPEC_ENV_MANAGE_CODE_TTL_SEC),
+        "expires_at": expires_at,
+    }
+
+
+def _assert_spec_env_manage_code_token(*, user: Dict[str, Any], token: str, role_bucket: str, operation_label: str) -> None:
+    clean_token = str(token or "").strip()
+    if not clean_token:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{operation_label}에는 제원설정 관리코드 인증이 필요합니다.",
+        )
+    now_ts = time.time()
+    with _SPEC_ENV_MANAGE_CODE_TOKEN_LOCK:
+        _prune_spec_env_manage_code_tokens_locked(now_ts)
+        payload = _SPEC_ENV_MANAGE_CODE_TOKENS.get(clean_token)
+    if not payload:
+        raise HTTPException(status_code=403, detail="제원설정 관리코드 인증이 만료되었습니다. 다시 인증하세요.")
+    if float(payload.get("expires_at_ts") or 0.0) <= now_ts:
+        with _SPEC_ENV_MANAGE_CODE_TOKEN_LOCK:
+            _SPEC_ENV_MANAGE_CODE_TOKENS.pop(clean_token, None)
+        raise HTTPException(status_code=403, detail="제원설정 관리코드 인증이 만료되었습니다. 다시 인증하세요.")
+
+    expected_user_id = int(payload.get("user_id") or 0)
+    actor_user_id = int(user.get("id") or 0)
+    if expected_user_id > 0 and actor_user_id > 0 and expected_user_id != actor_user_id:
+        raise HTTPException(status_code=403, detail="관리코드 인증 사용자와 요청 사용자가 일치하지 않습니다.")
+
+    expected_login = str(payload.get("actor_login") or "").strip().lower()
+    actor_login = _clean_login_id(user.get("login_id") or "")
+    if expected_login and actor_login and expected_login != actor_login:
+        raise HTTPException(status_code=403, detail="관리코드 인증 사용자와 요청 사용자가 일치하지 않습니다.")
+
+    expected_bucket = str(payload.get("role_bucket") or "").strip().lower()
+    clean_bucket = str(role_bucket or "").strip().lower()
+    if expected_bucket and clean_bucket and expected_bucket != clean_bucket:
+        raise HTTPException(status_code=403, detail="관리코드 인증 권한 범위가 올바르지 않습니다.")
+
+
+def _spec_env_manage_code_matches(provided_code: str, expected_code: str) -> bool:
+    provided = str(provided_code or "").strip()
+    expected = str(expected_code or "").strip()
+    if not provided or not expected:
+        return False
+    if expected.lower().startswith("sha256:"):
+        expected_digest = expected.split(":", 1)[1].strip().lower()
+        digest = hashlib.sha256(provided.encode("utf-8")).hexdigest().lower()
+        if not expected_digest:
+            return False
+        return hmac.compare_digest(digest, expected_digest)
+    return hmac.compare_digest(provided, expected)
+
+
+def _assert_spec_env_manage_code_confirmed(
+    request: Request,
+    user: Dict[str, Any],
+    payload: Dict[str, Any] | None = None,
+    *,
+    operation_label: str = "제원설정 변경",
+) -> None:
+    policy = _spec_env_manage_code_policy(user)
+    if not bool(policy.get("required")):
+        return
+    body = payload if isinstance(payload, dict) else {}
+    token = str(body.get("manage_code_token") or request.headers.get("X-KA-SPEC-ENV-CODE-TOKEN") or "").strip()
+    _assert_spec_env_manage_code_token(
+        user=user,
+        token=token,
+        role_bucket=str(policy.get("role_bucket") or ""),
+        operation_label=operation_label,
+    )
+
+
 def _can_manage_backup(user: Dict[str, Any]) -> bool:
     return _permission_level_from_user(user) in {"admin", "site_admin"}
 
@@ -2657,6 +2876,73 @@ def api_base_schema(request: Request):
     return {"ok": True, "schema": SCHEMA_DEFS}
 
 
+@router.get("/site_env/manage_code/policy")
+def api_site_env_manage_code_policy(request: Request):
+    user, _token = _require_site_env_manager(request)
+    policy = _spec_env_manage_code_policy(user)
+    return {
+        "ok": True,
+        "enabled": bool(policy.get("enabled")),
+        "required": bool(policy.get("required")),
+        "role_bucket": str(policy.get("role_bucket") or ""),
+        "role_label": str(policy.get("role_label") or ""),
+        "ttl_sec": int(policy.get("ttl_sec") or SPEC_ENV_MANAGE_CODE_TTL_SEC),
+    }
+
+
+@router.post("/site_env/manage_code/verify")
+def api_site_env_manage_code_verify(request: Request, payload: Dict[str, Any] = Body(default={})):
+    user, _token = _require_site_env_manager(request)
+    policy = _spec_env_manage_code_policy(user)
+    if not bool(policy.get("required")):
+        return {
+            "ok": True,
+            "enabled": bool(policy.get("enabled")),
+            "required": False,
+            "role_bucket": str(policy.get("role_bucket") or ""),
+            "role_label": str(policy.get("role_label") or ""),
+        }
+
+    _check_spec_env_manage_code_rate_limit(request, user)
+    code = str((payload or {}).get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="관리코드를 입력하세요.")
+
+    expected_code = str(policy.get("expected_code") or "").strip()
+    role_bucket = str(policy.get("role_bucket") or "")
+    role_label = str(policy.get("role_label") or "")
+    if not _spec_env_manage_code_matches(code, expected_code):
+        _record_spec_env_manage_code_failure(request, user)
+        _audit_security(
+            user=user,
+            event_type="site_env_manage_code_verify",
+            severity="WARN",
+            outcome="denied",
+            detail={"reason": "code_mismatch", "role_bucket": role_bucket},
+        )
+        raise HTTPException(status_code=403, detail="제원설정 관리코드가 일치하지 않습니다.")
+
+    _clear_spec_env_manage_code_failures(request, user)
+    ticket = _issue_spec_env_manage_code_token(user=user, role_bucket=role_bucket)
+    _audit_security(
+        user=user,
+        event_type="site_env_manage_code_verify",
+        severity="INFO",
+        outcome="ok",
+        detail={"role_bucket": role_bucket},
+    )
+    return {
+        "ok": True,
+        "enabled": True,
+        "required": True,
+        "role_bucket": role_bucket,
+        "role_label": role_label,
+        "token": str(ticket.get("token") or ""),
+        "expires_in_sec": int(ticket.get("expires_in_sec") or SPEC_ENV_MANAGE_CODE_TTL_SEC),
+        "expires_at": str(ticket.get("expires_at") or ""),
+    }
+
+
 @router.get("/site_env")
 def api_site_env(
     request: Request,
@@ -3227,6 +3513,7 @@ def api_site_env_upsert(request: Request, payload: Dict[str, Any] = Body(...)):
     if _env_enabled("KA_SPEC_ENV_CHANGE_WINDOW_ENABLED", False):
         _assert_change_window("제원설정 변경")
     _assert_mfa_confirmed(request, payload, operation_label="제원설정 변경")
+    _assert_spec_env_manage_code_confirmed(request, user, payload, operation_label="제원설정 변경")
     clean_site_name, clean_site_code = _resolve_spec_env_site_target(
         user,
         payload.get("site_name"),
@@ -3315,6 +3602,7 @@ def api_site_env_delete(
     if _env_enabled("KA_SPEC_ENV_CHANGE_WINDOW_ENABLED", False):
         _assert_change_window("제원설정 삭제")
     _assert_mfa_confirmed(request, operation_label="제원설정 삭제")
+    _assert_spec_env_manage_code_confirmed(request, user, operation_label="제원설정 삭제")
     clean_site_name, clean_site_code = _resolve_spec_env_site_target(
         user, site_name, site_code, site_id, require_any=True, for_write=False
     )
