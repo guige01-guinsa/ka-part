@@ -784,7 +784,8 @@
     if (!tabEls.length && !fieldEls.length) return;
 
     if (!Object.keys(activeSchema || {}).length) {
-      setTemplateSelectionAll(false);
+      // Default scope for first-time setup: all tabs/fields selected.
+      setTemplateSelectionAll(true);
       syncTemplateFieldDisables();
       return;
     }
@@ -970,14 +971,23 @@
     return compactConfig(out);
   }
 
-  async function applySelectedTemplate() {
+  async function applySelectedTemplate(opts = {}) {
+    const allowDirectSaveOnNoSelection = !!(opts && opts.allowDirectSaveOnNoSelection);
     const t = getSelectedTemplate();
     if (!t) {
+      if (allowDirectSaveOnNoSelection) {
+        await saveConfig();
+        return;
+      }
       setMsg("템플릿을 선택하세요.", true);
       return;
     }
     const selection = collectTemplateSelection();
     if (!selection.tabs.size) {
+      if (allowDirectSaveOnNoSelection) {
+        await saveConfig();
+        return;
+      }
       setMsg("최소 1개 탭을 선택하세요.", true);
       return;
     }
@@ -999,11 +1009,8 @@
     setConfigToEditor(next);
     const schemaPreview = applyConfigToSchema(baseSchema, next);
     renderPreview({ site_name: getSiteName(), site_code: getSiteCode(), schema: schemaPreview });
-    markActionSuccess($("#btnTemplateApply"), "✓");
     setMsg("선택한 탭메뉴와 항목을 적용했습니다. 저장 중입니다...");
     await saveConfig();
-    markActionSuccess($("#btnTemplateApply"), "✓");
-    setMsg("선택한 탭메뉴/항목 불러오기와 저장이 완료되었습니다. [메인으로]를 누르세요.");
   }
 
   async function loadTemplates() {
@@ -1199,7 +1206,9 @@
     });
 
     $("#btnReload").addEventListener("click", () => reloadConfig().catch((e) => setMsg(e.message || String(e), true)));
-    $("#btnSave").addEventListener("click", () => saveConfig().catch((e) => setMsg(e.message || String(e), true)));
+    $("#btnSave").addEventListener("click", () =>
+      applySelectedTemplate({ allowDirectSaveOnNoSelection: true }).catch((e) => setMsg(e.message || String(e), true))
+    );
     $("#btnDelete").addEventListener("click", () => deleteConfig().catch((e) => setMsg(e.message || String(e), true)));
     $("#btnPreview").addEventListener("click", () => previewSchema().catch((e) => setMsg(e.message || String(e), true)));
 
