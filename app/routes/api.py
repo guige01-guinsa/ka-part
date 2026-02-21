@@ -2788,6 +2788,163 @@ def _site_registry_request_public(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _site_registry_auto_actor() -> Dict[str, Any]:
+    try:
+        users = list_staff_users(active_only=True)
+    except Exception:
+        users = []
+    for row in users:
+        try:
+            if int(row.get("is_admin") or 0) != 1:
+                continue
+            if not _is_super_admin(row):
+                continue
+            actor_id = int(row.get("id") or 0)
+            actor_login = _clean_login_id(row.get("login_id") or "")
+            if actor_id > 0 and actor_login:
+                return {"id": actor_id, "login_id": actor_login}
+        except Exception:
+            continue
+    return {"id": 1, "login_id": "auto.site_registry"}
+
+
+def _site_registry_actor_identity(actor: Dict[str, Any] | None) -> Tuple[int, str]:
+    actor_id = 0
+    actor_login = ""
+    if isinstance(actor, dict):
+        try:
+            actor_id = int(actor.get("id") or 0)
+        except Exception:
+            actor_id = 0
+        actor_login = str(actor.get("login_id") or "").strip().lower()
+    if actor_id <= 0:
+        actor_id = 1
+    try:
+        actor_login = _clean_login_id(actor_login or "auto.site_registry")
+    except HTTPException:
+        actor_login = "auto.site_registry"
+    return actor_id, actor_login
+
+
+def _execute_site_registry_request(
+    *,
+    request: Request,
+    request_id: int,
+    actor: Dict[str, Any] | None,
+    payload: Dict[str, Any] | None = None,
+    item: Dict[str, Any] | None = None,
+    auto_processed: bool = False,
+    audit_event_type: str = "site_registry_request_execute",
+) -> Dict[str, Any]:
+    target = item if isinstance(item, dict) else get_privileged_change_request(int(request_id))
+    if not target:
+        raise HTTPException(status_code=404, detail="요청을 찾을 수 없습니다.")
+    if str(target.get("change_type") or "").strip().lower() != SITE_REGISTRY_REQUEST_CHANGE_TYPE:
+        raise HTTPException(status_code=400, detail="지원하지 않는 요청 유형입니다.")
+
+    status = str(target.get("status") or "").strip().lower()
+    if status == "executed":
+        existing_result = target.get("result") if isinstance(target.get("result"), dict) else {}
+        existing_signup_ready = existing_result.get("signup_ready") if isinstance(existing_result.get("signup_ready"), dict) else {}
+        return {
+            "ok": True,
+            "already_processed": True,
+            "auto_processed": bool(existing_result.get("auto_processed")),
+            "signup_ready": existing_signup_ready,
+            "request": _site_registry_request_public(target),
+            "message": "이미 처리된 요청입니다.",
+        }
+    if status not in {"pending", "approved"}:
+        raise HTTPException(status_code=409, detail="요청 상태가 처리 불가능합니다.")
+
+    actor_id, actor_login = _site_registry_actor_identity(actor)
+    body = payload if isinstance(payload, dict) else {}
+    req_payload = target.get("payload") if isinstance(target.get("payload"), dict) else {}
+    site_name = _clean_site_name(
+        body.get("site_name", req_payload.get("site_name") or target.get("target_site_name")),
+        required=True,
+    )
+    requested_site_code = _clean_site_code(
+        body.get("site_code", req_payload.get("requested_site_code") or target.get("target_site_code")),
+        required=False,
+    )
+    process_note = _clean_optional_text(body.get("process_note"), 200) or ""
+
+    if status == "pending":
+        try:
+            target = approve_privileged_change_request(
+                request_id=int(request_id),
+                approver_user_id=actor_id,
+                approver_login=actor_login,
+            )
+            status = str(target.get("status") or "").strip().lower()
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+
+    if status != "approved":
+        raise HTTPException(status_code=409, detail="요청이 승인 상태가 아닙니다.")
+
+    resolved_site_code = _resolve_site_code_for_site(
+        site_name,
+        requested_site_code,
+        allow_create=True,
+        allow_remap=False,
+    )
+    signup_ready: Dict[str, Any]
+    try:
+        signup_ready = _issue_site_registry_signup_ready_notice(
+            request=request,
+            req_payload=req_payload,
+            site_name=site_name,
+            site_code=resolved_site_code,
+        )
+    except Exception as e:
+        signup_ready = {"notified": False, "reason": str(e)}
+    result = {
+        "site_name": site_name,
+        "site_code": resolved_site_code,
+        "requested_site_code": requested_site_code,
+        "process_note": process_note,
+        "signup_ready": signup_ready,
+    }
+    if auto_processed:
+        result["auto_processed"] = True
+    try:
+        executed = mark_privileged_change_request_executed(
+            request_id=int(request_id),
+            executed_by_user_id=actor_id,
+            executed_by_login=actor_login,
+            result=result,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    _audit_security(
+        user={"id": actor_id, "login_id": actor_login},
+        event_type=audit_event_type,
+        severity="INFO",
+        outcome="ok",
+        target_site_code=resolved_site_code,
+        target_site_name=site_name,
+        request_id=int(request_id),
+        detail={
+            "requested_site_code": requested_site_code,
+            "process_note": process_note,
+            "auto_processed": bool(auto_processed),
+        },
+    )
+    return {
+        "ok": True,
+        "already_processed": False,
+        "auto_processed": bool(auto_processed),
+        "site_name": site_name,
+        "site_code": resolved_site_code,
+        "signup_ready": signup_ready,
+        "request": _site_registry_request_public(executed),
+        "message": "요청을 자동 처리하여 단지코드를 등록했습니다." if auto_processed else "요청을 처리하여 단지코드를 등록했습니다.",
+    }
+
+
 @router.post("/site_registry/request")
 def api_site_registry_request(request: Request, payload: Dict[str, Any] = Body(...)):
     site_name = _clean_site_name(payload.get("site_name"), required=True)
@@ -2870,15 +3027,79 @@ def api_site_registry_request(request: Request, payload: Dict[str, Any] = Body(.
         request_id=int(req.get("id") or 0),
         detail={"requester_role": requester_role, "requester_phone": requester_phone},
     )
-    return {
+    should_auto_process = _clean_bool(payload.get("auto_process"), default=False)
+    if not should_auto_process:
+        requester_level = _permission_level_from_role_text(requester_role, allow_admin_levels=False)
+        signup_level = _permission_level_from_role_text(signup_role, allow_admin_levels=False)
+        should_auto_process = requester_level == "site_admin" or signup_level == "site_admin"
+
+    auto_error = ""
+    execute_result: Dict[str, Any] | None = None
+    if should_auto_process:
+        try:
+            execute_result = _execute_site_registry_request(
+                request=request,
+                request_id=int(req.get("id") or 0),
+                actor=_site_registry_auto_actor(),
+                payload={
+                    "site_name": site_name,
+                    "site_code": requested_site_code,
+                    "process_note": "signup_auto_process",
+                },
+                item=req,
+                auto_processed=True,
+                audit_event_type="site_registry_request_auto_execute",
+            )
+            req = get_privileged_change_request(int(req.get("id") or 0)) or req
+        except HTTPException as e:
+            auto_error = str(e.detail or "auto process failed")
+            _audit_security(
+                user=None,
+                event_type="site_registry_request_auto_execute",
+                severity="WARNING",
+                outcome="failed",
+                target_site_code=requested_site_code,
+                target_site_name=site_name,
+                request_id=int(req.get("id") or 0),
+                detail={"error": auto_error, "requester_role": requester_role},
+            )
+        except Exception as e:
+            auto_error = str(e)
+            _audit_security(
+                user=None,
+                event_type="site_registry_request_auto_execute",
+                severity="WARNING",
+                outcome="failed",
+                target_site_code=requested_site_code,
+                target_site_name=site_name,
+                request_id=int(req.get("id") or 0),
+                detail={"error": auto_error, "requester_role": requester_role},
+            )
+
+    status_value = str(req.get("status") or "pending")
+    out: Dict[str, Any] = {
         "ok": True,
         "request_id": int(req.get("id") or 0),
-        "status": str(req.get("status") or "pending"),
-        "status_label": _site_registry_request_status_label(req.get("status") or "pending"),
+        "status": status_value,
+        "status_label": _site_registry_request_status_label(status_value),
         "site_name": site_name,
         "requested_site_code": requested_site_code,
-        "message": "단지코드 등록요청이 접수되었습니다. 최고관리자가 요청함에서 처리할 수 있습니다.",
+        "auto_processed": bool(execute_result and execute_result.get("auto_processed")),
+        "message": (
+            "단지코드 자동 등록처리를 완료했습니다. 인증번호 받기를 다시 눌러 계속 진행하세요."
+            if execute_result and execute_result.get("auto_processed")
+            else "단지코드 등록요청이 접수되었습니다. 최고관리자가 요청함에서 처리할 수 있습니다."
+        ),
     }
+    if execute_result:
+        out["request"] = execute_result.get("request")
+        out["site_code"] = str(execute_result.get("site_code") or "")
+        out["signup_ready"] = execute_result.get("signup_ready") or {}
+    else:
+        out["request"] = _site_registry_request_public(req)
+    if auto_error:
+        out["auto_error"] = auto_error
+    return out
 
 
 @router.get("/site_registry/requests")
@@ -2923,102 +3144,14 @@ def api_site_registry_request_execute(
     payload: Dict[str, Any] = Body(default={}),
 ):
     user, _token = _require_super_admin(request)
-    item = get_privileged_change_request(int(request_id))
-    if not item:
-        raise HTTPException(status_code=404, detail="요청을 찾을 수 없습니다.")
-    if str(item.get("change_type") or "").strip().lower() != SITE_REGISTRY_REQUEST_CHANGE_TYPE:
-        raise HTTPException(status_code=400, detail="지원하지 않는 요청 유형입니다.")
-
-    status = str(item.get("status") or "").strip().lower()
-    if status == "executed":
-        existing_result = item.get("result") if isinstance(item.get("result"), dict) else {}
-        existing_signup_ready = existing_result.get("signup_ready") if isinstance(existing_result.get("signup_ready"), dict) else {}
-        return {
-            "ok": True,
-            "already_processed": True,
-            "signup_ready": existing_signup_ready,
-            "request": _site_registry_request_public(item),
-            "message": "이미 처리된 요청입니다.",
-        }
-    if status not in {"pending", "approved"}:
-        raise HTTPException(status_code=409, detail="요청 상태가 처리 불가능합니다.")
-
-    req_payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-    site_name = _clean_site_name(
-        payload.get("site_name", req_payload.get("site_name") or item.get("target_site_name")),
-        required=True,
-    )
-    requested_site_code = _clean_site_code(
-        payload.get("site_code", req_payload.get("requested_site_code") or item.get("target_site_code")),
-        required=False,
-    )
-    process_note = _clean_optional_text(payload.get("process_note"), 200) or ""
-
-    if status == "pending":
-        try:
-            item = approve_privileged_change_request(
-                request_id=int(request_id),
-                approver_user_id=int(user.get("id") or 0),
-                approver_login=_clean_login_id(user.get("login_id") or "admin"),
-            )
-            status = str(item.get("status") or "").strip().lower()
-        except ValueError as e:
-            raise HTTPException(status_code=409, detail=str(e)) from e
-
-    if status != "approved":
-        raise HTTPException(status_code=409, detail="요청이 승인 상태가 아닙니다.")
-
-    resolved_site_code = _resolve_site_code_for_site(
-        site_name,
-        requested_site_code,
-        allow_create=True,
-        allow_remap=False,
-    )
-    signup_ready: Dict[str, Any]
-    try:
-        signup_ready = _issue_site_registry_signup_ready_notice(
-            request=request,
-            req_payload=req_payload,
-            site_name=site_name,
-            site_code=resolved_site_code,
-        )
-    except Exception as e:
-        signup_ready = {"notified": False, "reason": str(e)}
-    result = {
-        "site_name": site_name,
-        "site_code": resolved_site_code,
-        "requested_site_code": requested_site_code,
-        "process_note": process_note,
-        "signup_ready": signup_ready,
-    }
-    try:
-        executed = mark_privileged_change_request_executed(
-            request_id=int(request_id),
-            executed_by_user_id=int(user.get("id") or 0),
-            executed_by_login=_clean_login_id(user.get("login_id") or "admin"),
-            result=result,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
-
-    _audit_security(
-        user=user,
-        event_type="site_registry_request_execute",
-        severity="INFO",
-        outcome="ok",
-        target_site_code=resolved_site_code,
-        target_site_name=site_name,
+    return _execute_site_registry_request(
+        request=request,
         request_id=int(request_id),
-        detail={"requested_site_code": requested_site_code, "process_note": process_note},
+        actor=user,
+        payload=payload,
+        auto_processed=False,
+        audit_event_type="site_registry_request_execute",
     )
-    return {
-        "ok": True,
-        "site_name": site_name,
-        "site_code": resolved_site_code,
-        "signup_ready": signup_ready,
-        "request": _site_registry_request_public(executed),
-        "message": "요청을 처리하여 단지코드를 등록했습니다.",
-    }
 
 
 @router.delete("/site_registry/requests/{request_id}")

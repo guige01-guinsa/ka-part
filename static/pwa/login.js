@@ -229,11 +229,7 @@
   function showMissingSiteCodeAssist() {
     showSiteRegisterAssist(true);
     syncAssistSiteName();
-    if (bootstrapRequired) {
-      setSiteRegMsg("아직 최고관리자 계정이 없습니다. 아래 '최초 관리자 설정' 완료 후 간편등록 예약을 눌러주세요.");
-      return;
-    }
-    setSiteRegMsg("간편등록 예약을 접수하면 최고관리자가 사용자관리의 '단지코드 요청함'에서 처리할 수 있습니다.");
+    setSiteRegMsg("간편등록 예약을 접수하면 자동 등록 처리됩니다. 인증번호 받기를 다시 눌러 계속 진행하세요.");
   }
 
   function normalizeSignupLoginId(value) {
@@ -722,6 +718,7 @@
 
     const payload = {
       site_name: siteName,
+      auto_process: true,
       requester_name: signup.name,
       requester_phone: signup.phone,
       requester_login_id: signup.login_id,
@@ -745,15 +742,16 @@
       headers: {},
     });
     const reqId = Number(data && data.request_id ? data.request_id : 0);
-    const idText = reqId > 0 ? `요청번호 #${reqId}` : "요청";
+    const doneMsg =
+      reqId > 0
+        ? `접수 완료 #${reqId}. 다시한번 인증번호 받기를 누르면 단지대표자인증 번호가 다시 발송되고 인증확인후 계속 진행`
+        : "접수 완료. 다시한번 인증번호 받기를 누르면 단지대표자인증 번호가 다시 발송되고 인증확인후 계속 진행";
     showSiteRegisterAssist(true);
-    setSiteRegMsg(`${idText} 접수 완료. 최고관리자는 사용자관리 > 단지코드 요청함에서 처리할 수 있습니다.`);
-    setMsg($("#signupMsg"), `${idText}이 접수되었습니다. 처리되면 문자 안내 링크에서 인증확인/비밀번호 설정을 진행하세요.`);
-
-    if (bootstrapRequired) {
-      setSiteRegMsg(`${idText} 접수 완료. 먼저 아래 '최초 관리자 설정'을 완료한 뒤 사용자관리에서 처리하세요.`);
-      const card = $("#bootstrapCard");
-      if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+    setSiteRegMsg(doneMsg);
+    setMsg($("#signupMsg"), doneMsg);
+    const autoError = String((data && data.auto_error) || "").trim();
+    if (autoError) {
+      setSiteRegMsg(`접수는 완료되었지만 자동 처리에 실패했습니다. 최고관리자 요청함에서 처리해 주세요. (${autoError})`, true);
     }
   }
 
