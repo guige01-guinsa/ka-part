@@ -8,7 +8,6 @@
     { key: "resident", label: "입주민", desc: "민원/문의 중심으로 가장 자주 쓰는 기능만 빠르게 익힙니다." },
     { key: "security", label: "보안·경비", desc: "주차관리 진입과 현장 처리 흐름을 우선 익힙니다." },
     { key: "site_admin", label: "단지대표자", desc: "단지 설정, 공지/FAQ 확인, 운영 관리 흐름을 익힙니다." },
-    { key: "admin", label: "최고/운영관리자", desc: "초기 설정과 운영 관리 전체 흐름을 빠르게 점검합니다." },
   ];
 
   const ROLE_SET = new Set(ROLES.map((x) => x.key));
@@ -124,43 +123,6 @@
         href: "/pwa/public.html",
       },
     ],
-    admin: [
-      {
-        id: "signup",
-        title: "신규가입 또는 초기계정 준비",
-        desc: "최초 계정이 없으면 초기 관리자 설정을 진행합니다.",
-        action: "로그인페이지",
-        href: "/pwa/login.html?force=1&mode=login",
-      },
-      {
-        id: "login",
-        title: "관리자 로그인",
-        desc: "운영관리자 계정으로 로그인합니다.",
-        action: "로그인",
-        href: "/pwa/login.html?force=1&mode=login",
-      },
-      {
-        id: "spec_env",
-        title: "제원 템플릿/항목 기본값 점검",
-        desc: "단지 제원 환경변수 설정에서 기본값을 점검합니다.",
-        action: "제원설정",
-        href: "/pwa/spec_env.html",
-      },
-      {
-        id: "users",
-        title: "사용자/권한 운영 점검",
-        desc: "신규가입 승인, 권한 분류, 단지코드 매핑을 확인합니다.",
-        action: "사용자관리",
-        href: "/pwa/users.html",
-      },
-      {
-        id: "public",
-        title: "공개 첫 화면 점검",
-        desc: "공지/FAQ가 신규가입자 관점에서 이해되게 보이는지 점검합니다.",
-        action: "공개화면",
-        href: "/pwa/public.html",
-      },
-    ],
   };
 
   const state = {
@@ -184,7 +146,7 @@
     if (v === "resident" || v === "입주민" || v === "입대의") return "resident";
     if (v === "security" || v === "security_guard" || v === "보안" || v === "경비") return "security";
     if (v === "site_admin" || v === "단지대표자") return "site_admin";
-    if (v === "admin" || v === "최고관리자" || v === "운영관리자") return "admin";
+    if (v === "admin" || v === "최고관리자" || v === "운영관리자" || v === "최고/운영관리자") return "site_admin";
     return "";
   }
 
