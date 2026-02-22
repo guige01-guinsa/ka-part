@@ -57,18 +57,13 @@
       font-size: 11pt;
       padding: 0;
     }
-    table.box th.approval-vert {
-      font-size: 11pt;
-      font-weight: 700;
-      line-height: 1.1;
-    }
     table.box th.approval-head {
       font-size: 11pt;
       font-weight: 700;
-      height: 38pt;
+      height: 30pt;
     }
     table.box td.approval-sign {
-      height: 42pt;
+      height: 52pt;
       font-size: 18pt;
       font-weight: 700;
     }
@@ -115,9 +110,8 @@
     <table class="box">
       <tr>
         <td class="title-cell" width="70%">{{ title }}</td>
-        <th class="approval-vert" rowspan="2" width="6%">결<br>재</th>
-        <th class="approval-head" width="12%" style="width:12%;">과장</th>
-        <th class="approval-head" width="12%" style="width:12%;">소장</th>
+        <th class="approval-head" width="15%" style="width:15%;">과장</th>
+        <th class="approval-head" width="15%" style="width:15%;">소장</th>
       </tr>
       <tr>
         <td class="meta-cell" width="70%" style="width:70%;">
@@ -129,8 +123,8 @@
             </tr>
           </table>
         </td>
-        <td class="approval-sign" width="12%" style="width:12%;">{% if approval_manager %}{{ approval_manager }}{% else %}&nbsp;{% endif %}</td>
-        <td class="approval-sign" width="12%" style="width:12%;">{% if approval_chief %}{{ approval_chief }}{% else %}&nbsp;{% endif %}</td>
+        <td class="approval-sign" width="15%" style="width:15%;">{% if approval_manager %}{{ approval_manager }}{% else %}&nbsp;{% endif %}</td>
+        <td class="approval-sign" width="15%" style="width:15%;">{% if approval_chief %}{{ approval_chief }}{% else %}&nbsp;{% endif %}</td>
       </tr>
     </table>
 
