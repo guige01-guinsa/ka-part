@@ -1995,7 +1995,8 @@ def _spec_env_manage_code_value(bucket: str) -> str:
 
 
 def _spec_env_manage_code_site_admin_password_enabled() -> bool:
-    return _env_enabled("KA_SPEC_ENV_MANAGE_CODE_SITE_ADMIN_USE_PASSWORD", False)
+    # Default ON so site admins can use their account password unless explicitly disabled.
+    return _env_enabled("KA_SPEC_ENV_MANAGE_CODE_SITE_ADMIN_USE_PASSWORD", True)
 
 
 def _spec_env_manage_code_allow_password(bucket: str) -> bool:
