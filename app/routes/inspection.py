@@ -198,7 +198,15 @@ def _is_admin(user: Dict[str, Any]) -> bool:
 
 
 def _is_site_admin(user: Dict[str, Any]) -> bool:
-    return int(user.get("is_site_admin") or 0) == 1
+    if int(user.get("is_site_admin") or 0) == 1:
+        return True
+    role = _normalize_role_text(user.get("role"))
+    if not role:
+        return False
+    compact = role.replace(" ", "")
+    if role in {"단지대표자", "단지관리자", "단지대표자(관리자)", "단지관리자(관리자)"}:
+        return True
+    return ("단지대표자" in compact) or ("단지관리자" in compact)
 
 
 def _is_run_creator(user: Dict[str, Any]) -> bool:
@@ -1778,7 +1786,7 @@ def _decide_run(run_id: int, user: Dict[str, Any], comment: str, decision: str, 
             raise HTTPException(status_code=409, detail="대기 중인 결재 단계가 없습니다.")
         p = dict(pending)
         actor_login = str(user.get("login_id") or "").strip().lower()
-        if (not _is_admin(user)) and actor_login != str(p.get("approver_login") or "").strip().lower():
+        if (not _is_admin(user)) and (not _is_site_admin(user)) and actor_login != str(p.get("approver_login") or "").strip().lower():
             raise HTTPException(status_code=403, detail="현재 단계 결재 권한이 없습니다.")
 
         # required code check (issued by /approval-code endpoint)
@@ -1792,7 +1800,7 @@ def _decide_run(run_id: int, user: Dict[str, Any], comment: str, decision: str, 
             raise HTTPException(status_code=409, detail="이미 사용된 승인코드입니다. 다시 발급해 주세요.")
         if expected_expires < ts:
             raise HTTPException(status_code=409, detail="승인코드가 만료되었습니다. 다시 발급해 주세요.")
-        if expected_actor and expected_actor != actor_login:
+        if expected_actor and expected_actor != actor_login and (not _is_admin(user)) and (not _is_site_admin(user)):
             raise HTTPException(status_code=403, detail="해당 승인코드는 다른 결재자에게 발급되었습니다.")
 
         input_code = _normalize_approval_code(approval_code)
@@ -1832,7 +1840,7 @@ def _decide_run(run_id: int, user: Dict[str, Any], comment: str, decision: str, 
             (decision, str(comment or "").strip(), ts, ts, ts, int(p["id"])),
         )
         if decision == "REJECTED":
-            con.execute("UPDATE inspection_runs SET status='REJECTED', approval_step=NULL, updated_at=? WHERE id=?", (ts, ts, int(run_id)))
+            con.execute("UPDATE inspection_runs SET status='REJECTED', approval_step=NULL, updated_at=? WHERE id=?", (ts, int(run_id)))
             con.commit()
             return {"ok": True, "status": "REJECTED"}
 
@@ -1887,7 +1895,7 @@ def inspection_runs_issue_approval_code(run_id: int, request: Request):
         if not pending:
             raise HTTPException(status_code=409, detail="대기 중인 결재 단계가 없습니다.")
         p = dict(pending)
-        if (not _is_admin(user)) and actor_login != str(p.get("approver_login") or "").strip().lower():
+        if (not _is_admin(user)) and (not _is_site_admin(user)) and actor_login != str(p.get("approver_login") or "").strip().lower():
             raise HTTPException(status_code=403, detail="현재 단계 결재 권한이 없습니다.")
 
         code = _issue_random_approval_code()

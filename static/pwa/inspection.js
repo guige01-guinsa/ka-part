@@ -135,11 +135,22 @@
 
   function isManagerUser() {
     const u = state.bootstrapUser || {};
+    const roleCompact = String(u.role || "").replaceAll(" ", "");
     const role = String(u.role || "").trim();
+    if (roleCompact.includes("단지대표자") || roleCompact.includes("단지관리자")) {
+      return true;
+    }
     if (role === "최고/운영관리자" || role === "최고관리자" || role === "운영관리자" || role === "단지대표자" || role === "단지관리자") {
       return true;
     }
     return !!u.is_admin || !!u.is_site_admin;
+  }
+
+  function isSiteAdminLikeUser() {
+    const u = state.bootstrapUser || {};
+    if (u.is_site_admin) return true;
+    const roleCompact = String(u.role || "").replaceAll(" ", "");
+    return roleCompact.includes("단지대표자") || roleCompact.includes("단지관리자");
   }
 
   function canCreateRun() {
@@ -880,7 +891,7 @@
     const status = String(run.status || "").trim().toUpperCase();
     if (!(status === "DRAFT" || status === "REJECTED")) return false;
     const u = state.bootstrapUser || {};
-    if (u.is_admin || u.is_site_admin) return true;
+    if (u.is_admin || isSiteAdminLikeUser()) return true;
     return _loginLower(u.login_id) === _loginLower(run.inspector_login);
   }
 
@@ -888,7 +899,7 @@
     const run = runDetail?.run || {};
     if (String(run.status || "").trim().toUpperCase() !== "SUBMITTED") return false;
     const u = state.bootstrapUser || {};
-    if (u.is_admin) return true;
+    if (u.is_admin || isSiteAdminLikeUser()) return true;
     const pending = pendingApproval(runDetail);
     if (!pending) return false;
     return _loginLower(u.login_id) === _loginLower(pending.approver_login);
