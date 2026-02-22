@@ -6359,7 +6359,8 @@ def api_pdf(
         if isinstance(home, dict):
             home["work_type"] = str(home.get("work_type") or entry_work_type).strip() or entry_work_type
 
-    pbytes = build_pdf(site_name, entry_date, tabs, schema_defs=schema)
+    worker_name = str(user.get("name") or user.get("login_id") or "").strip()
+    pbytes = build_pdf(site_name, entry_date, tabs, worker_name=worker_name, schema_defs=schema)
     from urllib.parse import quote
 
     filename = f"전기일지_{site_name}_{entry_date}.pdf"

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
+from pathlib import Path
 from typing import Any, Dict, List
 
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
@@ -10,6 +13,10 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
 from .schema_defs import SCHEMA_DEFS, SCHEMA_TAB_ORDER
+
+LOG = logging.getLogger(__name__)
+_WEASYPRINT_HTML_CLASS: Any | None = None
+_WEASYPRINT_AVAILABLE: bool | None = None
 
 def today_ymd() -> str:
     return dt.date.today().isoformat()
@@ -98,7 +105,176 @@ def build_excel(
     wb.save(bio)
     return bio.getvalue()
 
-def build_pdf(
+def _fmt_value(value: Any, default: str = "-") -> str:
+    text = str(value or "").strip()
+    return text if text else default
+
+
+def _tab_value(
+    tabs: Dict[str, Dict[str, Any]],
+    tab_key: str,
+    field_key: str,
+    *,
+    default: str = "-",
+) -> str:
+    tab = tabs.get(tab_key) if isinstance(tabs, dict) else {}
+    if not isinstance(tab, dict):
+        return default
+    return _fmt_value(tab.get(field_key), default=default)
+
+
+def _date_label_ko(ymd: str) -> str:
+    try:
+        d = dt.date.fromisoformat(safe_ymd(ymd))
+    except Exception:
+        d = dt.date.today()
+    weeks = ["월", "화", "수", "목", "금", "토", "일"]
+    return f"{d.year}년 {d.month:02d}월 {d.day:02d}일 {weeks[d.weekday()]}요일"
+
+
+def _build_pdf_context(
+    site_name: str,
+    date: str,
+    tabs: Dict[str, Dict[str, Any]],
+    *,
+    worker_name: str = "",
+) -> Dict[str, Any]:
+    home = tabs.get("home") if isinstance(tabs, dict) else {}
+    if not isinstance(home, dict):
+        home = {}
+
+    complex_code = _fmt_value(home.get("complex_code"), default="")
+    if not complex_code:
+        complex_code = _fmt_value(site_name, default="")
+
+    lv_rows = ("L1", "L2", "L3")
+    lv_cols = (
+        ("V", "_V"),
+        ("A", "_A"),
+        ("KW", "_KW"),
+    )
+
+    def lv_block(prefix: str) -> List[Dict[str, str]]:
+        rows: List[Dict[str, str]] = []
+        for row_name in lv_rows:
+            item: Dict[str, str] = {"phase": row_name}
+            for col_name, suffix in lv_cols:
+                key = f"{prefix}_{row_name}{suffix}"
+                item[col_name.lower()] = _tab_value(tabs, "tr1" if prefix == "lv1" else "tr2", key)
+            rows.append(item)
+        return rows
+
+    meter_main = _tab_value(tabs, "meter", "main_kwh")
+    meter_industry = _tab_value(tabs, "meter", "industry_kwh")
+    meter_street = _tab_value(tabs, "meter", "street_kwh")
+
+    return {
+        "title": "수변전 일지 (아파트)",
+        "site_name": _fmt_value(site_name, default="-"),
+        "site_code": _fmt_value(complex_code, default="-"),
+        "entry_date": safe_ymd(date),
+        "entry_date_label": _date_label_ko(date),
+        "worker_name": _fmt_value(worker_name, default="-"),
+        "work_type": _fmt_value(home.get("work_type"), default="일일"),
+        "important_work": _fmt_value(home.get("important_work"), default="-"),
+        "note": _fmt_value(home.get("note"), default="-"),
+        "inspection_time": "10:00",
+        "aiss_kv": _tab_value(tabs, "main_vcb", "main_vcb_kv"),
+        "aiss_r_a": _tab_value(tabs, "meter", "AISS_L1_A"),
+        "aiss_s_a": _tab_value(tabs, "meter", "AISS_L2_A"),
+        "aiss_t_a": _tab_value(tabs, "meter", "AISS_L3_A"),
+        # Current schema has no neutral current key; keep explicit placeholder.
+        "aiss_n_a": "-",
+        "tr1_temp": _tab_value(tabs, "temperature", "temperature_tr1"),
+        "tr2_temp": _tab_value(tabs, "temperature", "temperature_tr2"),
+        "lv1_rows": lv_block("lv1"),
+        "lv2_rows": lv_block("lv2"),
+        "meter_rows": [
+            {"name": "메인(*720/4)", "today": meter_main, "prev": "-", "daily": "-", "monthly": "-"},
+            {"name": "산업용(13)", "today": meter_industry, "prev": "-", "daily": "-", "monthly": "-"},
+            {"name": "가로등(13)", "today": meter_street, "prev": "-", "daily": "-", "monthly": "-"},
+        ],
+        "tank_apartment": _tab_value(tabs, "facility_check", "tank_level_1"),
+        "tank_officetel": _tab_value(tabs, "facility_check", "tank_level_2"),
+        "hydrant_pressure": _tab_value(tabs, "facility_check", "hydrant_pressure"),
+        "sp_pump_pressure": _tab_value(tabs, "facility_check", "sp_pump_pressure"),
+        "high_pressure": _tab_value(tabs, "facility_check", "high_pressure"),
+        "low_pressure": _tab_value(tabs, "facility_check", "low_pressure"),
+        "office_pressure": _tab_value(tabs, "facility_check", "office_pressure"),
+        "shop_pressure": _tab_value(tabs, "facility_check", "shop_pressure"),
+    }
+
+
+def _render_pdf_html_template(
+    site_name: str,
+    date: str,
+    tabs: Dict[str, Dict[str, Any]],
+    *,
+    worker_name: str = "",
+) -> tuple[str, Path]:
+    template_dir = Path(__file__).resolve().parent.parent / "templates" / "pdf"
+    env = Environment(
+        loader=FileSystemLoader(str(template_dir)),
+        autoescape=select_autoescape(["html", "xml"]),
+    )
+    tpl = env.get_template("substation_daily_a4.html")
+    context = _build_pdf_context(site_name, date, tabs, worker_name=worker_name)
+    html = tpl.render(**context)
+    return html, template_dir
+
+
+def _get_weasyprint_html_class():
+    global _WEASYPRINT_HTML_CLASS, _WEASYPRINT_AVAILABLE
+    if _WEASYPRINT_AVAILABLE is True and _WEASYPRINT_HTML_CLASS is not None:
+        return _WEASYPRINT_HTML_CLASS
+    if _WEASYPRINT_AVAILABLE is False:
+        return None
+    try:
+        from weasyprint import HTML as html_class
+    except Exception as e:
+        _WEASYPRINT_AVAILABLE = False
+        LOG.warning("WeasyPrint unavailable, using xhtml2pdf fallback: %s", e)
+        return None
+    _WEASYPRINT_HTML_CLASS = html_class
+    _WEASYPRINT_AVAILABLE = True
+    return _WEASYPRINT_HTML_CLASS
+
+
+def _build_pdf_html_weasyprint(
+    site_name: str,
+    date: str,
+    tabs: Dict[str, Dict[str, Any]],
+    *,
+    worker_name: str = "",
+) -> bytes:
+    html, template_dir = _render_pdf_html_template(site_name, date, tabs, worker_name=worker_name)
+    html_class = _get_weasyprint_html_class()
+    if html_class is None:
+        raise RuntimeError("WeasyPrint is unavailable")
+    pdf = html_class(string=html, base_url=str(template_dir)).write_pdf()
+    return bytes(pdf)
+
+
+def _build_pdf_html_xhtml2pdf(
+    site_name: str,
+    date: str,
+    tabs: Dict[str, Dict[str, Any]],
+    *,
+    worker_name: str = "",
+) -> bytes:
+    from io import BytesIO
+    from xhtml2pdf import pisa
+
+    html, template_dir = _render_pdf_html_template(site_name, date, tabs, worker_name=worker_name)
+    template_path = (template_dir / "substation_daily_a4.html").resolve()
+    out = BytesIO()
+    result = pisa.CreatePDF(src=html, dest=out, encoding="utf-8", path=str(template_path))
+    if getattr(result, "err", 0):
+        raise RuntimeError(f"xhtml2pdf render failed: err={result.err}")
+    return out.getvalue()
+
+
+def _build_pdf_legacy(
     site_name: str,
     date: str,
     tabs: Dict[str, Dict[str, str]],
@@ -154,3 +330,23 @@ def build_pdf(
     c.showPage()
     c.save()
     return bio.getvalue()
+
+
+def build_pdf(
+    site_name: str,
+    date: str,
+    tabs: Dict[str, Dict[str, str]],
+    *,
+    worker_name: str = "",
+    schema_defs: Dict[str, Dict[str, Any]] | None = None,
+) -> bytes:
+    if _get_weasyprint_html_class() is not None:
+        try:
+            return _build_pdf_html_weasyprint(site_name, date, tabs or {}, worker_name=worker_name)
+        except Exception as e:
+            LOG.warning("WeasyPrint render failed, trying xhtml2pdf fallback: %s", e)
+    try:
+        return _build_pdf_html_xhtml2pdf(site_name, date, tabs or {}, worker_name=worker_name)
+    except Exception as e:
+        LOG.warning("xhtml2pdf render failed, fallback to legacy reportlab: %s", e)
+    return _build_pdf_legacy(site_name, date, tabs, schema_defs=schema_defs)
