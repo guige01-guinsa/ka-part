@@ -123,6 +123,28 @@ def _tab_value(
     return _fmt_value(tab.get(field_key), default=default)
 
 
+def _keep_pdf_first_page(pdf_bytes: bytes) -> bytes:
+    raw = bytes(pdf_bytes or b"")
+    if not raw:
+        return raw
+    try:
+        from io import BytesIO
+        from pypdf import PdfReader, PdfWriter
+    except Exception:
+        return raw
+    try:
+        reader = PdfReader(BytesIO(raw))
+        if len(reader.pages) <= 1:
+            return raw
+        writer = PdfWriter()
+        writer.add_page(reader.pages[0])
+        out = BytesIO()
+        writer.write(out)
+        return out.getvalue()
+    except Exception:
+        return raw
+
+
 def _date_label_ko(ymd: str) -> str:
     try:
         d = dt.date.fromisoformat(safe_ymd(ymd))
@@ -184,15 +206,15 @@ def _build_pdf_context(
         "aiss_s_a": _tab_value(tabs, "meter", "AISS_L2_A"),
         "aiss_t_a": _tab_value(tabs, "meter", "AISS_L3_A"),
         # Current schema has no neutral current key; keep explicit placeholder.
-        "aiss_n_a": "-",
+        "aiss_n_a": "0",
         "tr1_temp": _tab_value(tabs, "temperature", "temperature_tr1"),
         "tr2_temp": _tab_value(tabs, "temperature", "temperature_tr2"),
         "lv1_rows": lv_block("lv1"),
         "lv2_rows": lv_block("lv2"),
         "meter_rows": [
-            {"name": "메인(*720/4)", "today": meter_main, "prev": "-", "daily": "-", "monthly": "-"},
-            {"name": "산업용(13)", "today": meter_industry, "prev": "-", "daily": "-", "monthly": "-"},
-            {"name": "가로등(13)", "today": meter_street, "prev": "-", "daily": "-", "monthly": "-"},
+            {"name": "메인(*720/4)", "today": meter_main, "prev": "#N/A", "daily": "", "monthly": ""},
+            {"name": "산업용(13)", "today": meter_industry, "prev": "#N/A", "daily": "", "monthly": ""},
+            {"name": "가로등(13)", "today": meter_street, "prev": "#N/A", "daily": "", "monthly": ""},
         ],
         "tank_apartment": _tab_value(tabs, "facility_check", "tank_level_1"),
         "tank_officetel": _tab_value(tabs, "facility_check", "tank_level_2"),
@@ -342,11 +364,13 @@ def build_pdf(
 ) -> bytes:
     if _get_weasyprint_html_class() is not None:
         try:
-            return _build_pdf_html_weasyprint(site_name, date, tabs or {}, worker_name=worker_name)
+            pdf = _build_pdf_html_weasyprint(site_name, date, tabs or {}, worker_name=worker_name)
+            return _keep_pdf_first_page(pdf)
         except Exception as e:
             LOG.warning("WeasyPrint render failed, trying xhtml2pdf fallback: %s", e)
     try:
-        return _build_pdf_html_xhtml2pdf(site_name, date, tabs or {}, worker_name=worker_name)
+        pdf = _build_pdf_html_xhtml2pdf(site_name, date, tabs or {}, worker_name=worker_name)
+        return _keep_pdf_first_page(pdf)
     except Exception as e:
         LOG.warning("xhtml2pdf render failed, fallback to legacy reportlab: %s", e)
-    return _build_pdf_legacy(site_name, date, tabs, schema_defs=schema_defs)
+    return _keep_pdf_first_page(_build_pdf_legacy(site_name, date, tabs, schema_defs=schema_defs))
