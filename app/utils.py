@@ -151,7 +151,7 @@ def _date_label_ko(ymd: str) -> str:
     except Exception:
         d = dt.date.today()
     weeks = ["월", "화", "수", "목", "금", "토", "일"]
-    return f"{d.year}년 {d.month:02d}월 {d.day:02d}일 {weeks[d.weekday()]}요일"
+    return f"{d.year}년 {d.month}월 {d.day}일 {weeks[d.weekday()]}요일"
 
 
 def _build_pdf_context(
@@ -212,7 +212,7 @@ def _build_pdf_context(
         "lv1_rows": lv_block("lv1"),
         "lv2_rows": lv_block("lv2"),
         "meter_rows": [
-            {"name": "메인(*720/4)", "today": meter_main, "prev": "#N/A", "daily": "", "monthly": ""},
+            {"name": "메인(*720)(4)", "today": meter_main, "prev": "#N/A", "daily": "", "monthly": ""},
             {"name": "산업용(13)", "today": meter_industry, "prev": "#N/A", "daily": "", "monthly": ""},
             {"name": "가로등(13)", "today": meter_street, "prev": "#N/A", "daily": "", "monthly": ""},
         ],
