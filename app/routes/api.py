@@ -1994,25 +1994,50 @@ def _spec_env_manage_code_value(bucket: str) -> str:
     return ""
 
 
+def _spec_env_manage_code_site_admin_password_enabled() -> bool:
+    return _env_enabled("KA_SPEC_ENV_MANAGE_CODE_SITE_ADMIN_USE_PASSWORD", False)
+
+
+def _spec_env_manage_code_allow_password(bucket: str) -> bool:
+    clean = str(bucket or "").strip().lower()
+    return clean == "site_admin" and _spec_env_manage_code_site_admin_password_enabled()
+
+
+def _spec_env_manage_code_verify_mode(bucket: str, expected_code: str) -> str:
+    has_code = bool(str(expected_code or "").strip())
+    allow_password = _spec_env_manage_code_allow_password(bucket)
+    if has_code and allow_password:
+        return "code_or_password"
+    if has_code:
+        return "code"
+    if allow_password:
+        return "password"
+    return ""
+
+
 def _spec_env_manage_code_policy(user: Dict[str, Any]) -> Dict[str, Any]:
     enabled = _spec_env_manage_code_feature_enabled()
     bucket = _spec_env_manage_code_bucket(user)
     role_label = _spec_env_manage_code_role_label(bucket)
     expected_code = _spec_env_manage_code_value(bucket) if enabled else ""
-    if enabled and bucket and not expected_code:
+    verify_mode = _spec_env_manage_code_verify_mode(bucket, expected_code) if enabled else ""
+    if enabled and bucket and not verify_mode:
         raise HTTPException(
             status_code=503,
             detail=(
                 "제원설정 관리코드가 역할별로 설정되지 않았습니다. "
                 "KA_SPEC_ENV_MANAGE_CODE_ADMIN / KA_SPEC_ENV_MANAGE_CODE_SITE_ADMIN "
-                "(또는 KA_SPEC_ENV_MANAGE_CODE_COMMON) 값을 확인하세요."
+                "(또는 KA_SPEC_ENV_MANAGE_CODE_COMMON) 값을 확인하거나 "
+                "KA_SPEC_ENV_MANAGE_CODE_SITE_ADMIN_USE_PASSWORD=1(단지대표자 비밀번호 사용)을 설정하세요."
             ),
         )
     return {
         "enabled": bool(enabled),
-        "required": bool(enabled and bucket and expected_code),
+        "required": bool(enabled and bucket and verify_mode),
         "role_bucket": bucket,
         "role_label": role_label,
+        "verify_mode": verify_mode,
+        "accept_password": bool(_spec_env_manage_code_allow_password(bucket)),
         "ttl_sec": int(SPEC_ENV_MANAGE_CODE_TTL_SEC),
         "expected_code": expected_code,
     }
@@ -2886,6 +2911,7 @@ def api_site_env_manage_code_policy(request: Request):
         "required": bool(policy.get("required")),
         "role_bucket": str(policy.get("role_bucket") or ""),
         "role_label": str(policy.get("role_label") or ""),
+        "verify_mode": str(policy.get("verify_mode") or ""),
         "ttl_sec": int(policy.get("ttl_sec") or SPEC_ENV_MANAGE_CODE_TTL_SEC),
     }
 
@@ -2901,25 +2927,47 @@ def api_site_env_manage_code_verify(request: Request, payload: Dict[str, Any] = 
             "required": False,
             "role_bucket": str(policy.get("role_bucket") or ""),
             "role_label": str(policy.get("role_label") or ""),
+            "verify_mode": str(policy.get("verify_mode") or ""),
         }
 
     _check_spec_env_manage_code_rate_limit(request, user)
     code = str((payload or {}).get("code") or "").strip()
+    verify_mode = str(policy.get("verify_mode") or "")
     if not code:
+        if verify_mode == "password":
+            raise HTTPException(status_code=400, detail="비밀번호를 입력하세요.")
+        if verify_mode == "code_or_password":
+            raise HTTPException(status_code=400, detail="관리코드 또는 비밀번호를 입력하세요.")
         raise HTTPException(status_code=400, detail="관리코드를 입력하세요.")
 
     expected_code = str(policy.get("expected_code") or "").strip()
     role_bucket = str(policy.get("role_bucket") or "")
     role_label = str(policy.get("role_label") or "")
-    if not _spec_env_manage_code_matches(code, expected_code):
+    matched = _spec_env_manage_code_matches(code, expected_code)
+    match_source = "code" if matched else ""
+
+    if (not matched) and bool(policy.get("accept_password")):
+        login_id = _clean_login_id(user.get("login_id") or "")
+        if login_id:
+            db_user = get_staff_user_by_login(login_id)
+            password_hash = str((db_user or {}).get("password_hash") or "")
+            if password_hash and verify_password(code, password_hash):
+                matched = True
+                match_source = "password"
+
+    if not matched:
         _record_spec_env_manage_code_failure(request, user)
         _audit_security(
             user=user,
             event_type="site_env_manage_code_verify",
             severity="WARN",
             outcome="denied",
-            detail={"reason": "code_mismatch", "role_bucket": role_bucket},
+            detail={"reason": "code_mismatch", "role_bucket": role_bucket, "verify_mode": verify_mode},
         )
+        if verify_mode == "password":
+            raise HTTPException(status_code=403, detail="비밀번호가 일치하지 않습니다.")
+        if verify_mode == "code_or_password":
+            raise HTTPException(status_code=403, detail="제원설정 관리코드 또는 비밀번호가 일치하지 않습니다.")
         raise HTTPException(status_code=403, detail="제원설정 관리코드가 일치하지 않습니다.")
 
     _clear_spec_env_manage_code_failures(request, user)
@@ -2929,7 +2977,7 @@ def api_site_env_manage_code_verify(request: Request, payload: Dict[str, Any] = 
         event_type="site_env_manage_code_verify",
         severity="INFO",
         outcome="ok",
-        detail={"role_bucket": role_bucket},
+        detail={"role_bucket": role_bucket, "verify_mode": verify_mode, "match_source": match_source},
     )
     return {
         "ok": True,
@@ -2937,6 +2985,7 @@ def api_site_env_manage_code_verify(request: Request, payload: Dict[str, Any] = 
         "required": True,
         "role_bucket": role_bucket,
         "role_label": role_label,
+        "verify_mode": verify_mode,
         "token": str(ticket.get("token") or ""),
         "expires_in_sec": int(ticket.get("expires_in_sec") or SPEC_ENV_MANAGE_CODE_TTL_SEC),
         "expires_at": str(ticket.get("expires_at") or ""),

@@ -692,6 +692,7 @@
       required: !!(data && data.required),
       role_bucket: String((data && data.role_bucket) || ""),
       role_label: String((data && data.role_label) || ""),
+      verify_mode: String((data && data.verify_mode) || ""),
       ttl_sec: Number((data && data.ttl_sec) || 0),
     };
     if (!specEnvManageCodePolicy.required) resetSpecEnvManageCodeToken();
@@ -703,13 +704,26 @@
     if (!policy.required) return "";
     if (hasValidSpecEnvManageCodeToken()) return specEnvManageCodeToken;
     const roleLabel = String(policy.role_label || "").trim();
-    const msg = roleLabel
+    const verifyMode = String(policy.verify_mode || "");
+    let msg = roleLabel
       ? `${roleLabel} 제원설정 관리코드를 입력하세요.`
       : "제원설정 관리코드를 입력하세요.";
+    let emptyMsg = "제원설정 관리코드를 입력하세요.";
+    if (verifyMode === "password") {
+      msg = roleLabel
+        ? `${roleLabel} 계정 비밀번호를 입력하세요.`
+        : "계정 비밀번호를 입력하세요.";
+      emptyMsg = "비밀번호를 입력하세요.";
+    } else if (verifyMode === "code_or_password") {
+      msg = roleLabel
+        ? `${roleLabel} 제원설정 관리코드 또는 계정 비밀번호를 입력하세요.`
+        : "제원설정 관리코드 또는 계정 비밀번호를 입력하세요.";
+      emptyMsg = "관리코드 또는 비밀번호를 입력하세요.";
+    }
     const raw = window.prompt(msg, "");
-    if (raw == null) throw new Error("제원설정 관리코드 입력이 취소되었습니다.");
+    if (raw == null) throw new Error("인증 입력이 취소되었습니다.");
     const code = String(raw || "").trim();
-    if (!code) throw new Error("제원설정 관리코드를 입력하세요.");
+    if (!code) throw new Error(emptyMsg);
     const data = await jfetch("/api/site_env/manage_code/verify", {
       method: "POST",
       body: JSON.stringify({ code }),
