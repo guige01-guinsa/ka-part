@@ -6,24 +6,25 @@
   <style>
     @page {
       size: A4;
-      margin: 7mm;
+      margin: 10mm;
     }
     body {
       margin: 0;
       font-family: "HYSMyeongJo-Medium", "Malgun Gothic", "NanumGothic", sans-serif;
       color: #111;
-      font-size: 11px;
-      line-height: 1.2;
+      font-size: 12pt;
+      line-height: 1.12;
     }
     .sheet {
       width: 100%;
+      margin: 0 auto;
     }
     table.box {
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
-      border: 2px solid #111;
-      margin: 0 0 6px 0;
+      border: 1.6px solid #111;
+      margin: 0 0 4px 0;
       page-break-inside: avoid;
     }
     table.box th,
@@ -31,19 +32,19 @@
       border: 1px solid #111;
       text-align: center;
       vertical-align: middle;
-      padding: 6px 4px;
+      padding: 2pt 1pt;
       word-break: keep-all;
+      font-size: 12pt;
     }
-    .title-cell {
-      font-size: 20px;
+    table.box td.title-cell {
+      font-size: 28pt;
       font-weight: 700;
-      text-decoration: underline;
-      letter-spacing: -0.8px;
-      height: 50px;
+      height: 42pt;
+      letter-spacing: -0.2pt;
     }
-    .meta-cell {
+    table.box td.meta-cell {
       padding: 0;
-      height: 42px;
+      height: 30pt;
     }
     table.meta-line {
       width: 100%;
@@ -52,233 +53,195 @@
     }
     table.meta-line td {
       border: 0;
-      text-align: left;
-      font-size: 11px;
-      padding: 0 10px;
+      text-align: center;
+      font-size: 11pt;
+      padding: 0;
     }
-    .approval-vert {
-      width: 36px;
+    table.box th.approval-vert {
+      font-size: 11pt;
       font-weight: 700;
       line-height: 1.1;
-      letter-spacing: 0;
-      font-size: 11px;
     }
-    .approve-name {
-      font-size: 11px;
+    table.box th.approval-head {
+      font-size: 11pt;
       font-weight: 700;
-      height: 28px;
+      height: 38pt;
     }
-    .approve-sign {
-      height: 64px;
-    }
-    .blue {
-      background: #d7dfee;
+    table.box td.approval-sign {
+      height: 42pt;
+      font-size: 18pt;
       font-weight: 700;
     }
-    .h-big {
-      font-size: 13px;
+    table.box .bg-blue {
+      background: #d7deed;
       font-weight: 700;
     }
-    .h-mid {
-      font-size: 12px;
+    table.box .major-head {
+      font-size: 12pt;
       font-weight: 700;
     }
-    .h-small {
-      font-size: 11px;
+    table.box .minor-head {
+      font-size: 10.6pt;
       font-weight: 700;
     }
-    .left {
-      text-align: left;
-    }
-    .pad-tight th,
-    .pad-tight td {
-      padding: 4px 3px;
-    }
-    .value-row td,
-    .value-row th {
-      height: 34px;
-      font-weight: 700;
-      font-size: 11px;
-    }
-    .sub-head {
-      font-size: 11px;
+    table.box .value-row td,
+    table.box .value-row th {
+      height: 28pt;
+      font-size: 12pt;
       font-weight: 700;
     }
-    .minor-head {
-      font-size: 10px;
-      font-weight: 700;
+    table.box td.meter-mark {
+      background: #f3ebcf;
     }
-    .small {
-      font-size: 10px;
-    }
-    .row-lbl {
+    table.box th.section-title {
+      font-size: 12pt;
       font-weight: 700;
-      font-size: 11px;
+      letter-spacing: 0.2pt;
+    }
+    table.box th.meter-head {
+      font-size: 10pt;
+      line-height: 1.05;
+      white-space: normal;
+    }
+    .footer {
+      text-align: right;
+      font-size: 9.8pt;
+      margin-top: 2pt;
     }
   </style>
 </head>
 <body>
   <div class="sheet">
-    <table class="box pad-tight">
-      <colgroup>
-        <col style="width: 72%">
-        <col style="width: 5%">
-        <col style="width: 11.5%">
-        <col style="width: 11.5%">
-      </colgroup>
+    <table class="box">
       <tr>
-        <td class="title-cell">{{ title }}</td>
-        <th class="approval-vert" rowspan="2">결<br>재</th>
-        <th class="approve-name">과장</th>
-        <th class="approve-name">소장</th>
+        <td class="title-cell" width="70%">{{ title }}</td>
+        <th class="approval-vert" rowspan="2" width="6%">결<br>재</th>
+        <th class="approval-head" width="12%">과장</th>
+        <th class="approval-head" width="12%">소장</th>
       </tr>
       <tr>
         <td class="meta-cell">
           <table class="meta-line">
             <tr>
-              <td>{{ entry_date_label }}</td>
-              <td>근무자 : {{ worker_name }}</td>
+              <td width="46%" style="font-size:10.5pt; font-weight:700;">{{ entry_date_label }}</td>
+              <td width="22%" style="font-size:10.5pt; font-weight:700;">점검자 :</td>
+              <td width="32%" style="font-size:10.5pt; font-weight:700;">{{ worker_name }}</td>
             </tr>
           </table>
         </td>
-        <td class="approve-sign"></td>
-        <td class="approve-sign"></td>
+        <td class="approval-sign">{{ approval_manager }}</td>
+        <td class="approval-sign">{{ approval_chief }}</td>
       </tr>
     </table>
 
     <table class="box">
-      <colgroup>
-        <col style="width: 10%">
-        <col style="width: 16%">
-        <col style="width: 16%">
-        <col style="width: 16%">
-        <col style="width: 16%">
-        <col style="width: 13%">
-        <col style="width: 13%">
-      </colgroup>
       <tr>
-        <th rowspan="2" class="sub-head">구분<br>시간</th>
-        <th colspan="4" class="blue h-mid">AISS {{ aiss_kv }}[KV]</th>
-        <th colspan="2" class="h-mid">변압기 온도(℃)</th>
+        <th rowspan="2" width="12%" class="minor-head">구 분<br>시 간</th>
+        <th colspan="4" width="60%" class="bg-blue major-head">AISS {{ aiss_kv }}[KV]특고압</th>
+        <th colspan="2" width="28%" class="major-head">변압기 온도(℃)</th>
       </tr>
       <tr>
-        <th class="sub-head">R(A)</th>
-        <th class="sub-head">S(A)</th>
-        <th class="sub-head">T(A)</th>
-        <th class="sub-head">N(A)</th>
-        <th class="small">TR-1<br>(450KVA)</th>
-        <th class="small">TR-2<br>(400KVA)</th>
+        <th width="15%" class="major-head">R(A)</th>
+        <th width="15%" class="major-head">S(A)</th>
+        <th width="15%" class="major-head">T(A)</th>
+        <th width="15%" class="major-head">N(A)</th>
+        <th width="14%" class="minor-head">TR - 1<br>(450 KVA)</th>
+        <th width="14%" class="minor-head">TR - 2<br>(400 KVA)</th>
       </tr>
       <tr class="value-row">
-        <th>{{ inspection_time }}</th>
-        <td>{{ aiss_r_a }}</td>
-        <td>{{ aiss_s_a }}</td>
-        <td>{{ aiss_t_a }}</td>
-        <td>{{ aiss_n_a }}</td>
-        <td>{{ tr1_temp }}</td>
-        <td>{{ tr2_temp }}</td>
+        <th width="12%">10:00</th>
+        <td width="15%">{{ aiss_r_a }}</td>
+        <td width="15%">{{ aiss_s_a }}</td>
+        <td width="15%">{{ aiss_t_a }}</td>
+        <td width="15%">{{ aiss_n_a }}</td>
+        <td width="14%">{{ tr1_temp }}</td>
+        <td width="14%">{{ tr2_temp }}</td>
       </tr>
     </table>
 
     <table class="box">
-      <colgroup>
-        <col style="width: 10%">
-        <col style="width: 15%">
-        <col style="width: 14%">
-        <col style="width: 13%">
-        <col style="width: 15%">
-        <col style="width: 14%">
-        <col style="width: 13%">
-      </colgroup>
       <tr>
-        <th rowspan="2" class="sub-head">구분</th>
-        <th colspan="3" class="blue h-mid">LV - 1</th>
-        <th colspan="3" class="blue h-mid">LV - 2</th>
+        <th rowspan="2" width="10%" class="major-head">구분</th>
+        <th colspan="3" width="45%" class="bg-blue major-head">LV - 1(세대부하)</th>
+        <th colspan="3" width="45%" class="bg-blue major-head">LV - 2(공용부하)</th>
       </tr>
       <tr>
-        <th class="sub-head">전압(V)</th>
-        <th class="sub-head">전류(A)</th>
-        <th class="sub-head">전력(KW)</th>
-        <th class="sub-head">전압(V)</th>
-        <th class="sub-head">전류(A)</th>
-        <th class="sub-head">전력(KW)</th>
+        <th width="15%" class="major-head">전압(V)</th>
+        <th width="15%" class="major-head">전류(A)</th>
+        <th width="15%" class="major-head">전력(KW)</th>
+        <th width="15%" class="major-head">전압(V)</th>
+        <th width="15%" class="major-head">전류(A)</th>
+        <th width="15%" class="major-head">전력(KW)</th>
       </tr>
       {% for i in range(0, 3) %}
       <tr class="value-row">
-        <th class="row-lbl">{{ lv1_rows[i].phase }}</th>
-        <td>{{ lv1_rows[i].v }}</td>
-        <td>{{ lv1_rows[i].a }}</td>
-        <td>{{ lv1_rows[i].kw }}</td>
-        <td>{{ lv2_rows[i].v }}</td>
-        <td>{{ lv2_rows[i].a }}</td>
-        <td>{{ lv2_rows[i].kw }}</td>
+        <th width="10%">{{ lv1_rows[i].phase }}</th>
+        <td width="15%">{{ lv1_rows[i].v }}</td>
+        <td width="15%">{{ lv1_rows[i].a }}</td>
+        <td width="15%">{{ lv1_rows[i].kw }}</td>
+        <td width="15%">{{ lv2_rows[i].v }}</td>
+        <td width="15%">{{ lv2_rows[i].a }}</td>
+        <td width="15%">{{ lv2_rows[i].kw }}</td>
       </tr>
       {% endfor %}
     </table>
 
     <table class="box">
-      <colgroup>
-        <col style="width: 19%">
-        <col style="width: 20%">
-        <col style="width: 18%">
-        <col style="width: 17%">
-        <col style="width: 26%">
-      </colgroup>
       <tr>
-        <th class="sub-head">구분</th>
-        <th class="sub-head">금일지침</th>
-        <th class="sub-head">전일지침</th>
-        <th class="sub-head">일사용량</th>
-        <th class="sub-head">월사용량(Kwh)<br>누계</th>
+        <th width="23%" class="major-head">구 분</th>
+        <th width="19%" class="major-head">금일지침</th>
+        <th width="19%" class="major-head">전일지침</th>
+        <th width="16%" class="major-head">일사용량</th>
+        <th width="23%" class="meter-head">월사용량<br>(누계 합)</th>
       </tr>
       {% for row in meter_rows %}
       <tr class="value-row">
-        <th class="row-lbl">{{ row.name }}</th>
-        <td>{{ row.today }}</td>
-        <td>{{ row.prev }}</td>
-        <td>{{ row.daily }}</td>
-        <td>{{ row.monthly }}</td>
+        <th width="23%">{{ row.name }}</th>
+        <td width="19%" class="meter-mark">{{ row.today }}</td>
+        <td width="19%" class="meter-mark">{{ row.prev }}</td>
+        <td width="16%">{{ row.daily }}</td>
+        <td width="23%">{{ row.monthly }}</td>
       </tr>
       {% endfor %}
     </table>
 
     <table class="box">
-      <colgroup>
-        <col style="width: 10%">
-        <col style="width: 15%">
-        <col style="width: 10%">
-        <col style="width: 22%">
-        <col style="width: 21.5%">
-        <col style="width: 21.5%">
-      </colgroup>
       <tr>
-        <th rowspan="2" class="sub-head">저수조<br>수위(%)</th>
-        <th class="sub-head">아파트</th>
-        <td class="h-small">{{ tank_apartment }}</td>
-        <th rowspan="2" class="sub-head">전자식기동용<br>압력스위치</th>
-        <th class="sub-head">옥내소화전</th>
-        <th class="sub-head">SP보조펌프</th>
-      </tr>
-      <tr>
-        <th class="sub-head">오피스텔</th>
-        <td class="h-small">{{ tank_officetel }}</td>
-        <td class="h-small">{{ hydrant_pressure }}</td>
-        <td class="h-small">{{ sp_pump_pressure }}</td>
-      </tr>
-      <tr>
-        <th rowspan="2" class="sub-head">급수펌프<br>압력</th>
-        <th colspan="2" class="sub-head">고층부</th>
-        <th class="sub-head">저층부</th>
-        <th class="sub-head">오피스텔</th>
-        <th class="sub-head">상가</th>
-      </tr>
-      <tr class="value-row">
-        <td colspan="2">{{ high_pressure }}</td>
-        <td>{{ low_pressure }}</td>
-        <td>{{ office_pressure }}</td>
-        <td>{{ shop_pressure }}</td>
+        <th class="section-title">급수시설점검</th>
       </tr>
     </table>
+
+    <table class="box">
+      <tr>
+        <th rowspan="2" width="10%" class="major-head">저수조 수위(%)</th>
+        <th width="14%" class="major-head">아파트</th>
+        <td width="10%" class="value-row">{{ tank_apartment }}</td>
+        <th rowspan="2" width="24%" class="major-head">전자식기동용<br>압력스위치</th>
+        <th width="21%" class="major-head">옥내소화전</th>
+        <th width="21%" class="major-head">SP보조펌프</th>
+      </tr>
+      <tr>
+        <th width="14%" class="major-head">오피스텔</th>
+        <td width="10%" class="value-row">{{ tank_officetel }}</td>
+        <td width="21%" class="value-row">{{ hydrant_pressure }}</td>
+        <td width="21%" class="value-row">{{ sp_pump_pressure }}</td>
+      </tr>
+      <tr>
+        <th rowspan="2" width="10%" class="major-head">급수펌프압력</th>
+        <th colspan="2" width="24%" class="major-head">고층부</th>
+        <th width="24%" class="major-head">저층부</th>
+        <th width="21%" class="major-head">오피스텔</th>
+        <th width="21%" class="major-head">상가</th>
+      </tr>
+      <tr class="value-row">
+        <td colspan="2" width="24%">{{ high_pressure }}</td>
+        <td width="24%">{{ low_pressure }}</td>
+        <td width="21%">{{ office_pressure }}</td>
+        <td width="21%">{{ shop_pressure }}</td>
+      </tr>
+    </table>
+
+    <div class="footer">{{ site_office_label }}</div>
   </div>
 </body>
 </html>
