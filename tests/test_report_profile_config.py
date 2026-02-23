@@ -9,11 +9,13 @@ def test_normalize_site_env_config_report_fields() -> None:
         {
             "report": {
                 "pdf_profile_id": " substation_daily_generic_a4 ",
+                "locked_profile_id": " substation_daily_a4 ",
                 "pdf_template_name": "../substation_daily_generic_a4.html",
             }
         }
     )
     assert cfg["report"]["pdf_profile_id"] == "substation_daily_generic_a4"
+    assert cfg["report"]["locked_profile_id"] == "substation_daily_a4"
     assert cfg["report"]["pdf_template_name"] == "substation_daily_generic_a4.html"
 
 
@@ -42,8 +44,10 @@ def test_site_env_templates_contains_pdf_profiles() -> None:
     templates = site_env_templates()
     assert "report_substation_a4" in templates
     assert "report_generic_a4" in templates
+    assert "report_substation_ami4_locked" in templates
     assert templates["report_substation_a4"]["config"]["report"]["pdf_profile_id"] == "substation_daily_a4"
     assert templates["report_generic_a4"]["config"]["report"]["pdf_profile_id"] == "substation_daily_generic_a4"
+    assert templates["report_substation_ami4_locked"]["config"]["report"]["locked_profile_id"] == "substation_daily_ami4_a4"
 
 
 def test_resolve_pdf_render_plan_default_profile() -> None:
@@ -79,3 +83,32 @@ def test_resolve_pdf_render_plan_missing_template_falls_back_to_profile_template
     assert plan["profile_id"] == "substation_daily_generic_a4"
     assert plan["template_name"] == "substation_daily_generic_a4.html"
     assert plan["context_builder"] == "generic"
+
+
+def test_resolve_pdf_render_plan_locked_profile_overrides_requested_profile_and_template() -> None:
+    plan = _resolve_pdf_render_plan(
+        {
+            "report": {
+                "pdf_profile_id": "substation_daily_generic_a4",
+                "locked_profile_id": "substation_daily_a4",
+                "pdf_template_name": "substation_daily_generic_a4.html",
+            }
+        }
+    )
+    assert plan["profile_id"] == "substation_daily_a4"
+    assert plan["template_name"] == "substation_daily_a4.html"
+    assert plan["context_builder"] == "substation"
+    assert plan["locked_profile_id"] == "substation_daily_a4"
+
+
+def test_resolve_pdf_render_plan_unknown_locked_profile_ignored() -> None:
+    plan = _resolve_pdf_render_plan(
+        {
+            "report": {
+                "locked_profile_id": "missing-profile",
+                "pdf_profile_id": "substation_daily_generic_a4",
+            }
+        }
+    )
+    assert plan["profile_id"] == "substation_daily_generic_a4"
+    assert plan["template_name"] == "substation_daily_generic_a4.html"

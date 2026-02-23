@@ -177,15 +177,34 @@ def _resolve_pdf_render_plan(site_env_config: Dict[str, Any] | None = None) -> D
     report_cfg = cfg.get("report") if isinstance(cfg.get("report"), dict) else {}
     requested_profile_id = _clean_pdf_profile_id(report_cfg.get("pdf_profile_id"))
     requested_template_name = _clean_pdf_template_name(report_cfg.get("pdf_template_name"))
+    locked_profile_id = _clean_pdf_profile_id(report_cfg.get("locked_profile_id"))
 
-    profile = PDF_PROFILE_DEFS.get(requested_profile_id) if requested_profile_id else None
+    effective_profile_id = requested_profile_id
+    locked_profile_applied = False
+    if locked_profile_id:
+        if locked_profile_id in PDF_PROFILE_DEFS:
+            if requested_profile_id and requested_profile_id != locked_profile_id:
+                LOG.info(
+                    "PDF profile is locked. requested='%s' -> locked='%s'.",
+                    requested_profile_id,
+                    locked_profile_id,
+                )
+            effective_profile_id = locked_profile_id
+            locked_profile_applied = True
+            # Locked profile ignores per-site custom template override.
+            requested_template_name = ""
+        else:
+            LOG.warning("Unknown PDF locked_profile_id '%s'; ignore lock.", locked_profile_id)
+
+    profile = PDF_PROFILE_DEFS.get(effective_profile_id) if effective_profile_id else None
     if profile is None:
-        if requested_profile_id:
-            LOG.warning("Unknown PDF profile '%s'; fallback to '%s'.", requested_profile_id, DEFAULT_PDF_PROFILE_ID)
+        if effective_profile_id:
+            kind = "locked_profile_id" if locked_profile_applied else "pdf_profile_id"
+            LOG.warning("Unknown PDF %s '%s'; fallback to '%s'.", kind, effective_profile_id, DEFAULT_PDF_PROFILE_ID)
         profile_id = DEFAULT_PDF_PROFILE_ID
         profile = PDF_PROFILE_DEFS.get(profile_id) or {}
     else:
-        profile_id = requested_profile_id
+        profile_id = effective_profile_id
 
     profile_template = _clean_pdf_template_name(profile.get("template_name"))
     template_name = requested_template_name or profile_template or DEFAULT_PDF_TEMPLATE_NAME
@@ -209,6 +228,7 @@ def _resolve_pdf_render_plan(site_env_config: Dict[str, Any] | None = None) -> D
         "context_builder": context_builder,
         "requested_profile_id": requested_profile_id,
         "requested_template_name": requested_template_name,
+        "locked_profile_id": locked_profile_id,
     }
 
 

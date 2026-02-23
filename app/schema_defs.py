@@ -277,6 +277,7 @@ DEFAULT_SITE_ENV_CONFIG: Dict[str, Any] = {}
 SITE_ENV_TEMPLATE: Dict[str, Any] = {
     "report": {
         "pdf_profile_id": "substation_daily_a4",
+        "locked_profile_id": "",
     },
     "hide_tabs": [],
     "tabs": {
@@ -317,6 +318,16 @@ SITE_ENV_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "config": {
             "report": {
                 "pdf_profile_id": "substation_daily_a4",
+            }
+        },
+    },
+    "report_substation_ami4_locked": {
+        "name": "PDF-행복주택아미 잠금",
+        "description": "행복주택아미 양식을 기본으로 고정합니다(locked_profile_id).",
+        "config": {
+            "report": {
+                "pdf_profile_id": "substation_daily_ami4_a4",
+                "locked_profile_id": "substation_daily_ami4_a4",
             }
         },
     },
@@ -600,6 +611,9 @@ def normalize_site_env_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
         pdf_profile_id = _clean_pdf_profile_id(raw_report.get("pdf_profile_id"))
         if pdf_profile_id:
             report["pdf_profile_id"] = pdf_profile_id
+        locked_profile_id = _clean_pdf_profile_id(raw_report.get("locked_profile_id"))
+        if locked_profile_id:
+            report["locked_profile_id"] = locked_profile_id
         pdf_template_name = _clean_pdf_template_name(raw_report.get("pdf_template_name"))
         if pdf_template_name:
             report["pdf_template_name"] = pdf_template_name

@@ -422,6 +422,8 @@
       const report = {};
       const profileId = String(cfg.report.pdf_profile_id || "").trim();
       if (profileId) report.pdf_profile_id = profileId;
+      const lockedProfileId = String(cfg.report.locked_profile_id || "").trim();
+      if (lockedProfileId) report.locked_profile_id = lockedProfileId;
 
       const rawTemplate = String(cfg.report.pdf_template_name || "").trim();
       const templateName = rawTemplate.replace(/\\/g, "/").split("/").pop().trim();
