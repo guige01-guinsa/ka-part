@@ -137,5 +137,6 @@ def test_render_pdf_html_template_applies_page_margin() -> None:
         site_env_config={"report": {"pdf_profile_id": "substation_daily_a4", "page_margin_mm": 1.5}},
     )
     assert "margin: 20mm 8mm 15mm 8mm;" in html
+    assert "min-height:262mm;" in html
     assert "margin: 10mm;" not in html
     assert "margin: 8mm;" not in html

@@ -43,6 +43,7 @@ PDF_PAGE_MARGIN_TOP_MM = 20.0
 PDF_PAGE_MARGIN_RIGHT_MM = 8.0
 PDF_PAGE_MARGIN_BOTTOM_MM = 15.0
 PDF_PAGE_MARGIN_LEFT_MM = 8.0
+PDF_PAGE_HEIGHT_MM = 297.0
 
 def today_ymd() -> str:
     return dt.date.today().isoformat()
@@ -253,6 +254,10 @@ def _fixed_page_margin_css() -> str:
     )
 
 
+def _fixed_content_height_mm() -> float:
+    return max(0.0, PDF_PAGE_HEIGHT_MM - PDF_PAGE_MARGIN_TOP_MM - PDF_PAGE_MARGIN_BOTTOM_MM)
+
+
 def _apply_pdf_page_margin(html: str) -> str:
     source = str(html or "")
     if not source:
@@ -269,15 +274,19 @@ def _apply_pdf_page_margin(html: str) -> str:
         return f"{block[:pos]} {margin_decl} {block[pos:]}"
 
     updated = _PDF_PAGE_BLOCK_RE.sub(_replace_page_block, source)
-    if updated != source:
-        return updated
+    if updated == source:
+        updated = f"<style>@page {{ size: A4; {margin_decl} }}</style>\n{updated}"
 
-    inject = f"<style>@page {{ size: A4; {margin_decl} }}</style>"
-    head_match = _HTML_HEAD_CLOSE_RE.search(source)
+    fit_inject = (
+        "<style>"
+        f".sheet{{min-height:{_format_mm(_fixed_content_height_mm())}mm;box-sizing:border-box;}}"
+        "</style>"
+    )
+    head_match = _HTML_HEAD_CLOSE_RE.search(updated)
     if head_match:
         idx = head_match.start()
-        return f"{source[:idx]}{inject}\n{source[idx:]}"
-    return f"{inject}\n{source}"
+        return f"{updated[:idx]}{fit_inject}\n{updated[idx:]}"
+    return f"{fit_inject}\n{updated}"
 
 
 def _keep_pdf_first_page(pdf_bytes: bytes) -> bytes:
