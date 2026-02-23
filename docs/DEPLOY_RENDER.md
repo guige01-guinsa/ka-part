@@ -26,6 +26,10 @@ PowerShell (사용자 영구 저장):
 powershell -ExecutionPolicy Bypass -File .\deploy_render.ps1
 ```
 
+참고:
+- `deploy_render.ps1`는 Hook 호출이 실패하면(`404` 등) Render API(`RENDER_SERVICE_ID` + `RENDER_API_KEY`)로 자동 fallback합니다.
+- 만료된 Hook URL은 재발급 후 교체하거나, 변수 자체를 비워 API 모드만 사용해도 됩니다.
+
 또는:
 
 ```powershell

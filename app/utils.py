@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -17,6 +18,20 @@ from .schema_defs import SCHEMA_DEFS, SCHEMA_TAB_ORDER
 LOG = logging.getLogger(__name__)
 _WEASYPRINT_HTML_CLASS: Any | None = None
 _WEASYPRINT_AVAILABLE: bool | None = None
+PDF_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "pdf"
+DEFAULT_PDF_PROFILE_ID = "substation_daily_a4"
+DEFAULT_PDF_TEMPLATE_NAME = "substation_daily_a4.html"
+PDF_PROFILE_DEFS: Dict[str, Dict[str, str]] = {
+    "substation_daily_a4": {
+        "template_name": "substation_daily_a4.html",
+        "context_builder": "substation",
+    },
+    "substation_daily_generic_a4": {
+        "template_name": "substation_daily_generic_a4.html",
+        "context_builder": "generic",
+    },
+}
+_SAFE_PDF_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 def today_ymd() -> str:
     return dt.date.today().isoformat()
@@ -121,6 +136,76 @@ def _tab_value(
     if not isinstance(tab, dict):
         return default
     return _fmt_value(tab.get(field_key), default=default)
+
+
+def _clean_pdf_profile_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    clean = _SAFE_PDF_TOKEN_RE.sub("", raw)
+    return clean[:80]
+
+
+def _clean_pdf_template_name(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    name = raw.replace("\\", "/").split("/")[-1].strip()
+    if not name or name in {".", ".."}:
+        return ""
+    if not name.lower().endswith(".html"):
+        return ""
+    clean = _SAFE_PDF_TOKEN_RE.sub("", name)
+    if not clean.lower().endswith(".html"):
+        return ""
+    return clean[:120]
+
+
+def _pdf_template_exists(template_name: str) -> bool:
+    clean = _clean_pdf_template_name(template_name)
+    if not clean:
+        return False
+    return (PDF_TEMPLATE_DIR / clean).is_file()
+
+
+def _resolve_pdf_render_plan(site_env_config: Dict[str, Any] | None = None) -> Dict[str, str]:
+    cfg = site_env_config if isinstance(site_env_config, dict) else {}
+    report_cfg = cfg.get("report") if isinstance(cfg.get("report"), dict) else {}
+    requested_profile_id = _clean_pdf_profile_id(report_cfg.get("pdf_profile_id"))
+    requested_template_name = _clean_pdf_template_name(report_cfg.get("pdf_template_name"))
+
+    profile = PDF_PROFILE_DEFS.get(requested_profile_id) if requested_profile_id else None
+    if profile is None:
+        if requested_profile_id:
+            LOG.warning("Unknown PDF profile '%s'; fallback to '%s'.", requested_profile_id, DEFAULT_PDF_PROFILE_ID)
+        profile_id = DEFAULT_PDF_PROFILE_ID
+        profile = PDF_PROFILE_DEFS.get(profile_id) or {}
+    else:
+        profile_id = requested_profile_id
+
+    profile_template = _clean_pdf_template_name(profile.get("template_name"))
+    template_name = requested_template_name or profile_template or DEFAULT_PDF_TEMPLATE_NAME
+    if not _pdf_template_exists(template_name):
+        if requested_template_name:
+            LOG.warning("Configured PDF template '%s' not found; fallback to profile template.", requested_template_name)
+        template_name = profile_template or DEFAULT_PDF_TEMPLATE_NAME
+    if not _pdf_template_exists(template_name):
+        LOG.warning("Profile template '%s' not found; fallback to '%s'.", template_name, DEFAULT_PDF_TEMPLATE_NAME)
+        template_name = DEFAULT_PDF_TEMPLATE_NAME
+        profile_id = DEFAULT_PDF_PROFILE_ID
+        profile = PDF_PROFILE_DEFS.get(profile_id) or {}
+
+    context_builder = str(profile.get("context_builder") or "substation").strip().lower()
+    if context_builder not in {"substation", "generic"}:
+        context_builder = "substation"
+
+    return {
+        "profile_id": profile_id,
+        "template_name": template_name,
+        "context_builder": context_builder,
+        "requested_profile_id": requested_profile_id,
+        "requested_template_name": requested_template_name,
+    }
 
 
 def _keep_pdf_first_page(pdf_bytes: bytes) -> bytes:
@@ -230,22 +315,112 @@ def _build_pdf_context(
     }
 
 
+def _build_pdf_context_generic(
+    site_name: str,
+    date: str,
+    tabs: Dict[str, Dict[str, Any]],
+    *,
+    worker_name: str = "",
+    schema_defs: Dict[str, Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    source = schema_defs if isinstance(schema_defs, dict) else SCHEMA_DEFS
+    home = tabs.get("home") if isinstance(tabs, dict) else {}
+    if not isinstance(home, dict):
+        home = {}
+
+    site_code = _fmt_value(home.get("complex_code"), default="")
+    if not site_code:
+        site_code = _fmt_value(site_name, default="")
+
+    order_map = {k: i for i, k in enumerate(SCHEMA_TAB_ORDER)}
+    sections: List[Dict[str, Any]] = []
+    for tab_key in sorted((tabs or {}).keys(), key=lambda x: (order_map.get(x, 999), x)):
+        fields = tabs.get(tab_key)
+        if not isinstance(fields, dict):
+            continue
+        tab_def = source.get(tab_key) or {}
+        title = str(tab_def.get("title") or tab_key)
+        label_map = {
+            str(f.get("k")): str(f.get("label") or f.get("k") or "")
+            for f in (tab_def.get("fields") or [])
+            if isinstance(f, dict) and f.get("k")
+        }
+        rows = [
+            {
+                "key": str(k),
+                "label": label_map.get(str(k), str(k)),
+                "value": _fmt_value(v, default="-"),
+            }
+            for k, v in sorted(fields.items(), key=lambda kv: str(kv[0]))
+        ]
+        if rows:
+            sections.append({"tab_key": tab_key, "title": title, "rows": rows})
+
+    if not sections:
+        sections.append(
+            {
+                "tab_key": "empty",
+                "title": "입력 항목",
+                "rows": [{"key": "-", "label": "안내", "value": "저장된 점검 데이터가 없습니다."}],
+            }
+        )
+
+    return {
+        "title": "시설 점검일지",
+        "site_name": _fmt_value(site_name, default="-"),
+        "site_office_label": f"{_fmt_value(site_name, default='-')} 관리사무소",
+        "site_code": _fmt_value(site_code, default="-"),
+        "entry_date": safe_ymd(date),
+        "entry_date_label": _date_label_ko(date),
+        "worker_name": _fmt_value(worker_name, default="-"),
+        "work_type": _fmt_value(home.get("work_type"), default="일일"),
+        "note": _fmt_value(home.get("note"), default="-"),
+        "sections": sections,
+    }
+
+
 def _render_pdf_html_template(
     site_name: str,
     date: str,
     tabs: Dict[str, Dict[str, Any]],
     *,
     worker_name: str = "",
-) -> tuple[str, Path]:
-    template_dir = Path(__file__).resolve().parent.parent / "templates" / "pdf"
+    schema_defs: Dict[str, Dict[str, Any]] | None = None,
+    site_env_config: Dict[str, Any] | None = None,
+) -> tuple[str, Path, str]:
+    template_dir = PDF_TEMPLATE_DIR
+    plan = _resolve_pdf_render_plan(site_env_config=site_env_config)
+    context_builder = plan.get("context_builder") or "substation"
+
+    if context_builder == "generic":
+        context = _build_pdf_context_generic(
+            site_name,
+            date,
+            tabs,
+            worker_name=worker_name,
+            schema_defs=schema_defs,
+        )
+    else:
+        context = _build_pdf_context(site_name, date, tabs, worker_name=worker_name)
+    context["profile_id"] = plan.get("profile_id") or DEFAULT_PDF_PROFILE_ID
+    context["template_name"] = plan.get("template_name") or DEFAULT_PDF_TEMPLATE_NAME
+
     env = Environment(
         loader=FileSystemLoader(str(template_dir)),
         autoescape=select_autoescape(["html", "xml"]),
     )
-    tpl = env.get_template("substation_daily_a4.html")
-    context = _build_pdf_context(site_name, date, tabs, worker_name=worker_name)
+    template_name = context["template_name"]
+    try:
+        tpl = env.get_template(template_name)
+    except Exception:
+        template_name = DEFAULT_PDF_TEMPLATE_NAME
+        context = _build_pdf_context(site_name, date, tabs, worker_name=worker_name)
+        context["template_name"] = template_name
+        context["profile_id"] = DEFAULT_PDF_PROFILE_ID
+        LOG.warning("PDF template load failed. fallback template='%s'.", template_name)
+        tpl = env.get_template(template_name)
     html = tpl.render(**context)
-    return html, template_dir
+    return html, template_dir, template_name
 
 
 def _get_weasyprint_html_class():
@@ -271,8 +446,17 @@ def _build_pdf_html_weasyprint(
     tabs: Dict[str, Dict[str, Any]],
     *,
     worker_name: str = "",
+    schema_defs: Dict[str, Dict[str, Any]] | None = None,
+    site_env_config: Dict[str, Any] | None = None,
 ) -> bytes:
-    html, template_dir = _render_pdf_html_template(site_name, date, tabs, worker_name=worker_name)
+    html, template_dir, _template_name = _render_pdf_html_template(
+        site_name,
+        date,
+        tabs,
+        worker_name=worker_name,
+        schema_defs=schema_defs,
+        site_env_config=site_env_config,
+    )
     html_class = _get_weasyprint_html_class()
     if html_class is None:
         raise RuntimeError("WeasyPrint is unavailable")
@@ -286,12 +470,21 @@ def _build_pdf_html_xhtml2pdf(
     tabs: Dict[str, Dict[str, Any]],
     *,
     worker_name: str = "",
+    schema_defs: Dict[str, Dict[str, Any]] | None = None,
+    site_env_config: Dict[str, Any] | None = None,
 ) -> bytes:
     from io import BytesIO
     from xhtml2pdf import pisa
 
-    html, template_dir = _render_pdf_html_template(site_name, date, tabs, worker_name=worker_name)
-    template_path = (template_dir / "substation_daily_a4.html").resolve()
+    html, template_dir, template_name = _render_pdf_html_template(
+        site_name,
+        date,
+        tabs,
+        worker_name=worker_name,
+        schema_defs=schema_defs,
+        site_env_config=site_env_config,
+    )
+    template_path = (template_dir / template_name).resolve()
     out = BytesIO()
     result = pisa.CreatePDF(src=html, dest=out, encoding="utf-8", path=str(template_path))
     if getattr(result, "err", 0):
@@ -305,15 +498,24 @@ def _build_pdf_legacy(
     tabs: Dict[str, Dict[str, str]],
     *,
     schema_defs: Dict[str, Dict[str, Any]] | None = None,
+    render_plan: Dict[str, str] | None = None,
 ) -> bytes:
     from io import BytesIO
     bio = BytesIO()
     c = canvas.Canvas(bio, pagesize=A4)
     width, height = A4
+    plan = render_plan if isinstance(render_plan, dict) else {}
+    context_builder = str(plan.get("context_builder") or "substation").strip().lower()
+    profile_id = str(plan.get("profile_id") or DEFAULT_PDF_PROFILE_ID).strip() or DEFAULT_PDF_PROFILE_ID
+    template_name = str(plan.get("template_name") or DEFAULT_PDF_TEMPLATE_NAME).strip() or DEFAULT_PDF_TEMPLATE_NAME
+    title_text = "수변전실 점검일지" if context_builder == "substation" else "시설 점검일지"
 
     y = height - 40
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(40, y, f"수변전실 점검일지")
+    c.drawString(40, y, title_text)
+    y -= 14
+    c.setFont("Helvetica", 8)
+    c.drawString(40, y, f"profile: {profile_id} / template: {template_name}")
     y -= 22
     c.setFont("Helvetica", 11)
     c.drawString(40, y, f"단지: {site_name}    날짜: {date}")
@@ -364,16 +566,40 @@ def build_pdf(
     *,
     worker_name: str = "",
     schema_defs: Dict[str, Dict[str, Any]] | None = None,
+    site_env_config: Dict[str, Any] | None = None,
 ) -> bytes:
+    render_plan = _resolve_pdf_render_plan(site_env_config=site_env_config)
     if _get_weasyprint_html_class() is not None:
         try:
-            pdf = _build_pdf_html_weasyprint(site_name, date, tabs or {}, worker_name=worker_name)
+            pdf = _build_pdf_html_weasyprint(
+                site_name,
+                date,
+                tabs or {},
+                worker_name=worker_name,
+                schema_defs=schema_defs,
+                site_env_config=site_env_config,
+            )
             return _keep_pdf_first_page(pdf)
         except Exception as e:
             LOG.warning("WeasyPrint render failed, trying xhtml2pdf fallback: %s", e)
     try:
-        pdf = _build_pdf_html_xhtml2pdf(site_name, date, tabs or {}, worker_name=worker_name)
+        pdf = _build_pdf_html_xhtml2pdf(
+            site_name,
+            date,
+            tabs or {},
+            worker_name=worker_name,
+            schema_defs=schema_defs,
+            site_env_config=site_env_config,
+        )
         return _keep_pdf_first_page(pdf)
     except Exception as e:
         LOG.warning("xhtml2pdf render failed, fallback to legacy reportlab: %s", e)
-    return _keep_pdf_first_page(_build_pdf_legacy(site_name, date, tabs, schema_defs=schema_defs))
+    return _keep_pdf_first_page(
+        _build_pdf_legacy(
+            site_name,
+            date,
+            tabs,
+            schema_defs=schema_defs,
+            render_plan=render_plan,
+        )
+    )

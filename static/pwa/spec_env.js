@@ -24,6 +24,11 @@
     "facility_mechanical",
     "facility_telecom",
   ];
+  const DEFAULT_PDF_PROFILE_ID = "substation_daily_a4";
+  const PDF_PROFILE_OPTIONS = [
+    { id: "substation_daily_a4", label: "수변전 점검일지 A4 (기본)" },
+    { id: "substation_daily_generic_a4", label: "범용 점검일지 A4" },
+  ];
 
   let me = null;
   let moduleCtx = null;
@@ -41,7 +46,7 @@
   };
   let specEnvManageCodeToken = "";
   let specEnvManageCodeTokenExpiresAtTs = 0;
-  const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnPreview", "btnGoMain"];
+  const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnPreview", "btnGoMain", "btnJsonApply", "btnJsonExport"];
 
   function canManageSpecEnv(user) {
     return !!(user && (user.is_admin || user.is_site_admin));
@@ -273,8 +278,132 @@
     return v && typeof v === "object" ? v : {};
   }
 
-  function setConfigToEditor(config) {
+  function setConfigToEditor(config, opts = {}) {
     $("#envJson").value = JSON.stringify(config || {}, null, 2);
+    if (opts && opts.syncPdfProfile === false) return;
+    syncPdfProfileSelectFromConfig(config || {});
+  }
+
+  function renderPdfProfileSelect(selectedProfileId = DEFAULT_PDF_PROFILE_ID) {
+    const sel = $("#pdfProfileSelect");
+    if (!sel) return;
+    const selected = String(selectedProfileId || "").trim() || DEFAULT_PDF_PROFILE_ID;
+    const options = [...PDF_PROFILE_OPTIONS];
+    if (!options.some((x) => String(x.id || "").trim() === selected)) {
+      options.push({ id: selected, label: `현재 설정 (${selected})` });
+    }
+    sel.innerHTML = "";
+    for (const opt of options) {
+      const o = document.createElement("option");
+      o.value = String(opt.id || "").trim();
+      o.textContent = String(opt.label || opt.id || "").trim();
+      sel.appendChild(o);
+    }
+    sel.value = selected;
+  }
+
+  function getPdfProfileIdFromConfig(config) {
+    const cfg = config && typeof config === "object" ? config : {};
+    const report = cfg.report && typeof cfg.report === "object" ? cfg.report : {};
+    return String(report.pdf_profile_id || "").trim() || DEFAULT_PDF_PROFILE_ID;
+  }
+
+  function syncPdfProfileSelectFromConfig(config = null) {
+    let cfg = config;
+    if (!cfg || typeof cfg !== "object") {
+      try {
+        cfg = compactConfig(getConfigFromEditor());
+      } catch (_e) {
+        cfg = {};
+      }
+    }
+    renderPdfProfileSelect(getPdfProfileIdFromConfig(cfg));
+  }
+
+  function applyPdfProfileToEditor(profileId) {
+    const selected = String(profileId || "").trim() || DEFAULT_PDF_PROFILE_ID;
+    let cfg = {};
+    try {
+      cfg = compactConfig(getConfigFromEditor());
+    } catch (e) {
+      setMsg(`JSON 파싱 오류: ${e.message}`, true);
+      syncPdfProfileSelectFromConfig({});
+      return false;
+    }
+    if (!cfg.report || typeof cfg.report !== "object") cfg.report = {};
+    cfg.report.pdf_profile_id = selected;
+    setConfigToEditor(cfg, { syncPdfProfile: false });
+    renderPdfProfileSelect(selected);
+    return true;
+  }
+
+  async function applyJsonFileFromPicker() {
+    const input = $("#jsonFileInput");
+    if (!input || !input.files || !input.files.length) {
+      throw new Error("먼저 JSON 파일을 선택하세요.");
+    }
+    const file = input.files[0];
+    const raw = await file.text();
+    let parsed = {};
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`JSON 파일 파싱 오류: ${e.message}`);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("JSON 루트는 객체 형태여야 합니다.");
+    }
+    const cfg = compactConfig(parsed);
+    setConfigToEditor(cfg);
+    const schema = applyConfigToSchema(baseSchema || {}, cfg || {});
+    setActiveSchema(schema);
+    renderPreview({ site_id: getSiteId(), site_name: getSiteName(), site_code: getSiteCode(), schema });
+    markActionSuccess($("#btnJsonApply"), "✓");
+    setMsg(`JSON 파일 '${String(file.name || "").trim() || "선택 파일"}'을 적용했습니다. 저장을 누르세요.`);
+  }
+
+  function sanitizeFileToken(v) {
+    const raw = String(v || "").trim();
+    if (!raw) return "";
+    return raw.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
+  }
+
+  function buildJsonExportFileName() {
+    const site = sanitizeFileToken(getSiteName());
+    const code = sanitizeFileToken(getSiteCode());
+    const stamp = new Date();
+    const y = stamp.getFullYear();
+    const m = String(stamp.getMonth() + 1).padStart(2, "0");
+    const d = String(stamp.getDate()).padStart(2, "0");
+    const hh = String(stamp.getHours()).padStart(2, "0");
+    const mm = String(stamp.getMinutes()).padStart(2, "0");
+    const ss = String(stamp.getSeconds()).padStart(2, "0");
+    const parts = ["site_env", code || site || "unknown_site", `${y}${m}${d}_${hh}${mm}${ss}`];
+    return `${parts.filter(Boolean).join("_")}.json`;
+  }
+
+  function exportJsonFromEditor() {
+    let cfg = {};
+    try {
+      cfg = compactConfig(getConfigFromEditor());
+    } catch (e) {
+      throw new Error(`JSON 파싱 오류: ${e.message}`);
+    }
+    const jsonText = `${JSON.stringify(cfg || {}, null, 2)}\n`;
+    const blob = new Blob([jsonText], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = buildJsonExportFileName();
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    markActionSuccess($("#btnJsonExport"), "↓");
+    setMsg("현재 JSON 설정을 파일로 내보냈습니다.");
   }
 
   function compactConfig(config) {
@@ -286,6 +415,21 @@
       if (!cfg.hide_tabs.length) delete cfg.hide_tabs;
     } else {
       delete cfg.hide_tabs;
+    }
+
+    if (cfg.report && typeof cfg.report === "object") {
+      const report = {};
+      const profileId = String(cfg.report.pdf_profile_id || "").trim();
+      if (profileId) report.pdf_profile_id = profileId;
+
+      const rawTemplate = String(cfg.report.pdf_template_name || "").trim();
+      const templateName = rawTemplate.replace(/\\/g, "/").split("/").pop().trim();
+      if (templateName && /\.html$/i.test(templateName)) report.pdf_template_name = templateName;
+
+      if (Object.keys(report).length) cfg.report = report;
+      else delete cfg.report;
+    } else {
+      delete cfg.report;
     }
 
     if (!cfg.tabs || typeof cfg.tabs !== "object") {
@@ -1031,6 +1175,11 @@
     const hideTabs = new Set([...(out.hide_tabs || []), ...(add.hide_tabs || [])].map((x) => String(x)));
     if (hideTabs.size) out.hide_tabs = [...hideTabs];
 
+    if (add.report && typeof add.report === "object") {
+      const curReport = out.report && typeof out.report === "object" ? out.report : {};
+      out.report = { ...curReport, ...add.report };
+    }
+
     if (!out.tabs || typeof out.tabs !== "object") out.tabs = {};
     for (const [tabKey, tabCfg] of Object.entries(add.tabs || {})) {
       if (!out.tabs[tabKey] || typeof out.tabs[tabKey] !== "object") out.tabs[tabKey] = {};
@@ -1080,6 +1229,11 @@
     for (const tab of add.hide_tabs || []) hideTabs.add(String(tab));
     if (hideTabs.size) out.hide_tabs = [...hideTabs];
     else delete out.hide_tabs;
+
+    if (add.report && typeof add.report === "object") {
+      const curReport = out.report && typeof out.report === "object" ? out.report : {};
+      out.report = { ...curReport, ...add.report };
+    }
 
     if (!out.tabs || typeof out.tabs !== "object") out.tabs = {};
     for (const tab of scopeTabs) delete out.tabs[tab];
@@ -1340,6 +1494,7 @@
     const schema = applyConfigToSchema(baseSchema || {}, cfg || {});
     setActiveSchema(schema);
     renderPreview({ site_id: siteId, site_name: site, site_code: siteCode, schema });
+    syncPdfProfileSelectFromConfig(cfg);
     markActionSuccess($("#btnPreview"), "✓");
     setMsg("양식 미리보기를 갱신했습니다. (현재 편집 중인 JSON 기준)");
   }
@@ -1366,6 +1521,20 @@
     $("#btnPreview").addEventListener("click", () => previewSchema().catch((e) => setMsg(e.message || String(e), true)));
 
     $("#templateSelect").addEventListener("change", updateTemplateDescAndScope);
+    $("#pdfProfileSelect")?.addEventListener("change", (e) => {
+      const selected = String(e.target && e.target.value ? e.target.value : "").trim() || DEFAULT_PDF_PROFILE_ID;
+      if (!applyPdfProfileToEditor(selected)) return;
+      setMsg(`PDF 프로파일을 '${selected}'로 설정했습니다. 저장을 누르세요.`);
+    });
+    $("#envJson")?.addEventListener("change", () => syncPdfProfileSelectFromConfig());
+    $("#btnJsonApply")?.addEventListener("click", () => applyJsonFileFromPicker().catch((e) => setMsg(e.message || String(e), true)));
+    $("#btnJsonExport")?.addEventListener("click", () => {
+      try {
+        exportJsonFromEditor();
+      } catch (e) {
+        setMsg(e.message || String(e), true);
+      }
+    });
     $("#btnTemplateApply")?.addEventListener("click", () =>
       applySelectedTemplate().catch((e) => setMsg(e.message || String(e), true))
     );
@@ -1522,6 +1691,7 @@
     }
     await loadBaseSchema();
     await loadTemplates();
+    renderPdfProfileSelect(DEFAULT_PDF_PROFILE_ID);
     if (KAUtil.canViewSiteIdentity(me)) {
       await loadSiteList().catch(() => {});
     } else {

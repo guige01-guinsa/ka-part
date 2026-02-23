@@ -52,6 +52,22 @@ pwsh -File ops\stop_stack.ps1
 - Build: `pip install -r requirements.txt`
 - Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 
+## 테스트
+- 개발 테스트 도구 설치:
+  - `pip install -r requirements-dev.txt`
+- 회귀 테스트 실행:
+  - `pytest -q`
+- 정적 컴파일 점검:
+  - `python -m compileall app services`
+
+## site identity 정합성 보정
+- 진단:
+  - `python -c "from app.db import site_identity_consistency_report as r; import json; print(json.dumps(r(limit=500), ensure_ascii=False, indent=2))"`
+- 보정 실행:
+  - `python tools/repair_site_identity.py`
+- 드라이런:
+  - `python tools/repair_site_identity.py --dry-run`
+
 ## 인증/권한
 - 세션 토큰(Bearer) 인증 사용
 - 일반 사용자: 일지 조회/저장

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Dict, List
 
 WORK_TYPES = ["일일", "주간", "월간", "일상"]
@@ -45,10 +46,35 @@ LEGACY_TAB_ALIASES: Dict[str, str] = {
     "lv6": "tr6",
 }
 
+_SAFE_REPORT_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
 
 def canonical_tab_key(value: Any) -> str:
     raw = str(value or "").strip()
     return LEGACY_TAB_ALIASES.get(raw, raw)
+
+
+def _clean_pdf_profile_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    clean = _SAFE_REPORT_TOKEN_RE.sub("", raw)
+    return clean[:80]
+
+
+def _clean_pdf_template_name(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    name = raw.replace("\\", "/").split("/")[-1].strip()
+    if not name or name in {".", ".."}:
+        return ""
+    if not name.lower().endswith(".html"):
+        return ""
+    clean = _SAFE_REPORT_TOKEN_RE.sub("", name)
+    if not clean.lower().endswith(".html"):
+        return ""
+    return clean[:120]
 
 
 def _lv_fields(prefix: str) -> List[Dict[str, Any]]:
@@ -246,6 +272,9 @@ SCHEMA_DEFS = {
 DEFAULT_SITE_ENV_CONFIG: Dict[str, Any] = {}
 
 SITE_ENV_TEMPLATE: Dict[str, Any] = {
+    "report": {
+        "pdf_profile_id": "substation_daily_a4",
+    },
     "hide_tabs": [],
     "tabs": {
         "tr1": {
@@ -278,6 +307,24 @@ SITE_ENV_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "name": "빈 템플릿",
         "description": "아무 변경 없이 시작합니다.",
         "config": {},
+    },
+    "report_substation_a4": {
+        "name": "PDF-수변전 기본",
+        "description": "수변전 점검일지 스타일 PDF 프로파일을 사용합니다.",
+        "config": {
+            "report": {
+                "pdf_profile_id": "substation_daily_a4",
+            }
+        },
+    },
+    "report_generic_a4": {
+        "name": "PDF-범용 점검표",
+        "description": "탭/필드를 표 형태로 출력하는 범용 PDF 프로파일을 사용합니다.",
+        "config": {
+            "report": {
+                "pdf_profile_id": "substation_daily_generic_a4",
+            }
+        },
     },
     "electrical_min": {
         "name": "전기 중심",
@@ -542,6 +589,18 @@ def normalize_site_env_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
         return {}
     out: Dict[str, Any] = {}
 
+    raw_report = config.get("report")
+    if isinstance(raw_report, dict):
+        report: Dict[str, Any] = {}
+        pdf_profile_id = _clean_pdf_profile_id(raw_report.get("pdf_profile_id"))
+        if pdf_profile_id:
+            report["pdf_profile_id"] = pdf_profile_id
+        pdf_template_name = _clean_pdf_template_name(raw_report.get("pdf_template_name"))
+        if pdf_template_name:
+            report["pdf_template_name"] = pdf_template_name
+        if report:
+            out["report"] = report
+
     raw_hide_tabs = config.get("hide_tabs")
     if isinstance(raw_hide_tabs, list):
         hide_tabs = []
@@ -699,6 +758,14 @@ def merge_site_env_configs(
         out["hide_tabs"] = hide_tabs
     elif "hide_tabs" in out:
         out.pop("hide_tabs", None)
+
+    base_report = out.get("report") if isinstance(out.get("report"), dict) else {}
+    override_report = override.get("report") if isinstance(override.get("report"), dict) else {}
+    merged_report = {**base_report, **override_report}
+    if merged_report:
+        out["report"] = merged_report
+    elif "report" in out:
+        out.pop("report", None)
 
     merged_tabs: Dict[str, Dict[str, Any]] = copy.deepcopy(out.get("tabs") or {})
     for tab_key, tab_cfg in (override.get("tabs") or {}).items():

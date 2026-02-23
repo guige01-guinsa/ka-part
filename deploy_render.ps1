@@ -88,29 +88,49 @@ function Wait-Deploy([string]$Svc, [string]$Token, [string]$DeployId, [int]$Time
   throw "Timed out waiting for deploy status. timeoutSec=$Timeout"
 }
 
+function Get-DeployIdFromResponse($Resp) {
+  if (-not $Resp) { return "" }
+  if ($Resp.PSObject.Properties["deploy"] -and $Resp.deploy -and $Resp.deploy.PSObject.Properties["id"]) {
+    return [string]$Resp.deploy.id
+  }
+  if ($Resp.PSObject.Properties["id"] -and $Resp.id) {
+    return [string]$Resp.id
+  }
+  return ""
+}
+
 $triggerResp = $null
 $deployId = ""
+$usedHook = $false
+$hookErrorText = ""
 
 if ($HookUrl) {
-  $triggerResp = Trigger-WithHook $HookUrl
-  if ($triggerResp) {
-    $props = @{}
-    foreach ($p in $triggerResp.PSObject.Properties) {
-      $props[$p.Name] = $p.Value
+  $usedHook = $true
+  try {
+    $triggerResp = Trigger-WithHook $HookUrl
+    $deployId = Get-DeployIdFromResponse $triggerResp
+  }
+  catch {
+    $hookErrorText = [string]$_.Exception.Message
+    Write-Warning "Deploy hook trigger failed: $hookErrorText"
+    if ($ServiceId -and $ApiKey) {
+      Write-Warning "Falling back to Render API deploy trigger."
+      $triggerResp = $null
     }
-    if ($props.ContainsKey("deploy") -and $props["deploy"] -and $props["deploy"].PSObject.Properties["id"]) {
-      $deployId = [string]$props["deploy"].id
-    }
-    elseif ($props.ContainsKey("id") -and $props["id"]) {
-      $deployId = [string]$props["id"]
+    else {
+      throw
     }
   }
 }
-else {
+
+if (-not $triggerResp) {
+  if (-not $ServiceId) { throw "Missing ServiceId. Pass -ServiceId or set RENDER_SERVICE_ID." }
+  if (-not $ApiKey) { throw "Missing ApiKey. Pass -ApiKey or set RENDER_API_KEY." }
   $triggerResp = Trigger-WithApi $ServiceId $ApiKey
-  if ($triggerResp -and $triggerResp.PSObject.Properties["id"]) {
-    $deployId = [string]$triggerResp.id
+  if ($usedHook -and $hookErrorText) {
+    Write-Host "Hook fallback result: API trigger succeeded." -ForegroundColor Yellow
   }
+  $deployId = Get-DeployIdFromResponse $triggerResp
 }
 
 if ($deployId) { Write-Host "Deploy ID: $deployId" }

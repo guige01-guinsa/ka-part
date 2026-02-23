@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 10mm;
+    }
+    body {
+      margin: 0;
+      color: #111;
+      font-family: "Malgun Gothic", "NanumGothic", sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.35;
+    }
+    .sheet {
+      width: 100%;
+      margin: 0 auto;
+    }
+    .head {
+      border: 1.5px solid #111;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+    }
+    .title {
+      font-size: 18pt;
+      font-weight: 700;
+      margin: 0 0 6px 0;
+    }
+    .meta {
+      display: table;
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .meta-row {
+      display: table-row;
+    }
+    .meta-key,
+    .meta-val {
+      display: table-cell;
+      border: 1px solid #111;
+      padding: 4px 6px;
+      vertical-align: top;
+    }
+    .meta-key {
+      width: 16%;
+      background: #eceff5;
+      font-weight: 700;
+    }
+    .meta-val {
+      width: 34%;
+    }
+    table.box {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      border: 1.5px solid #111;
+      margin: 0 0 8px 0;
+      page-break-inside: avoid;
+    }
+    table.box th,
+    table.box td {
+      border: 1px solid #111;
+      padding: 4px 6px;
+      vertical-align: top;
+      word-break: break-all;
+    }
+    table.box th.section {
+      text-align: left;
+      background: #dfe5f1;
+      font-size: 11pt;
+      font-weight: 700;
+    }
+    table.box th.label {
+      width: 34%;
+      background: #f4f6fa;
+      font-weight: 700;
+      text-align: left;
+    }
+    table.box td.value {
+      width: 66%;
+    }
+    .foot {
+      margin-top: 4px;
+      text-align: right;
+      font-size: 9pt;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <section class="head">
+      <h1 class="title">{{ title }}</h1>
+      <div class="meta">
+        <div class="meta-row">
+          <div class="meta-key">단지명</div>
+          <div class="meta-val">{{ site_name }}</div>
+          <div class="meta-key">단지코드</div>
+          <div class="meta-val">{{ site_code }}</div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-key">점검일</div>
+          <div class="meta-val">{{ entry_date_label }}</div>
+          <div class="meta-key">점검자</div>
+          <div class="meta-val">{{ worker_name }}</div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-key">업무구분</div>
+          <div class="meta-val">{{ work_type }}</div>
+          <div class="meta-key">비고</div>
+          <div class="meta-val">{{ note }}</div>
+        </div>
+      </div>
+    </section>
+
+    {% for section in sections %}
+    <table class="box">
+      <tr>
+        <th class="section" colspan="2">{{ section.title }}</th>
+      </tr>
+      {% for row in section.rows %}
+      <tr>
+        <th class="label">{{ row.label }}</th>
+        <td class="value">{{ row.value }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endfor %}
+
+    <div class="foot">{{ site_office_label }}</div>
+  </div>
+</body>
+</html>
