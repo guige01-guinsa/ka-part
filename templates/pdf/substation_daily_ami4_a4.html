@@ -136,6 +136,11 @@
       width: 14%;
       padding: 0;
     }
+    .approval-role {
+      font-size: 10.2pt;
+      font-weight: 700;
+      letter-spacing: -0.1px;
+    }
     .approval-sign {
       height: auto;
     }
@@ -236,10 +241,10 @@
           <table class="approval">
             <tr class="approval-head-row">
               <th class="approval-title" rowspan="2">결재</th>
-              <th>담당</th>
-              <th>과장</th>
-              <th>부장</th>
-              <th>소장</th>
+              <th class="approval-role">담당</th>
+              <th class="approval-role">과장</th>
+              <th class="approval-role">부장</th>
+              <th class="approval-role">소장</th>
             </tr>
             <tr class="approval-sign-row">
               <td class="approval-sign">{% if approval_staff %}{{ approval_staff }}{% else %}&nbsp;{% endif %}</td>
