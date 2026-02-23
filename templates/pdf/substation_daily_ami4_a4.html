@@ -12,24 +12,21 @@
       margin: 0;
       color: #000;
       font-family: "HYSMyeongJo-Medium", "Malgun Gothic", "NanumGothic", sans-serif;
-      font-size: 10pt;
-      line-height: 1.15;
+      font-size: 10.2pt;
+      line-height: 1.14;
       letter-spacing: -0.1px;
     }
     .sheet {
       width: 100%;
       padding: 0;
       box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-      gap: 1.2mm;
     }
     table.form {
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
       border: 2px solid #222;
-      margin: 0;
+      margin: 0 0 1.6mm 0;
       page-break-inside: avoid;
     }
     table.form th,
@@ -41,41 +38,84 @@
       word-break: keep-all;
       font-size: inherit;
     }
-    .logo-row > tbody > tr {
-      height: 8.2mm;
+    tr.rh-logo {
+      height: 11mm;
+    }
+    tr.rh-head-title {
+      height: 13mm;
+    }
+    tr.rh-head-meta {
+      height: 19mm;
+    }
+    tr.rh-s1-1,
+    tr.rh-s2-1 {
+      height: 10mm;
+    }
+    tr.rh-s1-2,
+    tr.rh-s2-2 {
+      height: 10mm;
+    }
+    tr.rh-s1-3,
+    tr.rh-s2-3 {
+      height: 15mm;
+    }
+    tr.rh-s1-4,
+    tr.rh-s2-4 {
+      height: 17mm;
+    }
+    tr.rh-m-1 {
+      height: 10mm;
+    }
+    tr.rh-m-2 {
+      height: 14mm;
+    }
+    tr.rh-m-3,
+    tr.rh-m-4,
+    tr.rh-m-5,
+    tr.rh-m-6 {
+      height: 11mm;
+    }
+    tr.rh-m-7 {
+      height: 10mm;
+    }
+    tr.rh-m-8 {
+      height: 14mm;
+    }
+    .last-form {
+      margin-bottom: 1.8mm;
     }
     .logo-row td {
       border: 0;
       padding: 0;
     }
     .logo-box {
-      width: 186px;
-      height: 40px;
+      width: 180px;
+      height: 36px;
       border: 1px solid #cfd8e3;
       color: #0b8db3;
       font-weight: 700;
-      font-size: 13pt;
+      font-size: 12.5pt;
       display: inline-flex;
       align-items: center;
       justify-content: center;
     }
     .logo-box small {
       margin-left: 4px;
-      font-size: 8.4pt;
+      font-size: 8pt;
       color: #198ea6;
     }
     table.form td.doc-title {
-      font-size: 15pt;
+      font-size: 16pt;
       font-weight: 700;
       letter-spacing: -0.3px;
       text-align: center;
-      padding: 1.4mm 0;
+      padding: 1.6mm 0;
       border: 0 !important;
     }
     table.form td.meta-left {
       text-align: left !important;
       padding-left: 6px !important;
-      font-size: 9.2pt;
+      font-size: 9.6pt;
     }
     .approval-wrap {
       padding: 0 !important;
@@ -89,28 +129,28 @@
     table.approval th,
     table.approval td {
       border: 1px solid #333;
-      padding: 0.8mm 0;
-      font-size: 8.4pt;
+      padding: 1.0mm 0;
+      font-size: 8.8pt;
       text-align: center;
       vertical-align: middle;
     }
     .approval-title {
       font-weight: 700;
-      font-size: 8.5pt;
+      font-size: 8.8pt;
       width: 14%;
     }
     .approval-sign {
-      height: 7.8mm;
+      height: 8.6mm;
     }
     table.form th.hdr {
       background: #c8cfdb;
       font-weight: 700;
-      font-size: 8.9pt;
+      font-size: 9.4pt;
     }
     table.form th.subhdr {
       background: #d7dce6;
       font-weight: 700;
-      font-size: 8.6pt;
+      font-size: 9pt;
       line-height: 1.12;
     }
     table.form th.diag {
@@ -139,17 +179,17 @@
       top: 1.2mm;
       left: 1.2mm;
       font-weight: 700;
-      font-size: 8.8pt;
+      font-size: 9.1pt;
     }
     .diag .diag-bottom {
       position: absolute;
       right: 1.2mm;
       bottom: 1.2mm;
       font-weight: 700;
-      font-size: 8.8pt;
+      font-size: 9.1pt;
     }
     table.form .time {
-      font-size: 10.5pt;
+      font-size: 11pt;
       font-weight: 700;
     }
     .blank {
@@ -159,45 +199,27 @@
       background: #d7dce6;
       font-weight: 700;
       letter-spacing: 0.2px;
-      font-size: 8.8pt;
+      font-size: 9.2pt;
     }
     table.form td.note-cell {
-      height: 8.6mm;
+      height: 12mm;
       text-align: left;
       padding-left: 6px;
     }
     .footer {
-      margin-top: auto;
-      padding-top: 1.4mm;
+      margin-top: 0;
+      padding-top: 1.6mm;
       text-align: center;
-      font-size: 13pt;
+      font-size: 14pt;
       font-weight: 700;
       letter-spacing: 0.2px;
     }
-    .sheet > table.form:nth-of-type(2) > tbody > tr:first-child { height: 9.2mm; }
-    .sheet > table.form:nth-of-type(2) > tbody > tr:last-child { height: 11.6mm; }
-    .sheet > table.form:nth-of-type(3) > tbody > tr:nth-child(1) { height: 8.1mm; }
-    .sheet > table.form:nth-of-type(3) > tbody > tr:nth-child(2) { height: 8.1mm; }
-    .sheet > table.form:nth-of-type(3) > tbody > tr:nth-child(3) { height: 10.3mm; }
-    .sheet > table.form:nth-of-type(3) > tbody > tr:nth-child(4) { height: 9.2mm; }
-    .sheet > table.form:nth-of-type(4) > tbody > tr:nth-child(1) { height: 8.1mm; }
-    .sheet > table.form:nth-of-type(4) > tbody > tr:nth-child(2) { height: 8.1mm; }
-    .sheet > table.form:nth-of-type(4) > tbody > tr:nth-child(3) { height: 10.3mm; }
-    .sheet > table.form:nth-of-type(4) > tbody > tr:nth-child(4) { height: 9.2mm; }
-    .sheet > table.form:nth-of-type(5) > tbody > tr:nth-child(1) { height: 7.8mm; }
-    .sheet > table.form:nth-of-type(5) > tbody > tr:nth-child(2) { height: 10.2mm; }
-    .sheet > table.form:nth-of-type(5) > tbody > tr:nth-child(3) { height: 7.8mm; }
-    .sheet > table.form:nth-of-type(5) > tbody > tr:nth-child(4) { height: 7.8mm; }
-    .sheet > table.form:nth-of-type(5) > tbody > tr:nth-child(5) { height: 7.8mm; }
-    .sheet > table.form:nth-of-type(5) > tbody > tr:nth-child(6) { height: 7.8mm; }
-    .sheet > table.form:nth-of-type(5) > tbody > tr:nth-child(7) { height: 7.2mm; }
-    .sheet > table.form:nth-of-type(5) > tbody > tr:nth-child(8) { height: 8.8mm; }
   </style>
 </head>
 <body>
   <div class="sheet">
     <table class="form logo-row">
-      <tr>
+      <tr class="rh-logo">
         <td style="text-align:left;">
           <span class="logo-box">BMC<small>부산도시공사</small></span>
         </td>
@@ -205,10 +227,10 @@
     </table>
 
     <table class="form">
-      <tr>
+      <tr class="rh-head-title">
         <td class="doc-title" colspan="14">{{ title }}</td>
       </tr>
-      <tr>
+      <tr class="rh-head-meta">
         <td class="meta-left" colspan="8" style="border-right:2px solid #222;">
           {{ entry_date_label }}&nbsp;&nbsp;&nbsp;&nbsp;날씨 : {{ weather }}<br>
           근무자 : {{ worker_name }}
@@ -234,7 +256,7 @@
     </table>
 
     <table class="form">
-      <tr>
+      <tr class="rh-s1-1">
         <th class="diag" rowspan="4" style="width:8.5%;">
           <span class="diag-top">항목</span>
           <span class="diag-bottom">시간</span>
@@ -242,11 +264,11 @@
         <th class="hdr" colspan="7">특 고 압 반</th>
         <th class="hdr" colspan="3">저 압 반</th>
       </tr>
-      <tr>
+      <tr class="rh-s1-2">
         <th class="hdr" colspan="7">HV-2 (Main VCB)</th>
         <th class="hdr" colspan="3">LV-1 APT 세대전력 (전등/전열)</th>
       </tr>
-      <tr>
+      <tr class="rh-s1-3">
         <th class="subhdr">전압<br>[kV]</th>
         <th class="subhdr" colspan="3">전류[A]</th>
         <th class="subhdr">전력<br>[kW]</th>
@@ -255,7 +277,7 @@
         <th class="subhdr">전류[A]<br>Avg</th>
         <th class="subhdr">전력<br>[kW]</th>
       </tr>
-      <tr>
+      <tr class="rh-s1-4">
         <th class="time">{{ inspection_time }}</th>
         <td>{{ aiss_kv }}</td>
         <td>{{ main_vcb_r }}</td>
@@ -270,19 +292,19 @@
     </table>
 
     <table class="form">
-      <tr>
+      <tr class="rh-s2-1">
         <th class="diag" rowspan="4" style="width:10%;">
           <span class="diag-top">항목</span>
           <span class="diag-bottom">시간</span>
         </th>
         <th class="hdr" colspan="9">저 압 반</th>
       </tr>
-      <tr>
+      <tr class="rh-s2-2">
         <th class="hdr" colspan="3">LV-3 APT 세대전력 (전등/전열)</th>
         <th class="hdr" colspan="3">LV-5 ( 비상동력 )</th>
         <th class="hdr" colspan="3">&nbsp;</th>
       </tr>
-      <tr>
+      <tr class="rh-s2-3">
         <th class="subhdr">전압[V]</th>
         <th class="subhdr">전류[A]<br>Avg</th>
         <th class="subhdr">전력<br>[kW]</th>
@@ -293,7 +315,7 @@
         <th class="subhdr">&nbsp;</th>
         <th class="subhdr">&nbsp;</th>
       </tr>
-      <tr>
+      <tr class="rh-s2-4">
         <th class="time">{{ inspection_time }}</th>
         <td>{{ lv3_v_avg }}</td>
         <td>{{ lv3_a_avg }}</td>
@@ -307,8 +329,8 @@
       </tr>
     </table>
 
-    <table class="form">
-      <tr>
+    <table class="form last-form">
+      <tr class="rh-m-1">
         <th class="diag" rowspan="7" style="width:8.5%;">
           <span class="diag-top">항목</span>
           <span class="diag-bottom">시간</span>
@@ -317,7 +339,7 @@
         <th class="hdr" colspan="3">변압기온도</th>
         <th class="hdr" colspan="5">전력량계 (배율 : ×2,400)</th>
       </tr>
-      <tr>
+      <tr class="rh-m-2">
         <th class="subhdr">전압[V]<br>DC</th>
         <th class="subhdr">전류[A]</th>
         <th class="subhdr">TR1</th>
@@ -327,7 +349,7 @@
         <th class="subhdr" colspan="2">유효 전력<br>4</th>
         <th class="subhdr" colspan="2">태양광 전일 지침</th>
       </tr>
-      <tr>
+      <tr class="rh-m-3">
         <th class="time" rowspan="4">{{ inspection_time }}</th>
         <td>{{ dc_panel_v }}</td>
         <td>{{ dc_panel_a }}</td>
@@ -338,7 +360,7 @@
         <td colspan="2">{{ meter_main }}</td>
         <td colspan="2">&nbsp;</td>
       </tr>
-      <tr>
+      <tr class="rh-m-4">
         <td>&nbsp;</td>
         <td>&nbsp;</td>
         <td>&nbsp;</td>
@@ -348,7 +370,7 @@
         <td colspan="2">{{ meter_industry }}</td>
         <td colspan="2">&nbsp;</td>
       </tr>
-      <tr>
+      <tr class="rh-m-5">
         <td>&nbsp;</td>
         <td>&nbsp;</td>
         <td>&nbsp;</td>
@@ -358,7 +380,7 @@
         <td colspan="2">{{ meter_street }}</td>
         <td colspan="2">&nbsp;</td>
       </tr>
-      <tr>
+      <tr class="rh-m-6">
         <td>&nbsp;</td>
         <td>&nbsp;</td>
         <td>&nbsp;</td>
@@ -368,11 +390,11 @@
         <td colspan="2">&nbsp;</td>
         <td colspan="2">&nbsp;</td>
       </tr>
-      <tr>
+      <tr class="rh-m-7">
         <th class="note-lbl" colspan="5">점검 내용 및 특이 사항</th>
         <th class="note-lbl" colspan="6">비 고</th>
       </tr>
-      <tr>
+      <tr class="rh-m-8">
         <td class="note-cell" colspan="5">{{ note }}</td>
         <td class="note-cell" colspan="6">&nbsp;</td>
       </tr>
