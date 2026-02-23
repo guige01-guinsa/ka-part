@@ -129,18 +129,26 @@
     table.approval th,
     table.approval td {
       border: 1px solid #333;
-      padding: 1.0mm 0;
+      padding: 0;
       font-size: 8.8pt;
       text-align: center;
       vertical-align: middle;
+      line-height: 1.05;
+    }
+    .approval-head-row {
+      height: 3.8mm;
+    }
+    .approval-sign-row {
+      height: 11.4mm;
     }
     .approval-title {
       font-weight: 700;
       font-size: 8.8pt;
       width: 14%;
+      padding: 0;
     }
     .approval-sign {
-      height: 8.6mm;
+      height: 11.4mm;
     }
     table.form th.hdr {
       background: #c8cfdb;
@@ -237,14 +245,14 @@
         </td>
         <td class="approval-wrap" colspan="6">
           <table class="approval">
-            <tr>
+            <tr class="approval-head-row">
               <th class="approval-title" rowspan="2">결재</th>
               <th>담당</th>
               <th>과장</th>
               <th>부장</th>
               <th>소장</th>
             </tr>
-            <tr>
+            <tr class="approval-sign-row">
               <td class="approval-sign">{% if approval_staff %}{{ approval_staff }}{% else %}&nbsp;{% endif %}</td>
               <td class="approval-sign">{% if approval_manager %}{{ approval_manager }}{% else %}&nbsp;{% endif %}</td>
               <td class="approval-sign">{% if approval_deputy %}{{ approval_deputy }}{% else %}&nbsp;{% endif %}</td>
