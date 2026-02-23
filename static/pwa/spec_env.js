@@ -407,6 +407,16 @@
     setMsg("현재 JSON 설정을 파일로 내보냈습니다.");
   }
 
+  function normalizePdfPageMarginMm(value) {
+    if (value == null) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return null;
+    const clamped = Math.max(0, Math.min(20, num));
+    return Math.round(clamped * 100) / 100;
+  }
+
   function compactConfig(config) {
     const cfg = clone(config);
     if (!cfg || typeof cfg !== "object") return {};
@@ -424,6 +434,8 @@
       if (profileId) report.pdf_profile_id = profileId;
       const lockedProfileId = String(cfg.report.locked_profile_id || "").trim();
       if (lockedProfileId) report.locked_profile_id = lockedProfileId;
+      const pageMarginMm = normalizePdfPageMarginMm(cfg.report.page_margin_mm);
+      if (pageMarginMm != null) report.page_margin_mm = pageMarginMm;
 
       const rawTemplate = String(cfg.report.pdf_template_name || "").trim();
       const templateName = rawTemplate.replace(/\\/g, "/").split("/").pop().trim();
