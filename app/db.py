@@ -916,6 +916,8 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
           main_vcb_l1_a REAL,
           main_vcb_l2_a REAL,
           main_vcb_l3_a REAL,
+          main_vcb_kw REAL,
+          main_vcb_pf REAL,
           created_at TEXT DEFAULT (datetime('now','localtime')),
           updated_at TEXT
         );
@@ -928,6 +930,8 @@ def ensure_domain_tables(con: sqlite3.Connection) -> None:
     _ensure_column(con, "main_vcb_reads", "main_vcb_l1_a REAL")
     _ensure_column(con, "main_vcb_reads", "main_vcb_l2_a REAL")
     _ensure_column(con, "main_vcb_reads", "main_vcb_l3_a REAL")
+    _ensure_column(con, "main_vcb_reads", "main_vcb_kw REAL")
+    _ensure_column(con, "main_vcb_reads", "main_vcb_pf REAL")
     _ensure_column(con, "main_vcb_reads", "work_type TEXT NOT NULL DEFAULT ''")
     _ensure_column(con, "main_vcb_reads", "updated_at TEXT")
     _migrate_domain_site_key_index(

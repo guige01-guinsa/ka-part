@@ -150,9 +150,12 @@ SCHEMA_DEFS = {
             {"k": "main_vcb_l1_a", "label": "L1-A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 4000},
             {"k": "main_vcb_l2_a", "label": "L2-A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 4000},
             {"k": "main_vcb_l3_a", "label": "L3-A", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 4000},
+            {"k": "main_vcb_kw", "label": "전력[Kw]", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 10000},
+            {"k": "main_vcb_pf", "label": "역율(%)", "type": "number", "step": "0.01", "warn_min": 0, "warn_max": 100},
         ],
         "rows": [
             ["main_vcb_kv", "main_vcb_l1_a", "main_vcb_l2_a", "main_vcb_l3_a"],
+            ["main_vcb_kw", "main_vcb_pf"],
         ],
     },
     "dc_panel": {
@@ -421,6 +424,8 @@ TAB_STORAGE_SPECS: Dict[str, Dict[str, Any]] = {
             "main_vcb_l1_a": "main_vcb_l1_a",
             "main_vcb_l2_a": "main_vcb_l2_a",
             "main_vcb_l3_a": "main_vcb_l3_a",
+            "main_vcb_kw": "main_vcb_kw",
+            "main_vcb_pf": "main_vcb_pf",
         },
     },
     "dc_panel": {
