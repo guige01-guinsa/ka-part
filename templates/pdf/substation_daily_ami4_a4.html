@@ -4,96 +4,231 @@
   <meta charset="utf-8" />
   <title>{{ title }}</title>
   <style>
-    @page { size: A4; margin: 8mm; }
+    @page {
+      size: A4;
+      margin: 8mm;
+    }
     body {
       margin: 0;
-      color: #111;
+      color: #000;
       font-family: "HYSMyeongJo-Medium", "Malgun Gothic", "NanumGothic", sans-serif;
-      font-size: 11pt;
-      line-height: 1.2;
+      font-size: 10pt;
+      line-height: 1.12;
+      letter-spacing: -0.1px;
     }
-    .sheet { width: 100%; }
-    table.box {
+    .sheet {
+      width: 100%;
+      padding: 4px;
+      box-sizing: border-box;
+    }
+    table.form {
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
-      border: 1.5px solid #111;
+      border: 2px solid #222;
       margin: 0 0 4px 0;
       page-break-inside: avoid;
     }
-    table.box th, table.box td {
-      border: 1px solid #111;
-      padding: 2px 3px;
+    table.form th,
+    table.form td {
+      border: 1px solid #333;
+      padding: 1px 2px;
       text-align: center;
       vertical-align: middle;
       word-break: keep-all;
+      font-size: 9.5pt;
+    }
+    .logo-row td {
+      border: 0;
+      padding: 1px 0 4px 0;
+    }
+    .logo-box {
+      width: 188px;
+      height: 44px;
+      border: 1px solid #cfd8e3;
+      color: #0b8db3;
+      font-weight: 700;
+      font-size: 16pt;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .logo-box small {
+      margin-left: 4px;
       font-size: 10pt;
+      color: #198ea6;
     }
-    .title {
-      font-size: 24pt;
+    .doc-title {
+      font-size: 40px;
       font-weight: 700;
-      letter-spacing: -0.2px;
-      height: 38px;
+      letter-spacing: -0.4px;
+      text-align: center;
+      padding: 5px 0 4px 0;
+      border: 0 !important;
     }
-    .head {
-      background: #d7deed;
+    .meta-left {
+      text-align: left !important;
+      padding-left: 6px !important;
+      font-size: 11pt;
+    }
+    .approval-wrap {
+      padding: 0 !important;
+    }
+    table.approval {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      border: 1px solid #333;
+    }
+    table.approval th,
+    table.approval td {
+      border: 1px solid #333;
+      padding: 1px 0;
+      font-size: 10pt;
+      text-align: center;
+      vertical-align: middle;
+    }
+    .approval-title {
+      font-weight: 700;
+      font-size: 10pt;
+      width: 14%;
+    }
+    .approval-sign {
+      height: 30px;
+    }
+    .hdr {
+      background: #c8cfdb;
       font-weight: 700;
     }
-    .subhead {
-      background: #eef2f8;
+    .subhdr {
+      background: #d7dce6;
       font-weight: 700;
     }
-    .left {
+    .diag {
+      position: relative;
+      background: #d7dce6;
+      font-weight: 700;
+      min-height: 52px;
+    }
+    .diag::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(
+          to top right,
+          transparent calc(50% - 0.7px),
+          #333 calc(50% - 0.7px),
+          #333 calc(50% + 0.7px),
+          transparent calc(50% + 0.7px)
+        );
+      pointer-events: none;
+    }
+    .diag .diag-top {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      font-weight: 700;
+    }
+    .diag .diag-bottom {
+      position: absolute;
+      right: 6px;
+      bottom: 6px;
+      font-weight: 700;
+    }
+    .time {
+      font-size: 14pt;
+      font-weight: 700;
+    }
+    .blank {
+      color: #333;
+    }
+    .note-lbl {
+      background: #d7dce6;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    .note-cell {
+      height: 30px;
       text-align: left;
-      padding-left: 5px;
+      padding-left: 8px;
     }
-    .foot {
-      margin-top: 2px;
-      text-align: right;
-      font-size: 10pt;
+    .footer {
+      margin-top: 6px;
+      text-align: center;
+      font-size: 22pt;
+      font-weight: 700;
+      letter-spacing: 0.4px;
     }
   </style>
 </head>
 <body>
   <div class="sheet">
-    <table class="box">
+    <table class="form logo-row">
       <tr>
-        <td class="title" colspan="9">{{ title }}</td>
-        <th class="head">담당</th>
-        <th class="head">과장</th>
-        <th class="head">부장</th>
-        <th class="head">소장</th>
-      </tr>
-      <tr>
-        <td colspan="9" class="left">
-          {{ entry_date_label }}&nbsp;&nbsp; 날씨 : {{ weather }}&nbsp;&nbsp; 근무자 : {{ worker_name }}
+        <td style="text-align:left;">
+          <span class="logo-box">BMC<small>부산도시공사</small></span>
         </td>
-        <td>{% if approval_staff %}{{ approval_staff }}{% else %}&nbsp;{% endif %}</td>
-        <td>{% if approval_manager %}{{ approval_manager }}{% else %}&nbsp;{% endif %}</td>
-        <td>{% if approval_deputy %}{{ approval_deputy }}{% else %}&nbsp;{% endif %}</td>
-        <td>{% if approval_chief %}{{ approval_chief }}{% else %}&nbsp;{% endif %}</td>
       </tr>
     </table>
 
-    <table class="box">
+    <table class="form">
       <tr>
-        <th class="head" rowspan="2">항목시간</th>
-        <th class="head" colspan="4">특고압반</th>
-        <th class="head" colspan="3">저압반 HV-2 (Main VCB) / LV-1 APT 세대전력 (전등/전열)</th>
+        <td class="doc-title" colspan="14">{{ title }}</td>
       </tr>
       <tr>
-        <th class="subhead">전압[kV]</th>
-        <th class="subhead">전류[A]</th>
-        <th class="subhead">전력[kW]</th>
-        <th class="subhead">역율cosΘ</th>
-        <th class="subhead">전압[V]</th>
-        <th class="subhead">전류[A] Avg</th>
-        <th class="subhead">전력[kW]</th>
+        <td class="meta-left" colspan="8" style="border-right:2px solid #222;">
+          {{ entry_date_label }}&nbsp;&nbsp;&nbsp;&nbsp;날씨 : {{ weather }}<br>
+          근무자 : {{ worker_name }}
+        </td>
+        <td class="approval-wrap" colspan="6">
+          <table class="approval">
+            <tr>
+              <th class="approval-title" rowspan="2">결재</th>
+              <th>담당</th>
+              <th>과장</th>
+              <th>부장</th>
+              <th>소장</th>
+            </tr>
+            <tr>
+              <td class="approval-sign">{% if approval_staff %}{{ approval_staff }}{% else %}&nbsp;{% endif %}</td>
+              <td class="approval-sign">{% if approval_manager %}{{ approval_manager }}{% else %}&nbsp;{% endif %}</td>
+              <td class="approval-sign">{% if approval_deputy %}{{ approval_deputy }}{% else %}&nbsp;{% endif %}</td>
+              <td class="approval-sign">{% if approval_chief %}{{ approval_chief }}{% else %}&nbsp;{% endif %}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table class="form">
+      <tr>
+        <th class="diag" rowspan="4" style="width:8.5%;">
+          <span class="diag-top">항목</span>
+          <span class="diag-bottom">시간</span>
+        </th>
+        <th class="hdr" colspan="7">특 고 압 반</th>
+        <th class="hdr" colspan="3">저 압 반</th>
       </tr>
       <tr>
-        <th>{{ inspection_time }}</th>
+        <th class="hdr" colspan="7">HV-2 (Main VCB)</th>
+        <th class="hdr" colspan="3">LV-1 APT 세대전력 (전등/전열)</th>
+      </tr>
+      <tr>
+        <th class="subhdr">전압<br>[kV]</th>
+        <th class="subhdr" colspan="3">전류[A]</th>
+        <th class="subhdr">전력<br>[kW]</th>
+        <th class="subhdr">역율<br>cosΘ</th>
+        <th class="subhdr">전압<br>[V]</th>
+        <th class="subhdr">전류[A]<br>Avg</th>
+        <th class="subhdr">전력<br>[kW]</th>
+      </tr>
+      <tr>
+        <th class="time">{{ inspection_time }}</th>
         <td>{{ aiss_kv }}</td>
-        <td>{{ main_vcb_a_avg }}</td>
+        <td>{{ main_vcb_r }}</td>
+        <td>{{ main_vcb_s }}</td>
+        <td>{{ main_vcb_t }}</td>
         <td>{{ main_vcb_kw }}</td>
         <td>{{ main_vcb_pf }}</td>
         <td>{{ lv1_v_avg }}</td>
@@ -102,70 +237,116 @@
       </tr>
     </table>
 
-    <table class="box">
+    <table class="form">
       <tr>
-        <th class="head" rowspan="2">항목시간</th>
-        <th class="head" colspan="3">저압반 LV-3 APT 세대전력 (전등/전열)</th>
-        <th class="head" colspan="3">LV-5 (비상동력)</th>
+        <th class="diag" rowspan="4" style="width:10%;">
+          <span class="diag-top">항목</span>
+          <span class="diag-bottom">시간</span>
+        </th>
+        <th class="hdr" colspan="9">저 압 반</th>
+      </tr>
+      <tr>
+        <th class="hdr" colspan="3">LV-3 APT 세대전력 (전등/전열)</th>
+        <th class="hdr" colspan="3">LV-5 ( 비상동력 )</th>
+        <th class="hdr" colspan="3">&nbsp;</th>
       </tr>
       <tr>
         <th class="subhead">전압[V]</th>
-        <th class="subhead">전류[A] Avg</th>
-        <th class="subhead">전력[kW]</th>
-        <th class="subhead">전압[V]</th>
-        <th class="subhead">전류[A] Avg</th>
-        <th class="subhead">전력[kW]</th>
+        <th class="subhdr">전류[A]<br>Avg</th>
+        <th class="subhdr">전력<br>[kW]</th>
+        <th class="subhdr">전압[V]</th>
+        <th class="subhdr">전류[A]<br>Avg</th>
+        <th class="subhdr">전력<br>[kW]</th>
+        <th class="subhdr">&nbsp;</th>
+        <th class="subhdr">&nbsp;</th>
+        <th class="subhdr">&nbsp;</th>
       </tr>
       <tr>
-        <th>{{ inspection_time }}</th>
+        <th class="time">{{ inspection_time }}</th>
         <td>{{ lv3_v_avg }}</td>
         <td>{{ lv3_a_avg }}</td>
         <td>{{ lv3_kw_avg }}</td>
         <td>{{ lv5_v_avg }}</td>
         <td>{{ lv5_a_avg }}</td>
         <td>{{ lv5_kw_avg }}</td>
+        <td class="blank">-</td>
+        <td class="blank">-</td>
+        <td class="blank">-</td>
       </tr>
     </table>
 
-    <table class="box">
+    <table class="form">
       <tr>
-        <th class="head" rowspan="2">항목시간</th>
-        <th class="head" colspan="2">정류기반</th>
-        <th class="head" colspan="3">변압기온도</th>
-        <th class="head" colspan="3">전력량계 (배율 : ×2,400)</th>
+        <th class="diag" rowspan="7" style="width:8.5%;">
+          <span class="diag-top">항목</span>
+          <span class="diag-bottom">시간</span>
+        </th>
+        <th class="hdr" colspan="2">정류기반</th>
+        <th class="hdr" colspan="3">변압기온도</th>
+        <th class="hdr" colspan="5">전력량계 (배율 : ×2,400)</th>
       </tr>
       <tr>
-        <th class="subhead">전압[V] DC</th>
-        <th class="subhead">전류[A]</th>
-        <th class="subhead">TR1</th>
-        <th class="subhead">TR2</th>
-        <th class="subhead">TR3</th>
-        <th class="subhead">유효 전력</th>
-        <th class="subhead">태양광 전일 지침</th>
-        <th class="subhead">금일 지침</th>
+        <th class="subhdr">전압[V]<br>DC</th>
+        <th class="subhdr">전류[A]</th>
+        <th class="subhdr">TR1</th>
+        <th class="subhdr">TR2</th>
+        <th class="subhdr">TR3</th>
+        <th class="subhdr">구분</th>
+        <th class="subhdr" colspan="2">유효 전력<br>4</th>
+        <th class="subhdr" colspan="2">태양광 전일 지침</th>
       </tr>
       <tr>
-        <th>{{ inspection_time }}</th>
+        <th class="time" rowspan="4">{{ inspection_time }}</th>
         <td>{{ dc_panel_v }}</td>
         <td>{{ dc_panel_a }}</td>
         <td>{{ tr1_temp }}</td>
         <td>{{ tr2_temp }}</td>
         <td>{{ tr3_temp }}</td>
-        <td>{{ meter_main }}</td>
-        <td>{{ meter_industry }}</td>
-        <td>{{ meter_street }}</td>
+        <th class="subhdr">금일지침</th>
+        <td colspan="2">{{ meter_main }}</td>
+        <td colspan="2">&nbsp;</td>
       </tr>
       <tr>
-        <th class="head left" colspan="3">점검 내용 및 특이 사항</th>
-        <td class="left" colspan="7">{{ note }}</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <th class="subhdr">전일지침</th>
+        <td colspan="2">{{ meter_industry }}</td>
+        <td colspan="2">&nbsp;</td>
       </tr>
       <tr>
-        <th class="head" colspan="3">비 고</th>
-        <td colspan="7">&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <th class="subhdr">금일사용량</th>
+        <td colspan="2">{{ meter_street }}</td>
+        <td colspan="2">&nbsp;</td>
+      </tr>
+      <tr>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <td>&nbsp;</td>
+        <th class="subhdr">누 계</th>
+        <td colspan="2">&nbsp;</td>
+        <td colspan="2">&nbsp;</td>
+      </tr>
+      <tr>
+        <th class="note-lbl" colspan="5">점검 내용 및 특이 사항</th>
+        <th class="note-lbl" colspan="6">비 고</th>
+      </tr>
+      <tr>
+        <td class="note-cell" colspan="5">{{ note }}</td>
+        <td class="note-cell" colspan="6">&nbsp;</td>
       </tr>
     </table>
 
-    <div class="foot">{{ site_office_label }}</div>
+    <div class="footer">경동 포레스트힐 행복주택 아미 관리사무소</div>
   </div>
 </body>
 </html>
