@@ -26,6 +26,10 @@ PDF_PROFILE_DEFS: Dict[str, Dict[str, str]] = {
         "template_name": "substation_daily_a4.html",
         "context_builder": "substation",
     },
+    "substation_daily_ami4_a4": {
+        "template_name": "substation_daily_ami4_a4.html",
+        "context_builder": "substation",
+    },
     "substation_daily_generic_a4": {
         "template_name": "substation_daily_generic_a4.html",
         "context_builder": "generic",
@@ -261,6 +265,35 @@ def _build_pdf_context(
         ("KW", "_KW"),
     )
 
+    def _to_float(value: Any) -> float | None:
+        txt = str(value or "").strip()
+        if not txt:
+            return None
+        try:
+            return float(txt.replace(",", ""))
+        except Exception:
+            return None
+
+    def _fmt_num(value: float | None) -> str:
+        if value is None:
+            return "-"
+        if abs(value - round(value)) < 0.0001:
+            return str(int(round(value)))
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    def _tab_avg(tab_key: str, field_keys: List[str]) -> str:
+        tab = tabs.get(tab_key) if isinstance(tabs, dict) else {}
+        if not isinstance(tab, dict):
+            return "-"
+        nums: List[float] = []
+        for key in field_keys:
+            n = _to_float(tab.get(key))
+            if n is not None:
+                nums.append(n)
+        if not nums:
+            return "-"
+        return _fmt_num(sum(nums) / len(nums))
+
     def lv_block(prefix: str) -> List[Dict[str, str]]:
         rows: List[Dict[str, str]] = []
         for row_name in lv_rows:
@@ -274,21 +307,27 @@ def _build_pdf_context(
     meter_main = _tab_value(tabs, "meter", "main_kwh")
     meter_industry = _tab_value(tabs, "meter", "industry_kwh")
     meter_street = _tab_value(tabs, "meter", "street_kwh")
+    main_vcb_r = _tab_value(tabs, "main_vcb", "main_vcb_l1_a")
+    main_vcb_s = _tab_value(tabs, "main_vcb", "main_vcb_l2_a")
+    main_vcb_t = _tab_value(tabs, "main_vcb", "main_vcb_l3_a")
 
     return {
-        "title": "수변전 일지 (아파트)",
+        "title": "수배전반(검침)점검일지",
         "site_name": _fmt_value(site_name, default="-"),
         "site_office_label": f"{_fmt_value(site_name, default='-')} 관리사무소",
         "site_code": _fmt_value(complex_code, default="-"),
         "entry_date": safe_ymd(date),
         "entry_date_label": _date_label_ko(date),
         "worker_name": _fmt_value(worker_name, default="-"),
+        "weather": _tab_value(tabs, "home", "weather", default=""),
+        "approval_staff": _tab_value(tabs, "home", "approval_staff", default=""),
         "approval_manager": _tab_value(tabs, "home", "approval_manager", default=""),
+        "approval_deputy": _tab_value(tabs, "home", "approval_deputy", default=""),
         "approval_chief": _tab_value(tabs, "home", "approval_chief", default=""),
         "work_type": _fmt_value(home.get("work_type"), default="일일"),
         "important_work": _fmt_value(home.get("important_work"), default="-"),
         "note": _fmt_value(home.get("note"), default="-"),
-        "inspection_time": "10:00",
+        "inspection_time": "07:30",
         "aiss_kv": _tab_value(tabs, "main_vcb", "main_vcb_kv"),
         "aiss_r_a": _tab_value(tabs, "meter", "AISS_L1_A"),
         "aiss_s_a": _tab_value(tabs, "meter", "AISS_L2_A"),
@@ -297,8 +336,29 @@ def _build_pdf_context(
         "aiss_n_a": "0",
         "tr1_temp": _tab_value(tabs, "temperature", "temperature_tr1"),
         "tr2_temp": _tab_value(tabs, "temperature", "temperature_tr2"),
+        "tr3_temp": _tab_value(tabs, "temperature", "temperature_tr3"),
         "lv1_rows": lv_block("lv1"),
         "lv2_rows": lv_block("lv2"),
+        "main_vcb_r": main_vcb_r,
+        "main_vcb_s": main_vcb_s,
+        "main_vcb_t": main_vcb_t,
+        "main_vcb_a_avg": _tab_avg("main_vcb", ["main_vcb_l1_a", "main_vcb_l2_a", "main_vcb_l3_a"]),
+        "main_vcb_kw": _tab_value(tabs, "main_vcb", "main_vcb_kw"),
+        "main_vcb_pf": _tab_value(tabs, "main_vcb", "main_vcb_pf"),
+        "lv1_v_avg": _tab_avg("tr1", ["lv1_L1_V", "lv1_L2_V", "lv1_L3_V"]),
+        "lv1_a_avg": _tab_avg("tr1", ["lv1_L1_A", "lv1_L2_A", "lv1_L3_A"]),
+        "lv1_kw_avg": _tab_avg("tr1", ["lv1_L1_KW", "lv1_L2_KW", "lv1_L3_KW"]),
+        "lv3_v_avg": _tab_avg("tr3", ["lv3_L1_V", "lv3_L2_V", "lv3_L3_V"]),
+        "lv3_a_avg": _tab_avg("tr3", ["lv3_L1_A", "lv3_L2_A", "lv3_L3_A"]),
+        "lv3_kw_avg": _tab_avg("tr3", ["lv3_L1_KW", "lv3_L2_KW", "lv3_L3_KW"]),
+        "lv5_v_avg": _tab_avg("tr5", ["lv5_L1_V", "lv5_L2_V", "lv5_L3_V"]),
+        "lv5_a_avg": _tab_avg("tr5", ["lv5_L1_A", "lv5_L2_A", "lv5_L3_A"]),
+        "lv5_kw_avg": _tab_avg("tr5", ["lv5_L1_KW", "lv5_L2_KW", "lv5_L3_KW"]),
+        "dc_panel_v": _tab_value(tabs, "dc_panel", "dc_panel_v"),
+        "dc_panel_a": _tab_value(tabs, "dc_panel", "dc_panel_a"),
+        "meter_main": meter_main,
+        "meter_industry": meter_industry,
+        "meter_street": meter_street,
         "meter_rows": [
             {"name": "메인(*720)④", "today": meter_main, "prev": "#N/A", "daily": "", "monthly": ""},
             {"name": "산업용③", "today": meter_industry, "prev": "#N/A", "daily": "", "monthly": ""},

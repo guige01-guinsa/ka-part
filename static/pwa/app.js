@@ -85,6 +85,8 @@
   const SITE_ID_KEY = "ka_current_site_id_v1";
   const DEFAULT_SITE_NAME = "미지정단지";
   const DEFAULT_WORK_TYPE = "일일";
+  const QUICK_PDF_SITE_CODE = "APT00003";
+  const QUICK_PDF_SITE_NAME = "행복주택아미";
   const WORK_TYPE_ALIAS_MAP = {
     정기: "일상",
     기타일상: "일상",
@@ -1355,6 +1357,20 @@
     await downloadWithAuth(url, "report.pdf");
   }
 
+  async function doQuickPdfForApt00003() {
+    const assignedCode = assignedSiteCodeForUser();
+    if (!hasAdminPermission(authUser) && assignedCode && assignedCode !== QUICK_PDF_SITE_CODE) {
+      throw new Error(`${QUICK_PDF_SITE_CODE} 소속 계정 또는 관리자만 사용할 수 있습니다.`);
+    }
+    if (hasAdminPermission(authUser)) {
+      setSiteName(QUICK_PDF_SITE_NAME);
+    }
+    setSiteCode(QUICK_PDF_SITE_CODE);
+    setSiteId(0);
+    await syncSiteIdentity({ requireInput: true });
+    await doPdf();
+  }
+
   function syncStickyOffset() {
     const header = document.querySelector(".top");
     const h = header ? header.offsetHeight : 0;
@@ -1484,6 +1500,9 @@
     });
     $("#btnPdf")?.addEventListener("click", () => {
       doPdf().catch((err) => alert("PDF 오류: " + err.message));
+    });
+    $("#btnPdfApt00003")?.addEventListener("click", () => {
+      doQuickPdfForApt00003().catch((err) => alert("원클릭 PDF 오류: " + err.message));
     });
     $("#btnProfile")?.addEventListener("click", () => {
       window.location.href = "/pwa/profile.html";

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import io
 import hashlib
 import hmac
@@ -150,6 +151,9 @@ ROLE_LABEL_BY_PERMISSION = {
 DEFAULT_GENERAL_MODULE_ORDER = ["main", "parking", "complaints", "inspection", "electrical_ai"]
 SITE_REGISTRY_REQUEST_CHANGE_TYPE = "site_code_registration"
 DEFAULT_SITE_NAME = "미지정단지"
+PDF_PROFILE_PIN_BY_SITE_CODE: Dict[str, str] = {
+    "APT00003": "substation_daily_ami4_a4",
+}
 PHONE_VERIFY_TTL_MINUTES = 5
 PHONE_VERIFY_MAX_ATTEMPTS = 5
 SIGNUP_FINALIZE_TOKEN_MAX_AGE_SEC = max(300, min(7200, int(os.getenv("KA_SIGNUP_FINALIZE_TOKEN_MAX_AGE_SEC", "900"))))
@@ -1527,6 +1531,23 @@ def _site_schema_and_env(site_name: str, site_code: str = "") -> Tuple[Dict[str,
     effective_cfg = merge_site_env_configs(default_site_env_config(), env_cfg)
     schema = build_effective_schema(base_schema=SCHEMA_DEFS, site_env_config=effective_cfg)
     return schema, env_cfg
+
+
+def _pin_pdf_profile_for_site_code(site_code: str, env_cfg: Dict[str, Any] | None) -> Dict[str, Any]:
+    clean_site_code = _clean_site_code(site_code, required=False)
+    pinned_profile = PDF_PROFILE_PIN_BY_SITE_CODE.get(clean_site_code)
+    base = copy.deepcopy(env_cfg) if isinstance(env_cfg, dict) else {}
+    if not pinned_profile:
+        return base
+    report = base.get("report")
+    if not isinstance(report, dict):
+        report = {}
+    report = dict(report)
+    report["pdf_profile_id"] = pinned_profile
+    # Site-specific pinned profile must win over template overrides.
+    report.pop("pdf_template_name", None)
+    base["report"] = report
+    return base
 
 
 def _resolve_allowed_site_code(user: Dict[str, Any], requested_site_code: Any) -> str:
@@ -6213,6 +6234,7 @@ def api_save(request: Request, payload: Dict[str, Any] = Body(...)):
         raise HTTPException(status_code=400, detail="tabs must be object")
 
     schema, _env_cfg = _site_schema_and_env(site_name, site_code)
+    pdf_env_cfg = _pin_pdf_profile_for_site_code(site_code, _env_cfg)
     tabs = normalize_tabs_payload(raw_tabs, schema_defs=schema)
     entry_work_type = _entry_work_type_from_tabs(tabs, default="일일")
     if "home" in tabs:
@@ -6416,7 +6438,7 @@ def api_pdf(
         tabs,
         worker_name=worker_name,
         schema_defs=schema,
-        site_env_config=_env_cfg,
+        site_env_config=pdf_env_cfg,
     )
     from urllib.parse import quote
 

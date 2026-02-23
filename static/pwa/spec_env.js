@@ -27,6 +27,7 @@
   const DEFAULT_PDF_PROFILE_ID = "substation_daily_a4";
   const PDF_PROFILE_OPTIONS = [
     { id: "substation_daily_a4", label: "수변전 점검일지 A4 (기본)" },
+    { id: "substation_daily_ami4_a4", label: "수배전반(검침)점검일지 A4" },
     { id: "substation_daily_generic_a4", label: "범용 점검일지 A4" },
   ];
 

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title }}</title>
+  <style>
+    @page { size: A4; margin: 8mm; }
+    body {
+      margin: 0;
+      color: #111;
+      font-family: "HYSMyeongJo-Medium", "Malgun Gothic", "NanumGothic", sans-serif;
+      font-size: 11pt;
+      line-height: 1.2;
+    }
+    .sheet { width: 100%; }
+    table.box {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      border: 1.5px solid #111;
+      margin: 0 0 4px 0;
+      page-break-inside: avoid;
+    }
+    table.box th, table.box td {
+      border: 1px solid #111;
+      padding: 2px 3px;
+      text-align: center;
+      vertical-align: middle;
+      word-break: keep-all;
+      font-size: 10pt;
+    }
+    .title {
+      font-size: 24pt;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+      height: 38px;
+    }
+    .head {
+      background: #d7deed;
+      font-weight: 700;
+    }
+    .subhead {
+      background: #eef2f8;
+      font-weight: 700;
+    }
+    .left {
+      text-align: left;
+      padding-left: 5px;
+    }
+    .foot {
+      margin-top: 2px;
+      text-align: right;
+      font-size: 10pt;
+    }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <table class="box">
+      <tr>
+        <td class="title" colspan="9">{{ title }}</td>
+        <th class="head">담당</th>
+        <th class="head">과장</th>
+        <th class="head">부장</th>
+        <th class="head">소장</th>
+      </tr>
+      <tr>
+        <td colspan="9" class="left">
+          {{ entry_date_label }}&nbsp;&nbsp; 날씨 : {{ weather }}&nbsp;&nbsp; 근무자 : {{ worker_name }}
+        </td>
+        <td>{% if approval_staff %}{{ approval_staff }}{% else %}&nbsp;{% endif %}</td>
+        <td>{% if approval_manager %}{{ approval_manager }}{% else %}&nbsp;{% endif %}</td>
+        <td>{% if approval_deputy %}{{ approval_deputy }}{% else %}&nbsp;{% endif %}</td>
+        <td>{% if approval_chief %}{{ approval_chief }}{% else %}&nbsp;{% endif %}</td>
+      </tr>
+    </table>
+
+    <table class="box">
+      <tr>
+        <th class="head" rowspan="2">항목시간</th>
+        <th class="head" colspan="4">특고압반</th>
+        <th class="head" colspan="3">저압반 HV-2 (Main VCB) / LV-1 APT 세대전력 (전등/전열)</th>
+      </tr>
+      <tr>
+        <th class="subhead">전압[kV]</th>
+        <th class="subhead">전류[A]</th>
+        <th class="subhead">전력[kW]</th>
+        <th class="subhead">역율cosΘ</th>
+        <th class="subhead">전압[V]</th>
+        <th class="subhead">전류[A] Avg</th>
+        <th class="subhead">전력[kW]</th>
+      </tr>
+      <tr>
+        <th>{{ inspection_time }}</th>
+        <td>{{ aiss_kv }}</td>
+        <td>{{ main_vcb_a_avg }}</td>
+        <td>{{ main_vcb_kw }}</td>
+        <td>{{ main_vcb_pf }}</td>
+        <td>{{ lv1_v_avg }}</td>
+        <td>{{ lv1_a_avg }}</td>
+        <td>{{ lv1_kw_avg }}</td>
+      </tr>
+    </table>
+
+    <table class="box">
+      <tr>
+        <th class="head" rowspan="2">항목시간</th>
+        <th class="head" colspan="3">저압반 LV-3 APT 세대전력 (전등/전열)</th>
+        <th class="head" colspan="3">LV-5 (비상동력)</th>
+      </tr>
+      <tr>
+        <th class="subhead">전압[V]</th>
+        <th class="subhead">전류[A] Avg</th>
+        <th class="subhead">전력[kW]</th>
+        <th class="subhead">전압[V]</th>
+        <th class="subhead">전류[A] Avg</th>
+        <th class="subhead">전력[kW]</th>
+      </tr>
+      <tr>
+        <th>{{ inspection_time }}</th>
+        <td>{{ lv3_v_avg }}</td>
+        <td>{{ lv3_a_avg }}</td>
+        <td>{{ lv3_kw_avg }}</td>
+        <td>{{ lv5_v_avg }}</td>
+        <td>{{ lv5_a_avg }}</td>
+        <td>{{ lv5_kw_avg }}</td>
+      </tr>
+    </table>
+
+    <table class="box">
+      <tr>
+        <th class="head" rowspan="2">항목시간</th>
+        <th class="head" colspan="2">정류기반</th>
+        <th class="head" colspan="3">변압기온도</th>
+        <th class="head" colspan="3">전력량계 (배율 : ×2,400)</th>
+      </tr>
+      <tr>
+        <th class="subhead">전압[V] DC</th>
+        <th class="subhead">전류[A]</th>
+        <th class="subhead">TR1</th>
+        <th class="subhead">TR2</th>
+        <th class="subhead">TR3</th>
+        <th class="subhead">유효 전력</th>
+        <th class="subhead">태양광 전일 지침</th>
+        <th class="subhead">금일 지침</th>
+      </tr>
+      <tr>
+        <th>{{ inspection_time }}</th>
+        <td>{{ dc_panel_v }}</td>
+        <td>{{ dc_panel_a }}</td>
+        <td>{{ tr1_temp }}</td>
+        <td>{{ tr2_temp }}</td>
+        <td>{{ tr3_temp }}</td>
+        <td>{{ meter_main }}</td>
+        <td>{{ meter_industry }}</td>
+        <td>{{ meter_street }}</td>
+      </tr>
+      <tr>
+        <th class="head left" colspan="3">점검 내용 및 특이 사항</th>
+        <td class="left" colspan="7">{{ note }}</td>
+      </tr>
+      <tr>
+        <th class="head" colspan="3">비 고</th>
+        <td colspan="7">&nbsp;</td>
+      </tr>
+    </table>
+
+    <div class="foot">{{ site_office_label }}</div>
+  </div>
+</body>
+</html>
