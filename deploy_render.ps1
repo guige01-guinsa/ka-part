@@ -90,6 +90,12 @@ function Wait-Deploy([string]$Svc, [string]$Token, [string]$DeployId, [int]$Time
 
 function Get-DeployIdFromResponse($Resp) {
   if (-not $Resp) { return "" }
+  if ($Resp -is [System.Collections.IEnumerable] -and -not ($Resp -is [string])) {
+    foreach ($item in $Resp) {
+      $fromItem = Get-DeployIdFromResponse $item
+      if ($fromItem) { return $fromItem }
+    }
+  }
   if ($Resp.PSObject.Properties["deploy"] -and $Resp.deploy -and $Resp.deploy.PSObject.Properties["id"]) {
     return [string]$Resp.deploy.id
   }
