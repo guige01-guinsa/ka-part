@@ -47,41 +47,27 @@
     tr.rh-head-meta {
       height: 19mm;
     }
-    tr.rh-s1-1,
-    tr.rh-s2-1 {
-      height: 10mm;
-    }
-    tr.rh-s1-2,
-    tr.rh-s2-2 {
-      height: 10mm;
-    }
-    tr.rh-s1-3,
-    tr.rh-s2-3 {
-      height: 15mm;
-    }
-    tr.rh-s1-4,
-    tr.rh-s2-4 {
-      height: 17mm;
-    }
-    tr.rh-m-1 {
-      height: 10mm;
-    }
-    tr.rh-m-2 {
-      height: 14mm;
-    }
+    tr.rh-s1-1 { height: 8.2mm; }
+    tr.rh-s1-2 { height: 8.2mm; }
+    tr.rh-s1-3 { height: 6.8mm; }
+    tr.rh-s1-4 { height: 6.8mm; }
+    tr.rh-s1-5 { height: 10.8mm; }
+    tr.rh-s2-1 { height: 8.2mm; }
+    tr.rh-s2-2 { height: 8.2mm; }
+    tr.rh-s2-3 { height: 9.4mm; }
+    tr.rh-s2-4 { height: 10.8mm; }
+    tr.rh-m-1 { height: 8.2mm; }
+    tr.rh-m-2 { height: 8.8mm; }
     tr.rh-m-3,
     tr.rh-m-4,
     tr.rh-m-5,
-    tr.rh-m-6 {
-      height: 11mm;
+    tr.rh-m-6 { height: 10.8mm; }
+    tr.rh-note-1 { height: 8.4mm; }
+    tr.rh-note-2 { height: 13.2mm; }
+    .meter-form {
+      margin-bottom: 1.0mm;
     }
-    tr.rh-m-7 {
-      height: 10mm;
-    }
-    tr.rh-m-8 {
-      height: 14mm;
-    }
-    .last-form {
+    .note-form {
       margin-bottom: 1.8mm;
     }
     .logo-row td {
@@ -210,7 +196,7 @@
       font-size: 9.2pt;
     }
     table.form td.note-cell {
-      height: 12mm;
+      height: 13.2mm;
       text-align: left;
       padding-left: 6px;
     }
@@ -277,15 +263,20 @@
         <th class="hdr" colspan="3">LV-1 APT 세대전력 (전등/전열)</th>
       </tr>
       <tr class="rh-s1-3">
-        <th class="subhdr">전압<br>[kV]</th>
+        <th class="subhdr" rowspan="2">전압<br>[kV]</th>
         <th class="subhdr" colspan="3">전류[A]</th>
-        <th class="subhdr">전력<br>[kW]</th>
-        <th class="subhdr">역율<br>cosΘ</th>
-        <th class="subhdr">전압<br>[V]</th>
-        <th class="subhdr">전류[A]<br>Avg</th>
-        <th class="subhdr">전력<br>[kW]</th>
+        <th class="subhdr" rowspan="2">전력<br>[kW]</th>
+        <th class="subhdr" rowspan="2">역율<br>cosΘ</th>
+        <th class="subhdr" rowspan="2">전압<br>[V]</th>
+        <th class="subhdr" rowspan="2">전류[A]<br>Avg</th>
+        <th class="subhdr" rowspan="2">전력<br>[kW]</th>
       </tr>
       <tr class="rh-s1-4">
+        <th class="subhdr">R</th>
+        <th class="subhdr">S</th>
+        <th class="subhdr">T</th>
+      </tr>
+      <tr class="rh-s1-5">
         <th class="time">{{ inspection_time }}</th>
         <td>{{ aiss_kv }}</td>
         <td>{{ main_vcb_r }}</td>
@@ -301,7 +292,7 @@
 
     <table class="form">
       <tr class="rh-s2-1">
-        <th class="diag" rowspan="4" style="width:10%;">
+        <th class="diag" rowspan="3" style="width:10%;">
           <span class="diag-top">항목</span>
           <span class="diag-bottom">시간</span>
         </th>
@@ -337,9 +328,9 @@
       </tr>
     </table>
 
-    <table class="form last-form">
+    <table class="form meter-form">
       <tr class="rh-m-1">
-        <th class="diag" rowspan="7" style="width:8.5%;">
+        <th class="diag" rowspan="2" style="width:8.5%;">
           <span class="diag-top">항목</span>
           <span class="diag-bottom">시간</span>
         </th>
@@ -364,8 +355,9 @@
         <td>{{ tr1_temp }}</td>
         <td>{{ tr2_temp }}</td>
         <td>{{ tr3_temp }}</td>
+        <th class="time" rowspan="4">{{ inspection_time }}</th>
         <th class="subhdr">금일지침</th>
-        <td colspan="2">{{ meter_main }}</td>
+        <td>{{ meter_main }}</td>
         <td colspan="2">&nbsp;</td>
       </tr>
       <tr class="rh-m-4">
@@ -375,7 +367,7 @@
         <td>&nbsp;</td>
         <td>&nbsp;</td>
         <th class="subhdr">전일지침</th>
-        <td colspan="2">{{ meter_industry }}</td>
+        <td>{{ meter_industry }}</td>
         <td colspan="2">&nbsp;</td>
       </tr>
       <tr class="rh-m-5">
@@ -385,7 +377,7 @@
         <td>&nbsp;</td>
         <td>&nbsp;</td>
         <th class="subhdr">금일사용량</th>
-        <td colspan="2">{{ meter_street }}</td>
+        <td>{{ meter_street }}</td>
         <td colspan="2">&nbsp;</td>
       </tr>
       <tr class="rh-m-6">
@@ -395,16 +387,19 @@
         <td>&nbsp;</td>
         <td>&nbsp;</td>
         <th class="subhdr">누 계</th>
-        <td colspan="2">&nbsp;</td>
+        <td>&nbsp;</td>
         <td colspan="2">&nbsp;</td>
       </tr>
-      <tr class="rh-m-7">
-        <th class="note-lbl" colspan="5">점검 내용 및 특이 사항</th>
-        <th class="note-lbl" colspan="6">비 고</th>
+    </table>
+
+    <table class="form note-form">
+      <tr class="rh-note-1">
+        <th class="note-lbl" colspan="6">점검 내용 및 특이 사항</th>
+        <th class="note-lbl" colspan="5">비 고</th>
       </tr>
-      <tr class="rh-m-8">
-        <td class="note-cell" colspan="5">{{ note }}</td>
-        <td class="note-cell" colspan="6">&nbsp;</td>
+      <tr class="rh-note-2">
+        <td class="note-cell" colspan="6">{{ note }}</td>
+        <td class="note-cell" colspan="5">&nbsp;</td>
       </tr>
     </table>
 
