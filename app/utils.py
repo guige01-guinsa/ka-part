@@ -39,6 +39,10 @@ _SAFE_PDF_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _PDF_PAGE_BLOCK_RE = re.compile(r"@page(?:\s+[^{]+)?\s*\{[^{}]*\}", re.IGNORECASE | re.DOTALL)
 _PDF_PAGE_MARGIN_RE = re.compile(r"margin\s*:\s*[^;{}]+;?", re.IGNORECASE)
 _HTML_HEAD_CLOSE_RE = re.compile(r"</head\s*>", re.IGNORECASE)
+PDF_PAGE_MARGIN_TOP_MM = 20.0
+PDF_PAGE_MARGIN_RIGHT_MM = 8.0
+PDF_PAGE_MARGIN_BOTTOM_MM = 15.0
+PDF_PAGE_MARGIN_LEFT_MM = 8.0
 
 def today_ymd() -> str:
     return dt.date.today().isoformat()
@@ -181,12 +185,6 @@ def _resolve_pdf_render_plan(site_env_config: Dict[str, Any] | None = None) -> D
     requested_profile_id = _clean_pdf_profile_id(report_cfg.get("pdf_profile_id"))
     requested_template_name = _clean_pdf_template_name(report_cfg.get("pdf_template_name"))
     locked_profile_id = _clean_pdf_profile_id(report_cfg.get("locked_profile_id"))
-    raw_margin_mm = report_cfg.get("page_margin_mm")
-    try:
-        page_margin_mm = float(raw_margin_mm) if raw_margin_mm is not None else 4.0
-    except Exception:
-        page_margin_mm = 4.0
-    page_margin_mm = max(0.0, min(20.0, page_margin_mm))
 
     effective_profile_id = requested_profile_id
     locked_profile_applied = False
@@ -238,25 +236,28 @@ def _resolve_pdf_render_plan(site_env_config: Dict[str, Any] | None = None) -> D
         "requested_profile_id": requested_profile_id,
         "requested_template_name": requested_template_name,
         "locked_profile_id": locked_profile_id,
-        "page_margin_mm": page_margin_mm,
     }
 
 
-def _format_page_margin_mm(page_margin_mm: float) -> str:
-    text = f"{float(page_margin_mm):.2f}".rstrip("0").rstrip(".")
+def _format_mm(value_mm: float) -> str:
+    text = f"{float(value_mm):.2f}".rstrip("0").rstrip(".")
     return text or "0"
 
 
-def _apply_pdf_page_margin(html: str, page_margin_mm: Any) -> str:
+def _fixed_page_margin_css() -> str:
+    return (
+        f"{_format_mm(PDF_PAGE_MARGIN_TOP_MM)}mm "
+        f"{_format_mm(PDF_PAGE_MARGIN_RIGHT_MM)}mm "
+        f"{_format_mm(PDF_PAGE_MARGIN_BOTTOM_MM)}mm "
+        f"{_format_mm(PDF_PAGE_MARGIN_LEFT_MM)}mm"
+    )
+
+
+def _apply_pdf_page_margin(html: str) -> str:
     source = str(html or "")
     if not source:
         return source
-    try:
-        margin = float(page_margin_mm)
-    except Exception:
-        margin = 4.0
-    margin = max(0.0, min(20.0, margin))
-    margin_decl = f"margin: {_format_page_margin_mm(margin)}mm;"
+    margin_decl = f"margin: {_fixed_page_margin_css()};"
 
     def _replace_page_block(match: re.Match[str]) -> str:
         block = match.group(0)
@@ -518,7 +519,7 @@ def _render_pdf_html_template(
     template_dir = PDF_TEMPLATE_DIR
     plan = _resolve_pdf_render_plan(site_env_config=site_env_config)
     context_builder = plan.get("context_builder") or "substation"
-    page_margin_mm = plan.get("page_margin_mm", 4.0)
+    page_margin_css = _fixed_page_margin_css()
 
     if context_builder == "generic":
         context = _build_pdf_context_generic(
@@ -532,7 +533,7 @@ def _render_pdf_html_template(
         context = _build_pdf_context(site_name, date, tabs, worker_name=worker_name)
     context["profile_id"] = plan.get("profile_id") or DEFAULT_PDF_PROFILE_ID
     context["template_name"] = plan.get("template_name") or DEFAULT_PDF_TEMPLATE_NAME
-    context["page_margin_mm"] = page_margin_mm
+    context["page_margin_css"] = page_margin_css
 
     env = Environment(
         loader=FileSystemLoader(str(template_dir)),
@@ -546,10 +547,10 @@ def _render_pdf_html_template(
         context = _build_pdf_context(site_name, date, tabs, worker_name=worker_name)
         context["template_name"] = template_name
         context["profile_id"] = DEFAULT_PDF_PROFILE_ID
-        context["page_margin_mm"] = page_margin_mm
+        context["page_margin_css"] = page_margin_css
         LOG.warning("PDF template load failed. fallback template='%s'.", template_name)
         tpl = env.get_template(template_name)
-    html = _apply_pdf_page_margin(tpl.render(**context), page_margin_mm)
+    html = _apply_pdf_page_margin(tpl.render(**context))
     return html, template_dir, template_name
 
 

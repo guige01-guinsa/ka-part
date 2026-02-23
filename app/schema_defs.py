@@ -77,18 +77,6 @@ def _clean_pdf_template_name(value: Any) -> str:
     return clean[:120]
 
 
-def _clean_pdf_page_margin_mm(value: Any) -> float | None:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    try:
-        num = float(raw)
-    except Exception:
-        return None
-    num = max(0.0, min(20.0, num))
-    return round(num, 2)
-
-
 def _lv_fields(prefix: str) -> List[Dict[str, Any]]:
     p = str(prefix or "").strip()
     return [
@@ -290,7 +278,6 @@ SITE_ENV_TEMPLATE: Dict[str, Any] = {
     "report": {
         "pdf_profile_id": "substation_daily_a4",
         "locked_profile_id": "",
-        "page_margin_mm": 4.0,
     },
     "hide_tabs": [],
     "tabs": {
@@ -331,7 +318,6 @@ SITE_ENV_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "config": {
             "report": {
                 "pdf_profile_id": "substation_daily_a4",
-                "page_margin_mm": 4.0,
             }
         },
     },
@@ -342,7 +328,6 @@ SITE_ENV_TEMPLATES: Dict[str, Dict[str, Any]] = {
             "report": {
                 "pdf_profile_id": "substation_daily_ami4_a4",
                 "locked_profile_id": "substation_daily_ami4_a4",
-                "page_margin_mm": 4.0,
             }
         },
     },
@@ -352,7 +337,6 @@ SITE_ENV_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "config": {
             "report": {
                 "pdf_profile_id": "substation_daily_generic_a4",
-                "page_margin_mm": 4.0,
             }
         },
     },
@@ -630,9 +614,6 @@ def normalize_site_env_config(config: Dict[str, Any] | None) -> Dict[str, Any]:
         locked_profile_id = _clean_pdf_profile_id(raw_report.get("locked_profile_id"))
         if locked_profile_id:
             report["locked_profile_id"] = locked_profile_id
-        page_margin_mm = _clean_pdf_page_margin_mm(raw_report.get("page_margin_mm"))
-        if page_margin_mm is not None:
-            report["page_margin_mm"] = page_margin_mm
         pdf_template_name = _clean_pdf_template_name(raw_report.get("pdf_template_name"))
         if pdf_template_name:
             report["pdf_template_name"] = pdf_template_name

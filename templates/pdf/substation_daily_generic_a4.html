@@ -6,7 +6,7 @@
   <style>
     @page {
       size: A4;
-      margin: {{ page_margin_mm|default(4.0) }}mm;
+      margin: {{ page_margin_css|default('20mm 8mm 15mm 8mm') }};
     }
     body {
       margin: 0;

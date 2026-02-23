@@ -47,7 +47,7 @@
   };
   let specEnvManageCodeToken = "";
   let specEnvManageCodeTokenExpiresAtTs = 0;
-  const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnPreview", "btnGoMain", "btnJsonApply", "btnJsonExport"];
+  const ACTION_SUCCESS_BUTTON_IDS = ["btnTemplateApply", "btnSave", "btnPreview", "btnGoMain"];
 
   function canManageSpecEnv(user) {
     return !!(user && (user.is_admin || user.is_site_admin));
@@ -338,85 +338,6 @@
     return true;
   }
 
-  async function applyJsonFileFromPicker() {
-    const input = $("#jsonFileInput");
-    if (!input || !input.files || !input.files.length) {
-      throw new Error("먼저 JSON 파일을 선택하세요.");
-    }
-    const file = input.files[0];
-    const raw = await file.text();
-    let parsed = {};
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      throw new Error(`JSON 파일 파싱 오류: ${e.message}`);
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("JSON 루트는 객체 형태여야 합니다.");
-    }
-    const cfg = compactConfig(parsed);
-    setConfigToEditor(cfg);
-    const schema = applyConfigToSchema(baseSchema || {}, cfg || {});
-    setActiveSchema(schema);
-    renderPreview({ site_id: getSiteId(), site_name: getSiteName(), site_code: getSiteCode(), schema });
-    markActionSuccess($("#btnJsonApply"), "✓");
-    setMsg(`JSON 파일 '${String(file.name || "").trim() || "선택 파일"}'을 적용했습니다. 저장을 누르세요.`);
-  }
-
-  function sanitizeFileToken(v) {
-    const raw = String(v || "").trim();
-    if (!raw) return "";
-    return raw.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
-  }
-
-  function buildJsonExportFileName() {
-    const site = sanitizeFileToken(getSiteName());
-    const code = sanitizeFileToken(getSiteCode());
-    const stamp = new Date();
-    const y = stamp.getFullYear();
-    const m = String(stamp.getMonth() + 1).padStart(2, "0");
-    const d = String(stamp.getDate()).padStart(2, "0");
-    const hh = String(stamp.getHours()).padStart(2, "0");
-    const mm = String(stamp.getMinutes()).padStart(2, "0");
-    const ss = String(stamp.getSeconds()).padStart(2, "0");
-    const parts = ["site_env", code || site || "unknown_site", `${y}${m}${d}_${hh}${mm}${ss}`];
-    return `${parts.filter(Boolean).join("_")}.json`;
-  }
-
-  function exportJsonFromEditor() {
-    let cfg = {};
-    try {
-      cfg = compactConfig(getConfigFromEditor());
-    } catch (e) {
-      throw new Error(`JSON 파싱 오류: ${e.message}`);
-    }
-    const jsonText = `${JSON.stringify(cfg || {}, null, 2)}\n`;
-    const blob = new Blob([jsonText], { type: "application/json;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    try {
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = buildJsonExportFileName();
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-    markActionSuccess($("#btnJsonExport"), "↓");
-    setMsg("현재 JSON 설정을 파일로 내보냈습니다.");
-  }
-
-  function normalizePdfPageMarginMm(value) {
-    if (value == null) return null;
-    const raw = String(value).trim();
-    if (!raw) return null;
-    const num = Number(raw);
-    if (!Number.isFinite(num)) return null;
-    const clamped = Math.max(0, Math.min(20, num));
-    return Math.round(clamped * 100) / 100;
-  }
-
   function compactConfig(config) {
     const cfg = clone(config);
     if (!cfg || typeof cfg !== "object") return {};
@@ -434,8 +355,6 @@
       if (profileId) report.pdf_profile_id = profileId;
       const lockedProfileId = String(cfg.report.locked_profile_id || "").trim();
       if (lockedProfileId) report.locked_profile_id = lockedProfileId;
-      const pageMarginMm = normalizePdfPageMarginMm(cfg.report.page_margin_mm);
-      if (pageMarginMm != null) report.page_margin_mm = pageMarginMm;
 
       const rawTemplate = String(cfg.report.pdf_template_name || "").trim();
       const templateName = rawTemplate.replace(/\\/g, "/").split("/").pop().trim();
@@ -1542,14 +1461,6 @@
       setMsg(`PDF 프로파일을 '${selected}'로 설정했습니다. 저장을 누르세요.`);
     });
     $("#envJson")?.addEventListener("change", () => syncPdfProfileSelectFromConfig());
-    $("#btnJsonApply")?.addEventListener("click", () => applyJsonFileFromPicker().catch((e) => setMsg(e.message || String(e), true)));
-    $("#btnJsonExport")?.addEventListener("click", () => {
-      try {
-        exportJsonFromEditor();
-      } catch (e) {
-        setMsg(e.message || String(e), true);
-      }
-    });
     $("#btnTemplateApply")?.addEventListener("click", () =>
       applySelectedTemplate().catch((e) => setMsg(e.message || String(e), true))
     );
