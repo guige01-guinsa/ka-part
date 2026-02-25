@@ -4773,18 +4773,38 @@ def api_backup_restore_requests(
     status: str = Query(default=""),
     limit: int = Query(default=100),
 ):
-    _user, _token = _require_super_admin(request)
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+    clean_status = str(status or "").strip().lower()
+    if clean_status in {"", "all"}:
+        clean_status = ""
+    elif clean_status not in {"pending", "approved", "executed"}:
+        raise HTTPException(status_code=400, detail="status must be one of: pending, approved, executed, all")
     items = list_privileged_change_requests(
         change_type="backup_restore_site",
-        status=str(status or "").strip().lower(),
+        status=clean_status,
         limit=max(1, min(int(limit), 300)),
     )
+    if int(user.get("is_admin") or 0) != 1:
+        actor_id = int(user.get("id") or 0)
+        actor_login = str(user.get("login_id") or "").strip().lower()
+        filtered: List[Dict[str, Any]] = []
+        for item in items:
+            requested_user_id = int(item.get("requested_by_user_id") or 0)
+            requested_login = str(item.get("requested_by_login") or "").strip().lower()
+            if actor_id > 0 and requested_user_id > 0 and actor_id == requested_user_id:
+                filtered.append(item)
+                continue
+            if actor_login and requested_login and actor_login == requested_login:
+                filtered.append(item)
+        items = filtered
     return {"ok": True, "count": len(items), "items": items}
 
 
 @router.post("/backup/restore/request/approve")
 def api_backup_restore_request_approve(request: Request, payload: Dict[str, Any] = Body(default={})):
-    user, _token = _require_super_admin(request)
+    user, _token = _require_admin(request)
     request_id = int(payload.get("request_id") or 0)
     if request_id <= 0:
         raise HTTPException(status_code=400, detail="request_id is required")
@@ -4820,7 +4840,7 @@ def api_backup_restore_request_approve(request: Request, payload: Dict[str, Any]
 
 @router.post("/backup/restore/request/execute")
 def api_backup_restore_request_execute(request: Request, payload: Dict[str, Any] = Body(default={})):
-    user, _token = _require_super_admin(request)
+    user, _token = _require_admin(request)
     request_id = int(payload.get("request_id") or 0)
     if request_id <= 0:
         raise HTTPException(status_code=400, detail="request_id is required")
@@ -4830,7 +4850,19 @@ def api_backup_restore_request_execute(request: Request, payload: Dict[str, Any]
         raise HTTPException(status_code=404, detail="request not found")
     if str(req.get("change_type") or "").strip().lower() != "backup_restore_site":
         raise HTTPException(status_code=400, detail="invalid request type")
-    if str(req.get("status") or "").strip().lower() != "approved":
+    actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
+    req_status = str(req.get("status") or "").strip().lower()
+    if req_status == "pending":
+        try:
+            req = approve_privileged_change_request(
+                request_id=request_id,
+                approver_user_id=int(user.get("id") or 0),
+                approver_login=actor_login,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        req_status = str(req.get("status") or "").strip().lower()
+    if req_status != "approved":
         raise HTTPException(status_code=409, detail="request is not approved")
 
     req_payload = req.get("payload") if isinstance(req.get("payload"), dict) else {}
@@ -4853,7 +4885,6 @@ def api_backup_restore_request_execute(request: Request, payload: Dict[str, Any]
     if requested_code and manifest_code and requested_code != manifest_code:
         raise HTTPException(status_code=409, detail="요청 단지코드와 백업파일 단지코드가 일치하지 않습니다.")
 
-    actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
     with_maintenance = _clean_bool(payload.get("with_maintenance"), default=False)
     try:
         result = restore_backup_zip(
@@ -4925,6 +4956,146 @@ def api_backup_restore_request_execute(request: Request, payload: Dict[str, Any]
     _audit_security(
         user=user,
         event_type="backup_restore_request_execute",
+        severity="WARN",
+        outcome="ok",
+        target_site_code=manifest_code,
+        target_site_name=str(manifest.get("site_name") or ""),
+        request_id=request_id,
+        detail={
+            "path": path,
+            "rollback_relative_path": str((result or {}).get("rollback_relative_path") or ""),
+        },
+    )
+    return {"ok": True, "request": executed, "result": result, "maintenance": get_maintenance_status()}
+
+
+@router.post("/backup/restore/request/execute_self")
+def api_backup_restore_request_execute_self(request: Request, payload: Dict[str, Any] = Body(default={})):
+    user, _token = _require_auth(request)
+    if not _can_manage_backup(user):
+        raise HTTPException(status_code=403, detail="백업 권한이 없습니다.")
+    if int(user.get("is_admin") or 0) == 1:
+        raise HTTPException(status_code=400, detail="관리자 계정은 관리자 실행 API를 사용하세요.")
+
+    request_id = int(payload.get("request_id") or 0)
+    if request_id <= 0:
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    req = get_privileged_change_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="request not found")
+    if str(req.get("change_type") or "").strip().lower() != "backup_restore_site":
+        raise HTTPException(status_code=400, detail="invalid request type")
+    if str(req.get("status") or "").strip().lower() != "approved":
+        raise HTTPException(status_code=409, detail="요청이 아직 승인되지 않았습니다.")
+
+    actor_user_id = int(user.get("id") or 0)
+    actor_login = _clean_login_id(user.get("login_id") or "site-admin")
+    requested_user_id = int(req.get("requested_by_user_id") or 0)
+    requested_login = str(req.get("requested_by_login") or "").strip().lower()
+    if requested_user_id > 0 and actor_user_id > 0 and requested_user_id != actor_user_id:
+        raise HTTPException(status_code=403, detail="본인이 요청한 건만 실행할 수 있습니다.")
+    if requested_login and requested_login != actor_login:
+        raise HTTPException(status_code=403, detail="본인이 요청한 건만 실행할 수 있습니다.")
+
+    req_payload = req.get("payload") if isinstance(req.get("payload"), dict) else {}
+    path = str(req_payload.get("path") or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="restore request payload.path is required")
+
+    manifest = _validate_uploaded_restore_backup(path)
+    scope = str(manifest.get("scope") or "").strip().lower() or "full"
+    if scope != "site":
+        raise HTTPException(status_code=409, detail="backup_restore_site 요청은 site 백업 파일만 실행할 수 있습니다.")
+    if bool(manifest.get("contains_user_data")):
+        raise HTTPException(status_code=409, detail="사용자정보 포함 백업파일은 단지대표자가 실행할 수 없습니다.")
+
+    requested_code = _clean_site_code(
+        req.get("target_site_code") or req_payload.get("site_code"),
+        required=False,
+    )
+    manifest_code = _clean_site_code(manifest.get("site_code"), required=False)
+    assigned = _user_site_identity(user)
+    assigned_code = _clean_site_code(assigned.get("site_code"), required=False)
+    if assigned_code and requested_code and assigned_code != requested_code:
+        raise HTTPException(status_code=403, detail="소속 단지코드 요청만 실행할 수 있습니다.")
+    if assigned_code and manifest_code and assigned_code != manifest_code:
+        raise HTTPException(status_code=403, detail="소속 단지코드 백업만 실행할 수 있습니다.")
+    if requested_code and manifest_code and requested_code != manifest_code:
+        raise HTTPException(status_code=409, detail="요청 단지코드와 백업파일 단지코드가 일치하지 않습니다.")
+
+    with_maintenance = _clean_bool(payload.get("with_maintenance"), default=False)
+    try:
+        result = restore_backup_zip(
+            actor=actor_login,
+            relative_path=path,
+            target_keys=[],
+            with_maintenance=with_maintenance,
+            include_user_tables=False,
+        )
+    except RuntimeError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_request_execute_self",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=manifest_code,
+            target_site_name=str(manifest.get("site_name") or ""),
+            request_id=request_id,
+            detail={"path": path, "error": str(e)},
+        )
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_request_execute_self",
+            severity="WARN",
+            outcome="error",
+            target_site_code=manifest_code,
+            target_site_name=str(manifest.get("site_name") or ""),
+            request_id=request_id,
+            detail={"path": path, "error": str(e)},
+        )
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_request_execute_self",
+            severity="WARN",
+            outcome="error",
+            target_site_code=manifest_code,
+            target_site_name=str(manifest.get("site_name") or ""),
+            request_id=request_id,
+            detail={"path": path, "error": str(e)},
+        )
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        _audit_security(
+            user=user,
+            event_type="backup_restore_request_execute_self",
+            severity="ERROR",
+            outcome="error",
+            target_site_code=manifest_code,
+            target_site_name=str(manifest.get("site_name") or ""),
+            request_id=request_id,
+            detail={"path": path, "error": str(e)},
+        )
+        raise HTTPException(status_code=500, detail=f"restore execute failed: {e}") from e
+
+    executed = mark_privileged_change_request_executed(
+        request_id=request_id,
+        executed_by_user_id=int(user.get("id") or 0),
+        executed_by_login=actor_login,
+        result={
+            "path": path,
+            "scope": "site",
+            "restore": result,
+            "executed_by": "requester",
+        },
+    )
+    _audit_security(
+        user=user,
+        event_type="backup_restore_request_execute_self",
         severity="WARN",
         outcome="ok",
         target_site_code=manifest_code,

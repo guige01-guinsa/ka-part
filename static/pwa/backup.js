@@ -11,10 +11,15 @@
   let pollTimer = null;
   let backupTimezone = "";
   let clientBackupDirHandle = null;
+  let restoreRequests = [];
   const CLIENT_BACKUP_DIR_NAME = "backup_APT";
 
   function isAdmin(user) {
     return !!(user && user.is_admin);
+  }
+
+  function isSiteAdmin(user) {
+    return !!(user && user.is_site_admin && !user.is_admin);
   }
 
   function canManageBackup(user) {
@@ -23,6 +28,13 @@
 
   function setMsg(msg, isErr = false) {
     const el = $("#msg");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.classList.toggle("err", !!isErr);
+  }
+
+  function setRestoreReqMsg(msg, isErr = false) {
+    const el = $("#restoreReqMsg");
     if (!el) return;
     el.textContent = msg || "";
     el.classList.toggle("err", !!isErr);
@@ -167,6 +179,16 @@
     applySiteIdentityVisibility();
     if (!KAUtil.canViewSiteIdentity(me)) KAUtil.stripSiteIdentityFromUrl();
     $("#restoreUploadWrap")?.classList.toggle("hidden", !isAdmin(me));
+    const reqCard = $("#restoreRequestCard");
+    if (reqCard) reqCard.hidden = !canManageBackup(me);
+    const reqHint = $("#restoreReqHint");
+    if (reqHint) {
+      if (isAdmin(me)) {
+        reqHint.textContent = "최고/운영관리자는 요청을 승인(대표자 실행 권한 부여)하거나 즉시 복구를 실행할 수 있습니다.";
+      } else {
+        reqHint.textContent = "단지대표자는 본인 요청 상태를 확인하고, 승인된 요청에 한해 직접 복구를 실행할 수 있습니다.";
+      }
+    }
   }
 
   function renderScheduleInfo(schedules) {
@@ -339,6 +361,127 @@
       return;
     }
     wrap.innerHTML = items.map(historyItemHtml).join("");
+  }
+
+  function restoreRequestStatusInfo(status) {
+    const raw = String(status || "").trim().toLowerCase();
+    if (raw === "pending") return { cls: "pending", label: "대기" };
+    if (raw === "approved") return { cls: "approved", label: "승인" };
+    if (raw === "executed") return { cls: "executed", label: "실행완료" };
+    return { cls: "", label: raw || "-" };
+  }
+
+  function isOwnRestoreRequest(item) {
+    const myId = Number(me?.id || 0);
+    const reqUserId = Number(item?.requested_by_user_id || 0);
+    if (myId > 0 && reqUserId > 0 && myId === reqUserId) return true;
+    const myLogin = String(me?.login_id || "").trim().toLowerCase();
+    const reqLogin = String(item?.requested_by_login || "").trim().toLowerCase();
+    return !!(myLogin && reqLogin && myLogin === reqLogin);
+  }
+
+  function restoreRequestItemHtml(item) {
+    const reqId = Number(item?.id || 0);
+    const statusRaw = String(item?.status || "").trim().toLowerCase();
+    const status = restoreRequestStatusInfo(statusRaw);
+    const payload = item && typeof item.payload === "object" ? item.payload : {};
+    const path = String(payload.path || "").trim();
+    const siteCode = String(item?.target_site_code || payload.site_code || "").trim().toUpperCase();
+    const siteName = String(item?.target_site_name || payload.site_name || "").trim();
+    const reason = String(item?.reason || payload.reason || "").trim();
+    const requester = String(item?.requested_by_login || payload.requested_by || "-").trim();
+    const createdAt = formatDateTime(item?.created_at || "");
+    const approvedAt = formatDateTime(item?.approved_at || "");
+    const executedAt = formatDateTime(item?.executed_at || "");
+    const canApprove = isAdmin(me) && statusRaw === "pending";
+    const canExecAdmin = isAdmin(me) && (statusRaw === "pending" || statusRaw === "approved");
+    const canExecSelf = isSiteAdmin(me) && statusRaw === "approved" && isOwnRestoreRequest(item);
+    const actionButtons = [
+      canApprove ? `<button class="btn" type="button" data-req-act="approve" data-req-id="${reqId}">승인(대표자 실행)</button>` : "",
+      canExecAdmin ? `<button class="btn primary" type="button" data-req-act="execute-admin" data-req-id="${reqId}">관리자 즉시 실행</button>` : "",
+      canExecSelf ? `<button class="btn primary" type="button" data-req-act="execute-self" data-req-id="${reqId}">승인건 직접 복구</button>` : "",
+    ]
+      .filter(Boolean)
+      .join("");
+    return `
+      <div class="history-item" data-req-id="${reqId}">
+        <div class="line">
+          <div class="file">요청 #${reqId} · ${escapeHtml(siteName || "-")} ${siteCode ? `[${escapeHtml(siteCode)}]` : ""}</div>
+          <div class="status-pill ${status.cls}">${status.label}</div>
+        </div>
+        <div class="sub">요청자: ${escapeHtml(requester)} · 요청: ${escapeHtml(createdAt)}</div>
+        <div class="sub">승인: ${escapeHtml(approvedAt)} · 실행: ${escapeHtml(executedAt)}</div>
+        <div class="sub">대상: ${escapeHtml(path || "-")}</div>
+        <div class="sub">사유: ${escapeHtml(reason || "-")}</div>
+        ${actionButtons ? `<div class="restore-req-actions">${actionButtons}</div>` : ""}
+      </div>
+    `;
+  }
+
+  function renderRestoreRequestList() {
+    const wrap = $("#restoreReqList");
+    if (!wrap) return;
+    if (!Array.isArray(restoreRequests) || !restoreRequests.length) {
+      wrap.innerHTML = '<div class="sub">복구 요청이 없습니다.</div>';
+      return;
+    }
+    wrap.innerHTML = restoreRequests.map((item) => restoreRequestItemHtml(item)).join("");
+  }
+
+  async function loadRestoreRequests() {
+    if (!canManageBackup(me)) return;
+    const status = String($("#restoreReqStatus")?.value || "pending").trim().toLowerCase();
+    const qs = new URLSearchParams();
+    qs.set("limit", "120");
+    qs.set("status", status || "pending");
+    const data = await KAUtil.authJson(`/api/backup/restore/requests?${qs.toString()}`);
+    restoreRequests = Array.isArray(data.items) ? data.items : [];
+    renderRestoreRequestList();
+  }
+
+  async function approveRestoreRequest(requestId) {
+    const rid = Number(requestId || 0);
+    if (rid <= 0) throw new Error("request_id가 올바르지 않습니다.");
+    const ok = confirm(`요청 #${rid}를 승인하여 단지대표자에게 복구 실행 권한을 부여할까요?`);
+    if (!ok) return;
+    const data = await KAUtil.authJson("/api/backup/restore/request/approve", {
+      method: "POST",
+      body: JSON.stringify({ request_id: rid }),
+    });
+    const req = data && data.request ? data.request : {};
+    setRestoreReqMsg(`요청 #${rid} 승인 완료 (상태: ${String(req.status || "approved")})`);
+    await Promise.all([loadRestoreRequests(), loadHistory(), refreshStatus()]);
+  }
+
+  async function executeRestoreRequestAsAdmin(requestId) {
+    const rid = Number(requestId || 0);
+    if (rid <= 0) throw new Error("request_id가 올바르지 않습니다.");
+    const ok = confirm(`요청 #${rid}를 관리자 권한으로 즉시 복구 실행할까요?`);
+    if (!ok) return;
+    const data = await KAUtil.authJson("/api/backup/restore/request/execute", {
+      method: "POST",
+      body: JSON.stringify({
+        request_id: rid,
+        with_maintenance: false,
+      }),
+    });
+    const rollback = String(data?.result?.rollback_relative_path || "").trim();
+    setRestoreReqMsg(`요청 #${rid} 복구 실행 완료${rollback ? ` / 복구 전 스냅샷: ${rollback}` : ""}`);
+    await Promise.all([loadRestoreRequests(), loadHistory(), refreshStatus()]);
+  }
+
+  async function executeRestoreRequestAsRequester(requestId) {
+    const rid = Number(requestId || 0);
+    if (rid <= 0) throw new Error("request_id가 올바르지 않습니다.");
+    const ok = confirm(`승인된 요청 #${rid}를 지금 직접 복구 실행할까요?`);
+    if (!ok) return;
+    const data = await KAUtil.authJson("/api/backup/restore/request/execute_self", {
+      method: "POST",
+      body: JSON.stringify({ request_id: rid }),
+    });
+    const rollback = String(data?.result?.rollback_relative_path || "").trim();
+    setRestoreReqMsg(`요청 #${rid} 직접 복구 완료${rollback ? ` / 복구 전 스냅샷: ${rollback}` : ""}`);
+    await Promise.all([loadRestoreRequests(), loadHistory(), refreshStatus()]);
   }
 
   async function runBackup() {
@@ -524,7 +667,7 @@
     const reqId = Number(req.id || 0);
     const status = String(req.status || "pending");
     setMsg(`복구 요청이 등록되었습니다. 요청번호: ${reqId > 0 ? reqId : "-"} / 상태: ${status}`);
-    await loadHistory();
+    await Promise.all([loadHistory(), loadRestoreRequests()]);
   }
 
   async function downloadBackup(path) {
@@ -544,7 +687,7 @@
 
   function wire() {
     $("#btnReload")?.addEventListener("click", () => {
-      Promise.all([loadOptions(), loadHistory(), refreshStatus()]).catch((e) => setMsg(e.message, true));
+      Promise.all([loadOptions(), loadHistory(), loadRestoreRequests(), refreshStatus()]).catch((e) => setMsg(e.message, true));
     });
     $("#btnRunBackup")?.addEventListener("click", () => {
       runBackup().catch((e) => setMsg(e.message, true));
@@ -572,6 +715,12 @@
       };
       run().catch(() => {});
     });
+    $("#btnReloadRestoreReq")?.addEventListener("click", () => {
+      loadRestoreRequests().catch((e) => setRestoreReqMsg(e.message || String(e), true));
+    });
+    $("#restoreReqStatus")?.addEventListener("change", () => {
+      loadRestoreRequests().catch((e) => setRestoreReqMsg(e.message || String(e), true));
+    });
     $("#historyList")?.addEventListener("click", (e) => {
       const btn = e.target.closest("button[data-download]");
       if (btn) {
@@ -594,6 +743,24 @@
       if (!path) return;
       requestRestore(path).catch((err) => setMsg(err.message || String(err), true));
     });
+    $("#restoreReqList")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-req-act][data-req-id]");
+      if (!btn) return;
+      const action = String(btn.dataset.reqAct || "").trim().toLowerCase();
+      const reqId = Number(btn.dataset.reqId || 0);
+      if (reqId <= 0) return;
+      if (action === "approve") {
+        approveRestoreRequest(reqId).catch((err) => setRestoreReqMsg(err.message || String(err), true));
+        return;
+      }
+      if (action === "execute-admin") {
+        executeRestoreRequestAsAdmin(reqId).catch((err) => setRestoreReqMsg(err.message || String(err), true));
+        return;
+      }
+      if (action === "execute-self") {
+        executeRestoreRequestAsRequester(reqId).catch((err) => setRestoreReqMsg(err.message || String(err), true));
+      }
+    });
   }
 
   async function init() {
@@ -612,7 +779,7 @@
       return;
     }
     setMetaLine();
-    await Promise.all([loadOptions(), loadHistory(), refreshStatus()]);
+    await Promise.all([loadOptions(), loadHistory(), loadRestoreRequests(), refreshStatus()]);
     wire();
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => {

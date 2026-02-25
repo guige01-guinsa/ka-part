@@ -8,7 +8,7 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
-  <link rel="stylesheet" href="/pwa/backup.css?v=20260215a" />
+  <link rel="stylesheet" href="/pwa/backup.css?v=20260225a" />
   <link rel="stylesheet" href="/pwa/light_theme.css?v=20260221a" />
 </head>
 <body>
@@ -80,12 +80,31 @@
       </div>
       <div id="historyList" class="history-list"></div>
     </section>
+
+    <section id="restoreRequestCard" class="card" hidden>
+      <h2>복구 요청함</h2>
+      <div id="restoreReqHint" class="hint"></div>
+      <div class="restore-req-toolbar">
+        <label class="field">
+          <span>요청 상태</span>
+          <select id="restoreReqStatus">
+            <option value="pending">대기</option>
+            <option value="approved">승인</option>
+            <option value="executed">실행완료</option>
+            <option value="all">전체</option>
+          </select>
+        </label>
+        <button id="btnReloadRestoreReq" class="btn" type="button">요청 조회</button>
+      </div>
+      <div id="restoreReqMsg" class="msg"></div>
+      <div id="restoreReqList" class="history-list"></div>
+    </section>
   </main>
 
   <script src="/pwa/auth.js?v=20260218a"></script>
   <script src="/pwa/common_utils.js?v=20260221a"></script>
   <script src="/pwa/module_base.js?v=20260219a"></script>
-  <script src="/pwa/backup.js?v=20260220c"></script>
+  <script src="/pwa/backup.js?v=20260225a"></script>
 </body>
 </html>
 

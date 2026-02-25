@@ -154,6 +154,48 @@ h2 {
   gap: 8px;
 }
 
+.restore-req-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.restore-req-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-soft) 82%, black 18%);
+}
+
+.status-pill.pending {
+  border-color: color-mix(in srgb, #e7a94d 72%, var(--line));
+  background: color-mix(in srgb, #e7a94d 18%, var(--bg-soft));
+}
+
+.status-pill.approved {
+  border-color: color-mix(in srgb, #62b6ff 72%, var(--line));
+  background: color-mix(in srgb, #62b6ff 18%, var(--bg-soft));
+}
+
+.status-pill.executed {
+  border-color: color-mix(in srgb, #64c58f 72%, var(--line));
+  background: color-mix(in srgb, #64c58f 18%, var(--bg-soft));
+}
+
 .restore-upload {
   display: grid;
   gap: 8px;
@@ -228,6 +270,11 @@ h2 {
 
 @media (max-width: 760px) {
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .restore-req-toolbar {
+    display: grid;
     grid-template-columns: 1fr;
   }
 
