@@ -116,7 +116,65 @@ _ALLOWED_PHOTO_MIME_TYPES = _parse_csv_set(
 app = FastAPI(title="Parking Enforcer API", version="1.0.0", root_path=ROOT_PATH)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 logger = logging.getLogger("ka-part.parking")
-_PLATE_RE = re.compile(r"[^0-9A-Za-z가-힣]")
+_PLATE_RE = re.compile(r"[^0-9A-Za-z가-힣ㄱ-ㅎㅏ-ㅣ\u1100-\u11FF]")
+_PLATE_JAMO_MAP = {
+    # Compatibility jamo
+    "ㄱ": "가",
+    "ㄲ": "가",
+    "ㄴ": "나",
+    "ㄷ": "다",
+    "ㄸ": "다",
+    "ㄹ": "라",
+    "ㅁ": "마",
+    "ㅂ": "바",
+    "ㅃ": "바",
+    "ㅅ": "사",
+    "ㅆ": "사",
+    "ㅇ": "아",
+    "ㅈ": "자",
+    "ㅉ": "자",
+    "ㅊ": "차",
+    "ㅋ": "카",
+    "ㅌ": "타",
+    "ㅍ": "파",
+    "ㅎ": "하",
+    # Choseong jamo
+    "ᄀ": "가",
+    "ᄁ": "가",
+    "ᄂ": "나",
+    "ᄃ": "다",
+    "ᄄ": "다",
+    "ᄅ": "라",
+    "ᄆ": "마",
+    "ᄇ": "바",
+    "ᄈ": "바",
+    "ᄉ": "사",
+    "ᄊ": "사",
+    "ᄋ": "아",
+    "ᄌ": "자",
+    "ᄍ": "자",
+    "ᄎ": "차",
+    "ᄏ": "카",
+    "ᄐ": "타",
+    "ᄑ": "파",
+    "ᄒ": "하",
+    # Jongseong jamo (observed OCR fallback)
+    "ᆨ": "가",
+    "ᆫ": "나",
+    "ᆮ": "다",
+    "ᆯ": "라",
+    "ᆷ": "마",
+    "ᆸ": "바",
+    "ᆺ": "사",
+    "ᆼ": "아",
+    "ᆽ": "자",
+    "ᆾ": "차",
+    "ᆿ": "카",
+    "ᇀ": "타",
+    "ᇁ": "파",
+    "ᇂ": "하",
+}
+_PLATE_REAR4_RE = re.compile(r"(\d{4})$")
 _VERDICT_OPTIONS = {"OK", "UNREGISTERED", "BLOCKED", "EXPIRED", "TEMP"}
 _STATUS_OPTIONS = {"active", "temp", "blocked"}
 _STATUS_LABEL_KO = {
@@ -512,7 +570,77 @@ def _header_field_name(header: Any) -> str | None:
 
 
 def normalize_plate(value: str) -> str:
-    return _PLATE_RE.sub("", str(value or "").upper()).strip()
+    cleaned = _PLATE_RE.sub("", str(value or "").upper()).strip()
+    if not cleaned:
+        return ""
+    return "".join(_PLATE_JAMO_MAP.get(ch, ch) for ch in cleaned)
+
+
+def _plate_last4_digits(plate: str) -> str:
+    m = _PLATE_REAR4_RE.search(str(plate or ""))
+    return str(m.group(1)) if m else ""
+
+
+def _split_plate_front_rear(plate: str) -> tuple[str, str]:
+    txt = str(plate or "")
+    if not txt or len(txt) < 6:
+        return "", ""
+
+    if len(txt) == 7 and txt.isdigit():
+        return txt[:3], txt[-4:]
+    if len(txt) == 6 and txt.isdigit():
+        return txt[:2], txt[-4:]
+    if len(txt) >= 8 and txt[:3].isdigit() and txt[-4:].isdigit():
+        return txt[:3], txt[-4:]
+    if len(txt) >= 7 and txt[:2].isdigit() and txt[-4:].isdigit():
+        return txt[:2], txt[-4:]
+    return "", ""
+
+
+def _lookup_vehicle_by_plate_hint(
+    con: sqlite3.Connection,
+    *,
+    site_code: str,
+    plate_hint: str,
+) -> tuple[sqlite3.Row | None, str]:
+    front, rear = _split_plate_front_rear(plate_hint)
+    if front and rear:
+        rows = con.execute(
+            """
+            SELECT *
+            FROM vehicles
+            WHERE site_code = ?
+              AND substr(plate, 1, ?) = ?
+              AND substr(plate, -4) = ?
+            ORDER BY updated_at DESC, plate ASC
+            LIMIT 6
+            """,
+            (site_code, len(front), front, rear),
+        ).fetchall()
+        if len(rows) == 1:
+            return rows[0], "front_rear"
+        if len(rows) > 1:
+            return None, "front_rear_ambiguous"
+
+    rear4 = _plate_last4_digits(plate_hint)
+    if rear4:
+        rows = con.execute(
+            """
+            SELECT *
+            FROM vehicles
+            WHERE site_code = ?
+              AND substr(plate, -4) = ?
+            ORDER BY updated_at DESC, plate ASC
+            LIMIT 6
+            """,
+            (site_code, rear4),
+        ).fetchall()
+        if len(rows) == 1:
+            return rows[0], "rear4"
+        if len(rows) > 1:
+            return None, "rear4_ambiguous"
+
+    return None, ""
 
 
 def _normalize_file_extension(filename: str) -> str:
@@ -595,22 +723,45 @@ def check_plate_record(site_code: str, plate: str) -> "CheckResponse":
     if len(p) < 4:
         raise HTTPException(status_code=400, detail="plate is too short")
 
+    match_kind = "exact"
     with connect() as con:
         row = con.execute("SELECT * FROM vehicles WHERE site_code = ? AND plate = ?", (site_code, p)).fetchone()
+        if not row:
+            row, match_kind = _lookup_vehicle_by_plate_hint(con, site_code=site_code, plate_hint=p)
 
     if not row:
+        if match_kind == "front_rear_ambiguous":
+            return CheckResponse(
+                site_code=site_code,
+                plate=p,
+                verdict="UNREGISTERED",
+                message="앞/뒤 번호가 같은 차량이 여러 대입니다. 한글 포함 전체 번호를 입력하세요.",
+            )
+        if match_kind == "rear4_ambiguous":
+            return CheckResponse(
+                site_code=site_code,
+                plate=p,
+                verdict="UNREGISTERED",
+                message="뒷자리 4자리가 같은 차량이 여러 대입니다. 앞자리 또는 한글을 추가해 조회하세요.",
+            )
         return CheckResponse(site_code=site_code, plate=p, verdict="UNREGISTERED", message="미등록 차량")
 
     status = (row["status"] or "active").lower()
     vf, vt = row["valid_from"], row["valid_to"]
     today = today_iso()
+    resolved_plate = str(row["plate"] or p)
+    lookup_suffix = ""
+    if match_kind == "front_rear":
+        lookup_suffix = " (한글 보정 조회)"
+    elif match_kind == "rear4":
+        lookup_suffix = " (뒷자리 4자리 조회)"
 
     if status == "blocked":
         return CheckResponse(
             site_code=site_code,
-            plate=p,
+            plate=resolved_plate,
             verdict="BLOCKED",
-            message="차단 차량",
+            message=f"차단 차량{lookup_suffix}",
             unit=row["unit"],
             owner_name=row["owner_name"],
             status=status,
@@ -620,9 +771,9 @@ def check_plate_record(site_code: str, plate: str) -> "CheckResponse":
     if vt and today > vt:
         return CheckResponse(
             site_code=site_code,
-            plate=p,
+            plate=resolved_plate,
             verdict="EXPIRED",
-            message="기간 만료",
+            message=f"기간 만료{lookup_suffix}",
             unit=row["unit"],
             owner_name=row["owner_name"],
             status=status,
@@ -632,9 +783,9 @@ def check_plate_record(site_code: str, plate: str) -> "CheckResponse":
     if status == "temp":
         return CheckResponse(
             site_code=site_code,
-            plate=p,
+            plate=resolved_plate,
             verdict="TEMP",
-            message="임시 등록",
+            message=f"임시 등록{lookup_suffix}",
             unit=row["unit"],
             owner_name=row["owner_name"],
             status=status,
@@ -643,9 +794,9 @@ def check_plate_record(site_code: str, plate: str) -> "CheckResponse":
         )
     return CheckResponse(
         site_code=site_code,
-        plate=p,
+        plate=resolved_plate,
         verdict="OK",
-        message="정상 등록",
+        message=f"정상 등록{lookup_suffix}",
         unit=row["unit"],
         owner_name=row["owner_name"],
         status=status,
@@ -937,29 +1088,44 @@ def list_vehicles_session(request: Request, q: str = "", limit: int = 200):
     use_limit = max(1, min(int(limit), 1000))
     q_plate = normalize_plate(q)
     q_text = str(q or "").strip()
+    q_digits = re.sub(r"\D", "", q_plate or q_text)
+    q_rear4 = q_digits[-4:] if len(q_digits) >= 4 else ""
+    q_front, q_rear = _split_plate_front_rear(q_plate)
 
     with connect() as con:
         if q_text:
-            rows = con.execute(
-                """
+            where_filters = [
+                "plate LIKE ?",
+                "IFNULL(owner_name, '') LIKE ?",
+                "IFNULL(unit, '') LIKE ?",
+            ]
+            where_params: list[Any] = [
+                f"%{q_plate or q_text.upper()}%",
+                f"%{q_text}%",
+                f"%{q_text}%",
+            ]
+
+            if q_rear4:
+                where_filters.append("substr(plate, -4) = ?")
+                where_params.append(q_rear4)
+            if q_front and q_rear:
+                where_filters.append("(substr(plate, 1, ?) = ? AND substr(plate, -4) = ?)")
+                where_params.extend([len(q_front), q_front, q_rear])
+
+            sql = f"""
                 SELECT site_code, plate, status, unit, owner_name, valid_from, valid_to, note, updated_at
                 FROM vehicles
                 WHERE site_code = ?
                   AND (
-                    plate LIKE ?
-                    OR IFNULL(owner_name, '') LIKE ?
-                    OR IFNULL(unit, '') LIKE ?
+                    {" OR ".join(where_filters)}
                   )
                 ORDER BY updated_at DESC, plate ASC
                 LIMIT ?
-                """,
-                (
-                    site_code,
-                    f"%{q_plate or q_text.upper()}%",
-                    f"%{q_text}%",
-                    f"%{q_text}%",
-                    use_limit,
-                ),
+            """
+            params = [site_code, *where_params, use_limit]
+            rows = con.execute(
+                sql,
+                params,
             ).fetchall()
         else:
             rows = con.execute(
@@ -2357,7 +2523,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     const OCR_MANUAL_ROI_SCALE = 2.0;
     const OCR_AUTO_ACCEPT_CONFIDENCE = 66;
     const OCR_MANUAL_ACCEPT_CONFIDENCE = 58;
-    const OCR_PLATE_WHITELIST = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ가나다라마바사아자차카타파하거너더러머버서어저처커터퍼허고노도로모보소오조초코토포호";
+    const OCR_PLATE_WHITELIST = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ가나다라마바사아자차카타파하거너더러머버서어저처커터퍼허고노도로모보소오조초코토포호ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
     const boot = window.__BOOT__ || {};
 
     const video = $("video");
@@ -2541,8 +2707,71 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
       if (clearHint) setHint("카메라가 꺼졌습니다.");
     }
 
+    const HANGUL_MIDDLE_COMPAT_MAP = {
+      "ㄱ": "가",
+      "ㄲ": "가",
+      "ㄴ": "나",
+      "ㄷ": "다",
+      "ㄸ": "다",
+      "ㄹ": "라",
+      "ㅁ": "마",
+      "ㅂ": "바",
+      "ㅃ": "바",
+      "ㅅ": "사",
+      "ㅆ": "사",
+      "ㅇ": "아",
+      "ㅈ": "자",
+      "ㅉ": "자",
+      "ㅊ": "차",
+      "ㅋ": "카",
+      "ㅌ": "타",
+      "ㅍ": "파",
+      "ㅎ": "하",
+      "ᄀ": "가",
+      "ᄁ": "가",
+      "ᄂ": "나",
+      "ᄃ": "다",
+      "ᄄ": "다",
+      "ᄅ": "라",
+      "ᄆ": "마",
+      "ᄇ": "바",
+      "ᄈ": "바",
+      "ᄉ": "사",
+      "ᄊ": "사",
+      "ᄋ": "아",
+      "ᄌ": "자",
+      "ᄍ": "자",
+      "ᄎ": "차",
+      "ᄏ": "카",
+      "ᄐ": "타",
+      "ᄑ": "파",
+      "ᄒ": "하",
+      "ᆨ": "가",
+      "ᆫ": "나",
+      "ᆮ": "다",
+      "ᆯ": "라",
+      "ᆷ": "마",
+      "ᆸ": "바",
+      "ᆺ": "사",
+      "ᆼ": "아",
+      "ᆽ": "자",
+      "ᆾ": "차",
+      "ᆿ": "카",
+      "ᇀ": "타",
+      "ᇁ": "파",
+      "ᇂ": "하",
+    };
+
+    function normalizeHangulLikeChar(ch) {
+      const c = String(ch || "");
+      return HANGUL_MIDDLE_COMPAT_MAP[c] || c;
+    }
+
     function norm(raw) {
-      return String(raw || "").replace(/[^0-9A-Za-z가-힣]/g, "").toUpperCase().trim();
+      const merged = Array.from(String(raw || ""))
+        .map((ch) => normalizeHangulLikeChar(ch))
+        .join("");
+      return merged.replace(/[^0-9A-Za-z가-힣]/g, "").toUpperCase().trim();
     }
 
     function normalizeDigitLikeChar(ch) {
@@ -2564,7 +2793,7 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
     }
 
     function normalizeMiddleChar(ch) {
-      const c = String(ch || "").trim().toUpperCase();
+      const c = normalizeHangulLikeChar(String(ch || "").trim().toUpperCase());
       if (/^[가-힣A-Z]$/.test(c)) return c;
       const map = {
         "0": "O",
@@ -2885,8 +3114,8 @@ SCANNER_HTML_TEMPLATE = r"""<!doctype html>
 
     async function checkPlate(raw, source) {
       const plate = norm(raw);
-      if (plate.length < 7) {
-        setResult("warn", "번호판 입력값이 너무 짧습니다.");
+      if (plate.length < 4) {
+        setResult("warn", "번호판 또는 뒷자리 4자리를 입력하세요.");
         return;
       }
       const u = new URL("./api/session/plates/check", location.href);
