@@ -101,6 +101,7 @@
   let rangeIndex = -1;
   let rangeQueryFrom = "";
   let rangeQueryTo = "";
+  let currentDisplayDate = "";
   let authUser = null;
   let maintenancePollTimer = null;
   let reloginByConflictInProgress = false;
@@ -323,7 +324,7 @@
     const siteName = showSite ? String(getSiteNameRaw() || getSiteName() || "").trim() : "";
     const siteCode = showSite ? String(getSiteCodeRaw() || getSiteCode() || "").trim().toUpperCase() : "";
     const siteText = showSite ? ([siteCode, siteName].filter(Boolean).join(" / ") || "-") : "(숨김)";
-    const displayDate = getDateStart() || "-";
+    const displayDate = currentDisplayDate || getDateStart() || "-";
     const from = rangeQueryFrom || getDateStart();
     const to = rangeQueryTo || getDateEnd();
     const rangeText = from && to ? (from === to ? from : `${from}~${to}`) : (from || to || "-");
@@ -804,7 +805,7 @@
   }
 
   function getPickedDate() {
-    return getDateStart();
+    return currentDisplayDate || getDateStart();
   }
 
   function normalizeWorkTypeValue(value, fallback = DEFAULT_WORK_TYPE) {
@@ -1235,19 +1236,20 @@
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     rangeDates = data && Array.isArray(data.dates) ? data.dates : [];
     if (!rangeDates.length) {
+      currentDisplayDate = df || getDateStart();
       fillTabs({
         home: {
           work_type: getSelectedWorkType() || DEFAULT_WORK_TYPE,
         },
       });
       rangeIndex = -1;
+      updateContextLine();
       toast("해당 기간에 기록이 없습니다.");
       return;
     }
     rangeIndex = rangeDates.length - 1;
     const showDate = rangeDates[rangeIndex];
-    const ds = $("#dateStart");
-    if (ds) ds.value = showDate;
+    currentDisplayDate = showDate;
     updateContextLine();
     await loadOne(site, showDate, siteCode);
     toast(`기간 ${df}~${dt} · ${rangeDates.length}건 · 표시 ${showDate}`);
@@ -1269,8 +1271,7 @@
     }
     rangeIndex -= 1;
     const showDate = rangeDates[rangeIndex];
-    const ds = $("#dateStart");
-    if (ds) ds.value = showDate;
+    currentDisplayDate = showDate;
     updateContextLine();
     await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
     toast(`표시 ${showDate} (${rangeIndex + 1}/${rangeDates.length})`);
@@ -1287,8 +1288,7 @@
     }
     rangeIndex += 1;
     const showDate = rangeDates[rangeIndex];
-    const ds = $("#dateStart");
-    if (ds) ds.value = showDate;
+    currentDisplayDate = showDate;
     updateContextLine();
     await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
     toast(`표시 ${showDate} (${rangeIndex + 1}/${rangeDates.length})`);
@@ -1418,6 +1418,7 @@
     const de = $("#dateEnd");
     if (ds && !ds.value) ds.value = today;
     if (de && !de.value) de.value = today;
+    currentDisplayDate = getDateStart();
 
     initAutoAdvance();
     wireMenuDrawer();
@@ -1438,6 +1439,7 @@
       const isAdmin = authUser && hasAdminPermission(authUser);
       rangeQueryFrom = "";
       rangeQueryTo = "";
+      currentDisplayDate = getDateStart();
       if (!isAdmin) {
         setSiteId(assignedSiteIdForUser());
         setSiteName(assignedSiteNameForUser());
@@ -1468,6 +1470,7 @@
     const resetRangeQuery = () => {
       rangeQueryFrom = "";
       rangeQueryTo = "";
+      currentDisplayDate = getDateStart();
       updateContextLine();
     };
     $("#dateStart")?.addEventListener("change", resetRangeQuery);
@@ -1481,6 +1484,7 @@
           t.value = normalizeWorkTypeValue(t.value, getSelectedWorkType() || DEFAULT_WORK_TYPE);
           rangeQueryFrom = "";
           rangeQueryTo = "";
+          currentDisplayDate = getDateStart();
           updateContextLine();
           loadRange().catch(() => {});
         }
