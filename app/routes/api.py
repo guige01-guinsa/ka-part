@@ -4241,6 +4241,8 @@ def api_backup_options(request: Request):
         "site_code": site_code,
         "site_name": site_name,
         "can_restore_direct": is_admin,
+        "include_user_tables_supported": bool(is_admin),
+        "include_user_tables_default": bool(is_admin),
         "download_link_ttl_sec": int(BACKUP_DOWNLOAD_LINK_TTL_SEC),
         "site_daily_limits": {
             "max_runs": int(BACKUP_SITE_DAILY_MAX_RUNS),
@@ -4278,6 +4280,11 @@ def api_backup_run(request: Request, payload: Dict[str, Any] = Body(default={}))
         scope = "site"
     if scope not in {"full", "site"}:
         raise HTTPException(status_code=400, detail="scope must be full or site")
+    requested_include_user_tables = _clean_bool(payload.get("include_user_tables"), default=True)
+    include_user_tables = bool(is_admin and requested_include_user_tables)
+    # full 백업은 DB 파일 단위이므로 사용자 테이블 제외가 불가능합니다.
+    if scope != "site":
+        include_user_tables = True
 
     available_targets = list_backup_targets()
     allowed_keys = {
@@ -4348,7 +4355,7 @@ def api_backup_run(request: Request, payload: Dict[str, Any] = Body(default={}))
             site_code=site_code,
             site_name=site_name,
             with_maintenance=(scope == "full"),
-            include_user_tables=bool(is_admin),
+            include_user_tables=include_user_tables,
         )
     except RuntimeError as e:
         _audit_security(
@@ -4394,6 +4401,7 @@ def api_backup_run(request: Request, payload: Dict[str, Any] = Body(default={}))
         detail={
             "scope": scope,
             "targets": selected_keys,
+            "include_user_tables": bool(include_user_tables),
             "relative_path": str(result.get("relative_path") or ""),
             "file_size_bytes": int(result.get("file_size_bytes") or 0),
         },
@@ -4641,16 +4649,22 @@ def api_backup_restore(request: Request, payload: Dict[str, Any] = Body(default=
     else:
         raise HTTPException(status_code=400, detail="target_keys must be list")
 
-    with_maintenance = _clean_bool(payload.get("with_maintenance"), default=True)
-    actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
     is_admin = int(user.get("is_admin") or 0) == 1
+    with_maintenance = _clean_bool(payload.get("with_maintenance"), default=True)
+    requested_include_user_tables = _clean_bool(payload.get("include_user_tables"), default=True)
+    include_user_tables = bool(is_admin and requested_include_user_tables)
+    scope = str(manifest.get("scope") or "").strip().lower() or "full"
+    # full 복구는 DB 파일 단위이므로 사용자 테이블 제외가 불가능합니다.
+    if scope != "site":
+        include_user_tables = True
+    actor_login = _clean_login_id(user.get("login_id") or "backup-restore")
     try:
         result = restore_backup_zip(
             actor=actor_login,
             relative_path=path,
             target_keys=target_keys,
             with_maintenance=with_maintenance,
-            include_user_tables=bool(is_admin),
+            include_user_tables=include_user_tables,
         )
     except RuntimeError as e:
         _audit_security(
@@ -4708,6 +4722,7 @@ def api_backup_restore(request: Request, payload: Dict[str, Any] = Body(default=
             "path": path,
             "scope": str(manifest.get("scope") or ""),
             "targets": target_keys,
+            "include_user_tables": bool(include_user_tables),
             "rollback_relative_path": str(result.get("rollback_relative_path") or ""),
         },
     )
@@ -5114,6 +5129,7 @@ async def api_backup_restore_upload(
     request: Request,
     backup_file: UploadFile = File(...),
     with_maintenance: str = Form("true"),
+    include_user_tables: str = Form("true"),
 ):
     user, _token = _require_auth(request)
     if not _can_manage_backup(user):
@@ -5142,6 +5158,11 @@ async def api_backup_restore_upload(
     saved = _store_uploaded_restore_backup(backup_file, actor_login=actor_login)
     manifest = _validate_uploaded_restore_backup(str(saved.get("relative_path") or ""))
     _enforce_restore_permission(user, manifest)
+    requested_include_user_tables = _clean_bool(include_user_tables, default=True)
+    restore_include_user_tables = bool(requested_include_user_tables)
+    scope = str(manifest.get("scope") or "").strip().lower() or "full"
+    if scope != "site":
+        restore_include_user_tables = True
 
     try:
         result = restore_backup_zip(
@@ -5149,7 +5170,7 @@ async def api_backup_restore_upload(
             relative_path=str(saved.get("relative_path") or ""),
             target_keys=[],
             with_maintenance=_clean_bool(with_maintenance, default=True),
-            include_user_tables=True,
+            include_user_tables=restore_include_user_tables,
         )
     except RuntimeError as e:
         _audit_security(
@@ -5206,6 +5227,7 @@ async def api_backup_restore_upload(
         detail={
             "path": str(saved.get("relative_path") or ""),
             "scope": str(manifest.get("scope") or ""),
+            "include_user_tables": bool(restore_include_user_tables),
             "rollback_relative_path": str(result.get("rollback_relative_path") or ""),
         },
     )

@@ -114,6 +114,41 @@
       .filter(Boolean);
   }
 
+  function includeUserTablesForBackup() {
+    if (!isAdmin(me)) return false;
+    if (getScope() !== "site") return true;
+    return !!$("#includeUserTablesBackup")?.checked;
+  }
+
+  function includeUserTablesForRestore(scope = "") {
+    if (!isAdmin(me)) return false;
+    const cleanScope = String(scope || "").trim().toLowerCase();
+    if (cleanScope && cleanScope !== "site") return true;
+    return !!$("#includeUserTablesRestore")?.checked;
+  }
+
+  function syncUserTableOptionState() {
+    const admin = isAdmin(me);
+    const backupWrap = $("#backupUserDataWrap");
+    const restoreWrap = $("#restoreUserDataWrap");
+    const backupBox = $("#includeUserTablesBackup");
+    const restoreBox = $("#includeUserTablesRestore");
+    if (backupWrap) backupWrap.classList.toggle("hidden", !admin);
+    if (restoreWrap) restoreWrap.classList.toggle("hidden", !admin);
+    if (!admin) return;
+
+    const siteScope = getScope() === "site";
+    if (backupBox) {
+      if (!siteScope) {
+        backupBox.checked = true;
+        backupBox.disabled = true;
+      } else {
+        backupBox.disabled = false;
+      }
+    }
+    if (restoreBox) restoreBox.disabled = false;
+  }
+
   function renderTargets(targets) {
     const wrap = $("#targetList");
     if (!wrap) return;
@@ -189,6 +224,7 @@
         reqHint.textContent = "단지대표자는 본인 요청 상태를 확인하고, 승인된 요청에 한해 직접 복구를 실행할 수 있습니다.";
       }
     }
+    syncUserTableOptionState();
   }
 
   function renderScheduleInfo(schedules) {
@@ -301,6 +337,11 @@
     const data = await KAUtil.authJson("/api/backup/options");
     options = data;
     renderTargets(Array.isArray(data.targets) ? data.targets : []);
+    const defaultIncludeUsers = data && data.include_user_tables_default !== false;
+    const includeBackupEl = $("#includeUserTablesBackup");
+    const includeRestoreEl = $("#includeUserTablesRestore");
+    if (includeBackupEl) includeBackupEl.checked = !!defaultIncludeUsers;
+    if (includeRestoreEl) includeRestoreEl.checked = !!defaultIncludeUsers;
     if (!isAdmin(me)) {
       $("#scopeSelect").value = "site";
     }
@@ -492,7 +533,8 @@
     }
 
     const scope = getScope();
-    const payload = { target_keys: targetKeys, scope };
+    const includeUserTables = includeUserTablesForBackup();
+    const payload = { target_keys: targetKeys, scope, include_user_tables: includeUserTables };
     if (scope === "site") {
       payload.site_code = ($("#siteCode").value || "").trim().toUpperCase();
       payload.site_name = ($("#siteName").value || "").trim();
@@ -559,9 +601,11 @@
     }
     const cleanScope = String(scope || "").trim().toLowerCase();
     const isSiteRestore = cleanScope === "site";
+    const includeUserTables = includeUserTablesForRestore(cleanScope);
     const ok = confirm(
       `선택한 백업(${isSiteRestore ? "단지코드 범위" : "전체 시스템"})으로 DB를 복구할까요?\n` +
       `- ${isSiteRestore ? "단지코드 데이터가 복구됩니다." : "전체 시스템 점검모드가 잠시 활성화됩니다."}\n` +
+      `${isSiteRestore ? `- 사용자관리 레코드: ${includeUserTables ? "포함" : "제외"}\n` : ""}` +
       "- 복구 전 현재 DB 스냅샷(pre_restore)이 자동 생성됩니다."
     );
     if (!ok) return;
@@ -572,6 +616,7 @@
       body: JSON.stringify({
         path: safePath,
         with_maintenance: !isSiteRestore,
+        include_user_tables: includeUserTables,
       }),
     });
     const result = data && data.result ? data.result : {};
@@ -598,10 +643,12 @@
       return;
     }
     const name = String(file.name || "mobile-backup.zip").trim() || "mobile-backup.zip";
+    const includeUserTables = includeUserTablesForRestore();
 
     const ok = confirm(
       `선택한 파일(${name})로 DB를 복구할까요?\n` +
       "- 파일 범위(full/site)는 서버에서 자동 판별합니다.\n" +
+      `- 단지코드(site) 복구 시 사용자관리 레코드: ${includeUserTables ? "포함" : "제외"}\n` +
       "- 복구 전 현재 DB 스냅샷(pre_restore)이 자동 생성됩니다."
     );
     if (!ok) return;
@@ -612,6 +659,7 @@
     const fd = new FormData();
     fd.append("backup_file", file, name);
     fd.append("with_maintenance", isAdmin(me) ? "true" : "false");
+    fd.append("include_user_tables", includeUserTables ? "true" : "false");
 
     setMsg("업로드 복구 실행 중입니다...");
     const res = await fetch("/api/backup/restore/upload", {
@@ -708,6 +756,7 @@
         siteCodeEl.readOnly = false;
         siteNameEl.readOnly = false;
       }
+      syncUserTableOptionState();
     });
     $("#btnLogout")?.addEventListener("click", () => {
       const run = async () => {
