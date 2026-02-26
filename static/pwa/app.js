@@ -79,7 +79,6 @@
     ],
   };
   const COMPACT_TABS = new Set(["tr1", "tr2", "tr3", "tr4", "tr5", "tr6", "main_vcb", "dc_panel", "temperature", "meter", "facility_check"]);
-  const HOME_DRAFT_KEY = "ka_home_draft_v2";
   const SITE_NAME_KEY = "ka_current_site_name_v1";
   const SITE_CODE_KEY = "ka_current_site_code_v1";
   const SITE_ID_KEY = "ka_current_site_id_v1";
@@ -98,7 +97,6 @@
   let WORK_TYPE_OPTIONS = [DEFAULT_WORK_TYPE];
 
   let TABS = [];
-  let rangeDates = [];
   let rangeItems = [];
   let rangeIndex = -1;
   let rangeQueryFrom = "";
@@ -125,9 +123,6 @@
     const show = KAUtil.canViewSiteIdentity(authUser);
     setWrapHiddenByInputSelector("#siteName", !show);
     setWrapHiddenByInputSelector("#siteCode", !show);
-    // Home tab site identity fields (if present)
-    setWrapHiddenByInputSelector("#f-home-complex_name", !show);
-    setWrapHiddenByInputSelector("#f-home-complex_code", !show);
   }
 
   function hasSiteAdminPermission(user) {
@@ -658,15 +653,6 @@
     return getSiteIdRaw();
   }
 
-  function syncHomeSiteIdentityDisplay(name = null, code = null) {
-    const nameEl = document.getElementById("f-home-complex_name");
-    const codeEl = document.getElementById("f-home-complex_code");
-    const nextName = name === null ? getSiteNameRaw() || getSiteName() : String(name || "").trim();
-    const nextCode = code === null ? getSiteCode() : String(code || "").trim().toUpperCase();
-    if (nameEl) nameEl.value = nextName;
-    if (codeEl) codeEl.value = nextCode;
-  }
-
   function resolveSiteNameForSave() {
     return getSiteNameRaw();
   }
@@ -686,7 +672,6 @@
     if (el) el.value = clean;
     if (clean) localStorage.setItem(SITE_CODE_KEY, clean);
     else localStorage.removeItem(SITE_CODE_KEY);
-    syncHomeSiteIdentityDisplay(null, clean);
     updateContextLine();
     return clean;
   }
@@ -759,21 +744,6 @@
   }
 
   function enforceHomeSiteIdentityPolicy() {
-    const homeName = document.getElementById("f-home-complex_name");
-    const homeCode = document.getElementById("f-home-complex_code");
-    if (!homeName && !homeCode) return;
-    const canEdit = !!(authUser && hasAdminPermission(authUser));
-    if (homeName) {
-      homeName.readOnly = true;
-      homeName.setAttribute("aria-readonly", "true");
-      homeName.title = canEdit ? "단지명은 상단 입력창에서 변경됩니다." : "단지명 입력/수정은 관리자만 가능합니다.";
-    }
-    if (homeCode) {
-      homeCode.readOnly = true;
-      homeCode.setAttribute("aria-readonly", "true");
-      homeCode.title = canEdit ? "단지코드는 상단 입력창에서 변경됩니다." : "단지코드 입력/수정은 관리자만 가능합니다.";
-    }
-    syncHomeSiteIdentityDisplay();
     applySiteIdentityVisibility();
   }
 
@@ -815,7 +785,7 @@
   }
 
   function workTypeSelectEl() {
-    return document.getElementById("workType") || document.getElementById("f-home-work_type");
+    return document.getElementById("workType");
   }
 
   function normalizeWorkTypeValue(value, fallback = DEFAULT_WORK_TYPE) {
@@ -1173,7 +1143,6 @@
         el.value = values[field.k] ?? "";
       }
     }
-    syncHomeSiteIdentityDisplay();
     enforceHomeSiteIdentityPolicy();
   }
 
@@ -1218,65 +1187,6 @@
       },
       true
     );
-  }
-
-  function saveHomeDraft() {
-    try {
-      const home = TABS.find((t) => t.key === "home");
-      if (!home) return;
-      const obj = {};
-      for (const f of home.fields) {
-        if (f.readonly) continue;
-        const el = document.getElementById(`f-home-${f.k}`);
-        if (!el) continue;
-        if (f.k === "work_type") obj[f.k] = normalizeWorkTypeValue(el.value, DEFAULT_WORK_TYPE);
-        else obj[f.k] = el.value ?? "";
-      }
-      localStorage.setItem(HOME_DRAFT_KEY, JSON.stringify(obj));
-    } catch (_e) {}
-  }
-
-  function loadHomeDraft() {
-    try {
-      const raw = localStorage.getItem(HOME_DRAFT_KEY);
-      if (!raw) return null;
-      const obj = JSON.parse(raw);
-      return obj && typeof obj === "object" ? obj : null;
-    } catch (_e) {
-      return null;
-    }
-  }
-
-  function applyHomeDraft(obj) {
-    if (!obj) return;
-    const home = TABS.find((t) => t.key === "home");
-    if (!home) return;
-    for (const f of home.fields) {
-      if (f.readonly) continue;
-      const el = document.getElementById(`f-home-${f.k}`);
-      if (!el || obj[f.k] === undefined) continue;
-      if (f.k === "work_type") el.value = normalizeWorkTypeValue(obj[f.k], getSelectedWorkType() || DEFAULT_WORK_TYPE);
-      else el.value = obj[f.k];
-    }
-    syncHomeSiteIdentityDisplay();
-    enforceHomeSiteIdentityPolicy();
-  }
-
-  function clearHomeDraft() {
-    try {
-      localStorage.removeItem(HOME_DRAFT_KEY);
-    } catch (_e) {}
-    const home = TABS.find((t) => t.key === "home");
-    if (!home) return;
-    for (const f of home.fields) {
-      if (f.readonly) continue;
-      const el = document.getElementById(`f-home-${f.k}`);
-      if (!el) continue;
-      if (f.k === "work_type") el.value = normalizeWorkTypeValue("", DEFAULT_WORK_TYPE);
-      else el.value = "";
-    }
-    syncHomeSiteIdentityDisplay();
-    enforceHomeSiteIdentityPolicy();
   }
 
   function formatRangeDateTime(value) {
@@ -1417,7 +1327,6 @@
     const picked = String(rangeItems[rangeIndex].entry_date || "").trim();
     const showDate = picked || getDateStart();
     currentDisplayDate = showDate;
-    rangeDates = rangeItems.map((row) => String((row && row.entry_date) || "").trim()).filter(Boolean);
     renderRangeRows();
     updateContextLine();
     await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
@@ -1451,7 +1360,6 @@
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
     rangeItems = normalizeRangeItems(data);
-    rangeDates = rangeItems.map((row) => String((row && row.entry_date) || "").trim()).filter(Boolean);
     if (!rangeItems.length) {
       currentDisplayDate = df || getDateStart();
       fillTabs({
@@ -1473,30 +1381,6 @@
   async function doLoad() {
     await syncSiteIdentity({ requireInput: true });
     await loadRange();
-  }
-
-  async function doPrev() {
-    if (!rangeItems.length) {
-      await loadRange();
-      return;
-    }
-    if (rangeIndex <= 0) {
-      toast("처음 날짜입니다.");
-      return;
-    }
-    await loadRangeAtIndex(rangeIndex - 1);
-  }
-
-  async function doNext() {
-    if (!rangeItems.length) {
-      await loadRange();
-      return;
-    }
-    if (rangeIndex >= rangeItems.length - 1) {
-      toast("마지막 날짜입니다.");
-      return;
-    }
-    await loadRangeAtIndex(rangeIndex + 1);
   }
 
   async function doSave() {
@@ -1677,7 +1561,6 @@
     });
     const resetRangeQuery = () => {
       rangeItems = [];
-      rangeDates = [];
       rangeIndex = -1;
       rangeQueryFrom = "";
       rangeQueryTo = "";
@@ -1687,33 +1570,11 @@
     };
     $("#dateStart")?.addEventListener("change", resetRangeQuery);
     $("#dateEnd")?.addEventListener("change", resetRangeQuery);
-
-    const onHomePanelValueChanged = (e) => {
-      const t = e.target;
-      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) {
-        saveHomeDraft();
-        if (t.id === "f-home-work_type") {
-          t.value = normalizeWorkTypeValue(t.value, getSelectedWorkType() || DEFAULT_WORK_TYPE);
-          rangeItems = [];
-          rangeDates = [];
-          rangeIndex = -1;
-          rangeQueryFrom = "";
-          rangeQueryTo = "";
-          currentDisplayDate = getDateStart();
-          updateContextLine();
-          loadRange().catch(() => {});
-        }
-      }
-    };
-    const homePanel = document.getElementById("panel-home");
-    homePanel?.addEventListener("input", onHomePanelValueChanged);
-    homePanel?.addEventListener("change", onHomePanelValueChanged);
     $("#workType")?.addEventListener("change", () => {
       const workTypeEl = document.getElementById("workType");
       if (!workTypeEl) return;
       workTypeEl.value = normalizeWorkTypeValue(workTypeEl.value, getSelectedWorkType() || DEFAULT_WORK_TYPE);
       rangeItems = [];
-      rangeDates = [];
       rangeIndex = -1;
       rangeQueryFrom = "";
       rangeQueryTo = "";
@@ -1836,9 +1697,7 @@
     wire();
     startMaintenancePolling();
     syncStickyOffset();
-    applyHomeDraft(loadHomeDraft());
     await doLoad().catch(() => {});
-    applyHomeDraft(loadHomeDraft());
 
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/pwa/sw.js?v=20260208a").catch(() => {});
