@@ -9,7 +9,7 @@
     content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=2">
-  <link rel="stylesheet" href="/pwa/styles.css?v=20260226d">
+  <link rel="stylesheet" href="/pwa/styles.css?v=20260226f">
   <link rel="stylesheet" href="/pwa/light_theme.css?v=20260221a" />
 </head>
 <body class="parking-like-pc home-page">
@@ -23,9 +23,6 @@
     <div class="quickbar" role="toolbar" aria-label="빠른 실행">
       <div class="quick-left">
         <span class="quick-label">기간조회</span>
-      </div>
-      <div class="quick-right">
-        <button id="btnSave" class="btn primary" type="button">저장</button>
       </div>
     </div>
 
@@ -43,6 +40,7 @@
       <div class="menu-section">
         <div class="menu-section-title">데이터</div>
         <div class="menu-grid">
+          <button id="btnSave" class="btn primary" type="button">저장</button>
           <button id="btnExport" class="btn" type="button">엑셀</button>
           <button id="btnPdf" class="btn" type="button">PDF</button>
           <button id="btnPdfApt00003" class="btn" type="button">APT00003 원클릭PDF</button>
@@ -152,7 +150,7 @@
 
   <script src="/pwa/auth.js?v=20260218a"></script>
   <script src="/pwa/common_utils.js?v=20260221a"></script>
-  <script src="/pwa/app.js?v=20260226d"></script>
+  <script src="/pwa/app.js?v=20260226f"></script>
 </body>
 </html>
 

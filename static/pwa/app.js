@@ -1114,14 +1114,29 @@
 
   function activateTab(tabKey, announce = false) {
     let activatedTitle = "";
+    let activeBtn = null;
     for (const b of document.querySelectorAll(".tabbtn")) {
       const isActive = b.dataset.tab === tabKey;
       b.classList.toggle("active", isActive);
       b.setAttribute("aria-pressed", isActive ? "true" : "false");
-      if (isActive) activatedTitle = String(b.textContent || tabKey);
+      if (isActive) {
+        activatedTitle = String(b.textContent || tabKey);
+        activeBtn = b;
+      }
     }
     for (const p of document.querySelectorAll(".panel")) {
       p.classList.toggle("active", p.id === `panel-${tabKey}`);
+    }
+    const tabsWrap = $("#tabs");
+    if (
+      activeBtn &&
+      tabsWrap &&
+      isNarrowViewport() &&
+      tabsWrap.scrollWidth > tabsWrap.clientWidth
+    ) {
+      try {
+        activeBtn.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+      } catch (_e) {}
     }
     if (announce && activatedTitle) {
       toast(`탭 실행: ${activatedTitle}`);

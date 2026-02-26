@@ -78,6 +78,9 @@ body {
   font-size: 12px;
   font-weight: 800;
   letter-spacing: -0.01em;
+  cursor: default;
+  pointer-events: none;
+  user-select: none;
 }
 
 .context-line {
@@ -204,6 +207,12 @@ body {
 .menu-drawer .btn.ghost {
   background: #fff;
   color: #1b355f;
+}
+
+.menu-drawer .btn.primary {
+  border-color: #215bd6;
+  background: #215bd6;
+  color: #ffffff;
 }
 
 .menu-drawer .btn.danger {
@@ -485,6 +494,28 @@ body {
   text-shadow: 0 1px 0 color-mix(in srgb, black 42%, transparent);
 }
 
+@media (min-width: 761px) {
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 8px;
+    overflow: visible;
+  }
+
+  .tabbtn {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    white-space: normal;
+    line-height: 1.2;
+    padding: 9px 10px;
+  }
+}
+
 .panels {
   padding: 10px 12px calc(24px + env(safe-area-inset-bottom));
 }
@@ -608,6 +639,19 @@ body {
 }
 
 @media (max-width: 760px) {
+  .tabs {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tabbtn {
+    scroll-snap-align: start;
+    white-space: nowrap;
+  }
+
   .menu-drawer {
     top: calc(env(safe-area-inset-top) + 54px);
     right: 8px;
