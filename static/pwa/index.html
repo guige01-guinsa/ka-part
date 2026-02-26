@@ -9,7 +9,7 @@
     content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=2">
-  <link rel="stylesheet" href="/pwa/styles.css?v=20260220b">
+  <link rel="stylesheet" href="/pwa/styles.css?v=20260226d">
   <link rel="stylesheet" href="/pwa/light_theme.css?v=20260221a" />
 </head>
 <body class="parking-like-pc home-page">
@@ -22,9 +22,7 @@
 
     <div class="quickbar" role="toolbar" aria-label="빠른 실행">
       <div class="quick-left">
-        <button id="btnPrev" class="btn ghost" title="이전 날짜" type="button">◀</button>
-        <button id="btnLoad" class="btn" type="button">기간조회</button>
-        <button id="btnNext" class="btn ghost" title="다음 날짜" type="button">▶</button>
+        <span class="quick-label">기간조회</span>
       </div>
       <div class="quick-right">
         <button id="btnSave" class="btn primary" type="button">저장</button>
@@ -85,7 +83,7 @@
     <div id="contextLine" class="context-line">단지: - · 기간: -</div>
 
     <div id="filtersMountHome">
-      <div id="filtersBlock" class="filters">
+      <div id="filtersBlock" class="filters period-query-form">
         <label class="field">
           <span>단지명</span>
           <input id="siteName" type="text" placeholder="예: OO아파트" />
@@ -106,9 +104,38 @@
             <span>종료</span>
             <input id="dateEnd" type="date" />
           </label>
+
+          <label class="field">
+            <span>업무구분</span>
+            <select id="workType" aria-label="업무구분"></select>
+          </label>
         </div>
 
-        <div class="hint">기간조회: 시작~종료 범위에서 기록 있는 날짜를 찾아 불러옵니다. 저장/삭제/PDF는 현재 표시 날짜 기준, 엑셀은 기간 출력.</div>
+        <div class="range-actions">
+          <button id="btnLoad" class="btn primary" type="button">기간조회 실행</button>
+          <div class="hint">시작~종료 범위 레코드를 행 목록으로 불러오며, 항목 선택 시 해당 날짜 데이터가 화면에 반영됩니다.</div>
+        </div>
+
+        <section class="range-result" aria-label="기간조회 결과 목록">
+          <div class="range-result-head">
+            <strong>조회 레코드</strong>
+            <span id="rangeCount" class="range-count">0건</span>
+          </div>
+          <div class="range-tools">
+            <input
+              id="rangeKeyword"
+              class="range-keyword"
+              type="search"
+              placeholder="검색어 (날짜/업무구분/수정시각)"
+              autocomplete="off"
+            />
+            <select id="rangeSort" class="range-sort" aria-label="조회 레코드 정렬">
+              <option value="latest" selected>최신순</option>
+              <option value="oldest">오래된순</option>
+            </select>
+          </div>
+          <div id="rangeRows" class="range-rows" role="listbox" aria-label="조회된 레코드"></div>
+        </section>
       </div>
     </div>
   </header>
@@ -125,7 +152,7 @@
 
   <script src="/pwa/auth.js?v=20260218a"></script>
   <script src="/pwa/common_utils.js?v=20260221a"></script>
-  <script src="/pwa/app.js?v=20260225b"></script>
+  <script src="/pwa/app.js?v=20260226d"></script>
 </body>
 </html>
 

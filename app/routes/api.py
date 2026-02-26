@@ -6515,7 +6515,21 @@ def api_list_range(
         df, dt = dt, df
     entry_work_type = _clean_work_type(work_type, default="일일")
     entries = list_entries(site_id, df, dt, entry_work_type)
-    dates = [e["entry_date"] for e in entries]
+    items: List[Dict[str, Any]] = []
+    dates: List[str] = []
+    for row in entries:
+        entry_date = str(row["entry_date"] or "")
+        dates.append(entry_date)
+        row_work_type = str(row["work_type"] or "").strip() if "work_type" in row.keys() else ""
+        items.append(
+            {
+                "entry_id": int(row["id"] or 0),
+                "entry_date": entry_date,
+                "work_type": row_work_type or entry_work_type,
+                "created_at": str(row["created_at"] or ""),
+                "updated_at": str(row["updated_at"] or ""),
+            }
+        )
     return {
         "ok": True,
         "site_id": site_id,
@@ -6524,6 +6538,7 @@ def api_list_range(
         "work_type": entry_work_type,
         "date_from": df,
         "date_to": dt,
+        "items": items,
         "dates": dates,
     }
 

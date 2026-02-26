@@ -66,6 +66,20 @@ body {
   align-items: center;
 }
 
+.quick-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-soft) 70%, black 30%);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
 .context-line {
   margin-bottom: 8px;
   padding: 6px 10px;
@@ -276,7 +290,7 @@ body {
 .date-range {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .field {
@@ -291,7 +305,8 @@ body {
   font-weight: 700;
 }
 
-.field input {
+.field input,
+.field select {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -305,6 +320,126 @@ body {
   grid-column: 1 / -1;
   color: var(--muted);
   font-size: 11px;
+}
+
+.period-query-form .range-actions,
+.period-query-form .range-result {
+  grid-column: 1 / -1;
+}
+
+.range-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: end;
+}
+
+.range-actions .btn {
+  min-width: 136px;
+}
+
+.range-actions .hint {
+  grid-column: auto;
+  margin: 0;
+}
+
+.range-result {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--card) 96%, black 4%);
+}
+
+.range-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.range-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg-soft) 76%, black 24%);
+}
+
+.range-tools {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.range-keyword,
+.range-sort {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 7px 9px;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--card);
+}
+
+.range-rows {
+  max-height: 244px;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.range-row {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--bg-soft) 74%, black 26%);
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.range-row:last-child {
+  margin-bottom: 0;
+}
+
+.range-row-date {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.range-row-meta {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.range-row.active {
+  border-color: color-mix(in srgb, var(--primary) 76%, var(--line));
+  background: color-mix(in srgb, var(--primary) 22%, var(--bg-soft));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 48%, transparent);
+}
+
+.range-empty {
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .tabs {
@@ -488,6 +623,20 @@ body {
 
   .date-range {
     grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .date-range .field:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .range-actions {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .range-tools {
+    grid-template-columns: 1fr;
   }
 
   .panel:not(#panel-tr1):not(#panel-tr2):not(#panel-tr3):not(#panel-tr4):not(#panel-tr5):not(#panel-tr6):not(#panel-main_vcb):not(#panel-meter):not(#panel-facility_check) .field-row[data-count="3"] {
@@ -513,6 +662,10 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .range-rows {
+    max-height: 196px;
+  }
+
   .title {
     font-size: 17px;
   }
@@ -535,6 +688,11 @@ body {
   }
 
   .filters .field input {
+    padding: 7px 6px;
+    font-size: 16px;
+  }
+
+  .filters .field select {
     padding: 7px 6px;
     font-size: 16px;
   }

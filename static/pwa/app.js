@@ -95,9 +95,11 @@
   const PUBLIC_ACCESS_ALLOWED_MENU_BUTTON_IDS = new Set(["btnParking", "btnComplaints", "btnLogout"]);
   const PUBLIC_ACCESS_SIGNUP_MESSAGE = "신규가입 후 사용해 주세요.";
   const MENU_ANIMATION_MS = 180;
+  let WORK_TYPE_OPTIONS = [DEFAULT_WORK_TYPE];
 
   let TABS = [];
   let rangeDates = [];
+  let rangeItems = [];
   let rangeIndex = -1;
   let rangeQueryFrom = "";
   let rangeQueryTo = "";
@@ -805,7 +807,15 @@
   }
 
   function getPickedDate() {
+    if (rangeIndex >= 0 && rangeIndex < rangeItems.length) {
+      const picked = String(rangeItems[rangeIndex].entry_date || "").trim();
+      if (picked) return picked;
+    }
     return currentDisplayDate || getDateStart();
+  }
+
+  function workTypeSelectEl() {
+    return document.getElementById("workType") || document.getElementById("f-home-work_type");
   }
 
   function normalizeWorkTypeValue(value, fallback = DEFAULT_WORK_TYPE) {
@@ -813,7 +823,7 @@
     const mapped = WORK_TYPE_ALIAS_MAP[raw] || raw;
     const fallbackRaw = String(fallback || "").trim();
     const fallbackMapped = WORK_TYPE_ALIAS_MAP[fallbackRaw] || fallbackRaw;
-    const select = document.getElementById("f-home-work_type");
+    const select = workTypeSelectEl();
     if (!select) return mapped || fallbackMapped || DEFAULT_WORK_TYPE;
 
     const allowed = new Set(
@@ -827,8 +837,31 @@
     return first || DEFAULT_WORK_TYPE;
   }
 
+  function ensureWorkTypeSelectOptions(preferred = "") {
+    const select = document.getElementById("workType");
+    if (!select) return;
+
+    const options = Array.from(
+      new Set(
+        (Array.isArray(WORK_TYPE_OPTIONS) ? WORK_TYPE_OPTIONS : [DEFAULT_WORK_TYPE])
+          .map((x) => String(x || "").trim())
+          .filter(Boolean)
+      )
+    );
+    if (!options.length) options.push(DEFAULT_WORK_TYPE);
+    const prev = String(preferred || select.value || DEFAULT_WORK_TYPE).trim();
+    select.innerHTML = "";
+    for (const opt of options) {
+      const optionEl = document.createElement("option");
+      optionEl.value = opt;
+      optionEl.textContent = opt;
+      select.appendChild(optionEl);
+    }
+    select.value = normalizeWorkTypeValue(prev, DEFAULT_WORK_TYPE);
+  }
+
   function getSelectedWorkType() {
-    const el = document.getElementById("f-home-work_type");
+    const el = workTypeSelectEl();
     const raw = el && typeof el.value === "string" ? el.value : "";
     return normalizeWorkTypeValue(raw, DEFAULT_WORK_TYPE);
   }
@@ -859,9 +892,25 @@
 
   function normalizeTabsFromSchema(schema) {
     if (!schema || typeof schema !== "object") return [];
+    const homeDef = schema.home && typeof schema.home === "object" ? schema.home : null;
+    const homeFields = homeDef && Array.isArray(homeDef.fields) ? homeDef.fields : [];
+    const workTypeField = homeFields.find((f) => f && String(f.k || "").trim() === "work_type");
+    const candidateWorkTypes = Array.isArray(workTypeField && workTypeField.options)
+      ? workTypeField.options
+      : [];
+    const normalizedWorkTypes = Array.from(
+      new Set(
+        candidateWorkTypes
+          .map((opt) => WORK_TYPE_ALIAS_MAP[String(opt || "").trim()] || String(opt || "").trim())
+          .filter(Boolean)
+      )
+    );
+    WORK_TYPE_OPTIONS = normalizedWorkTypes.length ? normalizedWorkTypes : [DEFAULT_WORK_TYPE];
+
     const keys = sortSchemaKeys(Object.keys(schema));
     const tabs = [];
     for (const key of keys) {
+      if (key === "home") continue;
       const def = schema[key];
       if (!def || !Array.isArray(def.fields)) continue;
       const fields = def.fields.filter((f) => f && String(f.k || "").trim());
@@ -1024,6 +1073,7 @@
     }
     tabsEl.innerHTML = "";
     panelsEl.innerHTML = "";
+    ensureWorkTypeSelectOptions(getSelectedWorkType());
 
     for (const tab of TABS) {
       const b = document.createElement("button");
@@ -1087,20 +1137,24 @@
         out[tab.key][field.k] = el ? el.value ?? "" : "";
       }
     }
+    out.home = {
+      work_type: getSelectedWorkType() || DEFAULT_WORK_TYPE,
+    };
     return out;
   }
 
   function fillTabs(tabs) {
     const keepWorkType = getSelectedWorkType() || DEFAULT_WORK_TYPE;
+    const homeValues = tabs && typeof tabs.home === "object" ? tabs.home : null;
+    const workTypeEl = document.getElementById("workType");
+    if (workTypeEl) {
+      workTypeEl.value = normalizeWorkTypeValue(homeValues ? homeValues.work_type : "", keepWorkType);
+    }
     for (const tab of TABS) {
       const values = tabs && tabs[tab.key] ? tabs[tab.key] : {};
       for (const field of tab.fields) {
         const el = document.getElementById(`f-${tab.key}-${field.k}`);
         if (!el) continue;
-        if (tab.key === "home" && field.k === "work_type") {
-          el.value = normalizeWorkTypeValue(values[field.k], keepWorkType);
-          continue;
-        }
         el.value = values[field.k] ?? "";
       }
     }
@@ -1210,6 +1264,153 @@
     enforceHomeSiteIdentityPolicy();
   }
 
+  function formatRangeDateTime(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    return raw.replace("T", " ").slice(0, 16);
+  }
+
+  function normalizeRangeKeyword(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function getRangeSortOrder() {
+    const raw = String($("#rangeSort")?.value || "latest").trim().toLowerCase();
+    return raw === "oldest" ? "oldest" : "latest";
+  }
+
+  function rangeItemTimestamp(item) {
+    return String((item && (item.updated_at || item.created_at)) || "").trim();
+  }
+
+  function buildRangeViewItems() {
+    const keyword = normalizeRangeKeyword($("#rangeKeyword")?.value || "");
+    const sortOrder = getRangeSortOrder();
+    let rows = rangeItems.map((item, sourceIndex) => ({ item, sourceIndex }));
+
+    if (keyword) {
+      rows = rows.filter(({ item }) => {
+        const searchable = [
+          String(item.entry_date || ""),
+          String(item.work_type || ""),
+          formatRangeDateTime(rangeItemTimestamp(item)),
+        ]
+          .join(" ")
+          .toLowerCase();
+        return searchable.includes(keyword);
+      });
+    }
+
+    rows.sort((a, b) => {
+      const dateCmp = String(a.item.entry_date || "").localeCompare(String(b.item.entry_date || ""));
+      const updatedCmp = rangeItemTimestamp(a.item).localeCompare(rangeItemTimestamp(b.item));
+      const base = dateCmp || updatedCmp || (a.sourceIndex - b.sourceIndex);
+      return sortOrder === "latest" ? -base : base;
+    });
+
+    return rows;
+  }
+
+  function normalizeRangeItems(data) {
+    const selectedWorkType = getSelectedWorkType() || DEFAULT_WORK_TYPE;
+    const fromItems = data && Array.isArray(data.items) ? data.items : [];
+    if (fromItems.length) {
+      return fromItems
+        .map((row) => {
+          const entryDate = String((row && row.entry_date) || "").trim();
+          if (!entryDate) return null;
+          return {
+            entry_id: Number((row && (row.entry_id || row.id)) || 0) || 0,
+            entry_date: entryDate,
+            work_type: String((row && row.work_type) || selectedWorkType || DEFAULT_WORK_TYPE).trim() || selectedWorkType || DEFAULT_WORK_TYPE,
+            created_at: String((row && row.created_at) || "").trim(),
+            updated_at: String((row && row.updated_at) || "").trim(),
+          };
+        })
+        .filter(Boolean);
+    }
+
+    const dates = data && Array.isArray(data.dates) ? data.dates : [];
+    return dates
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .map((entryDate) => ({
+        entry_id: 0,
+        entry_date: entryDate,
+        work_type: selectedWorkType,
+        created_at: "",
+        updated_at: "",
+      }));
+  }
+
+  function renderRangeRows(emptyMessage = "조회된 레코드가 없습니다.") {
+    const wrap = $("#rangeRows");
+    const countEl = $("#rangeCount");
+    if (!wrap) return;
+
+    const total = rangeItems.length;
+    const rows = buildRangeViewItems();
+    const visible = rows.length;
+    if (countEl) countEl.textContent = total > visible ? `${visible}/${total}건` : `${visible}건`;
+    wrap.innerHTML = "";
+
+    if (!visible) {
+      const empty = document.createElement("div");
+      empty.className = "range-empty";
+      empty.textContent = total ? "검색 결과가 없습니다." : String(emptyMessage || "조회된 레코드가 없습니다.");
+      wrap.appendChild(empty);
+      return;
+    }
+
+    for (let i = 0; i < visible; i += 1) {
+      const row = rows[i];
+      const item = row.item;
+      const sourceIndex = row.sourceIndex;
+      const rowBtn = document.createElement("button");
+      rowBtn.type = "button";
+      rowBtn.className = "range-row";
+      if (sourceIndex === rangeIndex) rowBtn.classList.add("active");
+      rowBtn.dataset.index = String(sourceIndex);
+      rowBtn.setAttribute("role", "option");
+      rowBtn.setAttribute("aria-selected", sourceIndex === rangeIndex ? "true" : "false");
+
+      const dateEl = document.createElement("div");
+      dateEl.className = "range-row-date";
+      dateEl.textContent = String(item.entry_date || "-");
+
+      const metaEl = document.createElement("div");
+      metaEl.className = "range-row-meta";
+      const meta = [];
+      const workType = String(item.work_type || "").trim();
+      const updatedAt = formatRangeDateTime(item.updated_at || item.created_at);
+      if (workType) meta.push(`업무: ${workType}`);
+      if (updatedAt) meta.push(`수정: ${updatedAt}`);
+      metaEl.textContent = meta.join(" · ") || "저장된 레코드";
+
+      rowBtn.appendChild(dateEl);
+      rowBtn.appendChild(metaEl);
+      wrap.appendChild(rowBtn);
+    }
+  }
+
+  async function loadRangeAtIndex(index, { announce = true } = {}) {
+    if (!rangeItems.length) return;
+    const nextIndex = Number(index);
+    if (!Number.isFinite(nextIndex) || nextIndex < 0 || nextIndex >= rangeItems.length) return;
+
+    rangeIndex = nextIndex;
+    const picked = String(rangeItems[rangeIndex].entry_date || "").trim();
+    const showDate = picked || getDateStart();
+    currentDisplayDate = showDate;
+    rangeDates = rangeItems.map((row) => String((row && row.entry_date) || "").trim()).filter(Boolean);
+    renderRangeRows();
+    updateContextLine();
+    await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
+    if (announce) {
+      toast(`표시 ${showDate} (${rangeIndex + 1}/${rangeItems.length})`);
+    }
+  }
+
   async function loadOne(site, date, siteCode = "") {
     const qs = buildSiteQuery(site, siteCode || getSiteCode());
     const url = appendWorkTypeQuery(`/api/load?${qs}&date=${encodeURIComponent(date)}`);
@@ -1234,8 +1435,9 @@
     if (data && Object.prototype.hasOwnProperty.call(data, "site_id")) setSiteId(data.site_id);
     if (data && Object.prototype.hasOwnProperty.call(data, "site_name")) setSiteName(String(data.site_name || "").trim());
     if (data && Object.prototype.hasOwnProperty.call(data, "site_code")) setSiteCode(data.site_code || "");
-    rangeDates = data && Array.isArray(data.dates) ? data.dates : [];
-    if (!rangeDates.length) {
+    rangeItems = normalizeRangeItems(data);
+    rangeDates = rangeItems.map((row) => String((row && row.entry_date) || "").trim()).filter(Boolean);
+    if (!rangeItems.length) {
       currentDisplayDate = df || getDateStart();
       fillTabs({
         home: {
@@ -1244,15 +1446,13 @@
       });
       rangeIndex = -1;
       updateContextLine();
+      renderRangeRows("해당 기간에 기록이 없습니다.");
       toast("해당 기간에 기록이 없습니다.");
       return;
     }
-    rangeIndex = rangeDates.length - 1;
-    const showDate = rangeDates[rangeIndex];
-    currentDisplayDate = showDate;
-    updateContextLine();
-    await loadOne(site, showDate, siteCode);
-    toast(`기간 ${df}~${dt} · ${rangeDates.length}건 · 표시 ${showDate}`);
+    rangeIndex = rangeItems.length - 1;
+    await loadRangeAtIndex(rangeIndex, { announce: false });
+    toast(`기간 ${df}~${dt} · ${rangeItems.length}건 · 표시 ${currentDisplayDate}`);
   }
 
   async function doLoad() {
@@ -1261,7 +1461,7 @@
   }
 
   async function doPrev() {
-    if (!rangeDates.length) {
+    if (!rangeItems.length) {
       await loadRange();
       return;
     }
@@ -1269,29 +1469,19 @@
       toast("처음 날짜입니다.");
       return;
     }
-    rangeIndex -= 1;
-    const showDate = rangeDates[rangeIndex];
-    currentDisplayDate = showDate;
-    updateContextLine();
-    await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
-    toast(`표시 ${showDate} (${rangeIndex + 1}/${rangeDates.length})`);
+    await loadRangeAtIndex(rangeIndex - 1);
   }
 
   async function doNext() {
-    if (!rangeDates.length) {
+    if (!rangeItems.length) {
       await loadRange();
       return;
     }
-    if (rangeIndex >= rangeDates.length - 1) {
+    if (rangeIndex >= rangeItems.length - 1) {
       toast("마지막 날짜입니다.");
       return;
     }
-    rangeIndex += 1;
-    const showDate = rangeDates[rangeIndex];
-    currentDisplayDate = showDate;
-    updateContextLine();
-    await loadOne(getSiteNameRaw() || getSiteName(), showDate, getSiteCodeRaw() || getSiteCode());
-    toast(`표시 ${showDate} (${rangeIndex + 1}/${rangeDates.length})`);
+    await loadRangeAtIndex(rangeIndex + 1);
   }
 
   async function doSave() {
@@ -1419,6 +1609,9 @@
     if (ds && !ds.value) ds.value = today;
     if (de && !de.value) de.value = today;
     currentDisplayDate = getDateStart();
+    const sortEl = $("#rangeSort");
+    if (sortEl && !sortEl.value) sortEl.value = "latest";
+    renderRangeRows("시작~종료 범위를 선택하고 기간조회를 실행하세요.");
 
     initAutoAdvance();
     wireMenuDrawer();
@@ -1468,10 +1661,14 @@
       onSiteIdentityChange("siteCode").catch((err) => alert("단지정보 동기화 오류: " + err.message));
     });
     const resetRangeQuery = () => {
+      rangeItems = [];
+      rangeDates = [];
+      rangeIndex = -1;
       rangeQueryFrom = "";
       rangeQueryTo = "";
       currentDisplayDate = getDateStart();
       updateContextLine();
+      renderRangeRows("조회 조건이 변경되었습니다. 기간조회를 다시 실행하세요.");
     };
     $("#dateStart")?.addEventListener("change", resetRangeQuery);
     $("#dateEnd")?.addEventListener("change", resetRangeQuery);
@@ -1482,6 +1679,9 @@
         saveHomeDraft();
         if (t.id === "f-home-work_type") {
           t.value = normalizeWorkTypeValue(t.value, getSelectedWorkType() || DEFAULT_WORK_TYPE);
+          rangeItems = [];
+          rangeDates = [];
+          rangeIndex = -1;
           rangeQueryFrom = "";
           rangeQueryTo = "";
           currentDisplayDate = getDateStart();
@@ -1493,10 +1693,36 @@
     const homePanel = document.getElementById("panel-home");
     homePanel?.addEventListener("input", onHomePanelValueChanged);
     homePanel?.addEventListener("change", onHomePanelValueChanged);
+    $("#workType")?.addEventListener("change", () => {
+      const workTypeEl = document.getElementById("workType");
+      if (!workTypeEl) return;
+      workTypeEl.value = normalizeWorkTypeValue(workTypeEl.value, getSelectedWorkType() || DEFAULT_WORK_TYPE);
+      rangeItems = [];
+      rangeDates = [];
+      rangeIndex = -1;
+      rangeQueryFrom = "";
+      rangeQueryTo = "";
+      currentDisplayDate = getDateStart();
+      updateContextLine();
+      loadRange().catch(() => {});
+    });
 
-    $("#btnPrev")?.addEventListener("click", () => doPrev().catch((err) => alert("이전 오류: " + err.message)));
+    const onRangeViewChanged = () => {
+      renderRangeRows();
+    };
+    $("#rangeKeyword")?.addEventListener("input", onRangeViewChanged);
+    $("#rangeSort")?.addEventListener("change", onRangeViewChanged);
+
     $("#btnLoad")?.addEventListener("click", () => doLoad().catch((err) => alert("조회 오류: " + err.message)));
-    $("#btnNext")?.addEventListener("click", () => doNext().catch((err) => alert("다음 오류: " + err.message)));
+    $("#rangeRows")?.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      const rowBtn = target.closest(".range-row");
+      if (!rowBtn) return;
+      const idx = Number(rowBtn.dataset.index || "-1");
+      if (!Number.isFinite(idx) || idx < 0) return;
+      loadRangeAtIndex(idx).catch((err) => alert("조회 오류: " + err.message));
+    });
     $("#btnSave")?.addEventListener("click", () => doSave().catch((err) => alert("저장 오류: " + err.message)));
     $("#btnDelete")?.addEventListener("click", () => doDelete().catch((err) => alert("삭제 오류: " + err.message)));
     $("#btnExport")?.addEventListener("click", () => {
