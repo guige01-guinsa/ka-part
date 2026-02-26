@@ -46,43 +46,6 @@ body {
   background: color-mix(in srgb, var(--bg-soft) 74%, black 26%);
 }
 
-.quickbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--bg-soft) 76%, black 24%);
-}
-
-.quick-left,
-.quick-right {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.quick-label {
-  display: inline-flex;
-  align-items: center;
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-soft) 70%, black 30%);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  cursor: default;
-  pointer-events: none;
-  user-select: none;
-}
-
 .context-line {
   margin-bottom: 8px;
   padding: 6px 10px;
@@ -714,10 +677,6 @@ body {
     font-size: 17px;
   }
 
-  .quickbar {
-    padding: 7px;
-  }
-
   .menu-grid {
     grid-template-columns: 1fr;
   }
@@ -792,7 +751,6 @@ body {
     margin-bottom: 10px;
   }
 
-  body.parking-like-pc.home-page .quickbar,
   body.parking-like-pc.home-page .context-line {
     border-color: #27465a;
     background: #0f2431;
