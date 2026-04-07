@@ -57,8 +57,49 @@
       </div>
       <div class="cta-row">
         <button id="btnLogin" class="action-btn" type="button">로그인</button>
+        <button id="btnShowRegister" class="action-btn action-secondary" type="button">회원등록</button>
       </div>
       <div id="loginMsg" class="inline-message" aria-live="polite"></div>
+    </section>
+
+    <section id="registerCard" class="panel reveal hidden">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Register</p>
+          <h2>회원등록</h2>
+          <p class="panel-copy">초기 화면에서 계정 신청을 받고, 관리자 승인 후 로그인할 수 있도록 구성했습니다.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>단지 선택</span>
+          <select id="regTenantId"></select>
+        </label>
+        <label class="field">
+          <span>이름</span>
+          <input id="regName" type="text" maxlength="40" placeholder="예: 홍길동" />
+        </label>
+        <label class="field">
+          <span>아이디</span>
+          <input id="regLoginId" type="text" maxlength="32" placeholder="예: staff01" />
+        </label>
+        <label class="field">
+          <span>연락처</span>
+          <input id="regPhone" type="text" maxlength="40" placeholder="예: 010-1234-5678" />
+        </label>
+        <label class="field">
+          <span>비밀번호</span>
+          <input id="regPassword" type="password" autocomplete="new-password" placeholder="8자 이상" />
+        </label>
+        <label class="field">
+          <span>비밀번호 확인</span>
+          <input id="regPassword2" type="password" autocomplete="new-password" placeholder="비밀번호 재입력" />
+        </label>
+      </div>
+      <div class="cta-row">
+        <button id="btnRegister" class="action-btn action-secondary" type="button">회원등록 요청</button>
+      </div>
+      <div id="registerMsg" class="inline-message" aria-live="polite"></div>
     </section>
 
     <section id="bootstrapCard" class="panel reveal hidden">

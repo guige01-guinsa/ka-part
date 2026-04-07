@@ -233,6 +233,13 @@ body {
   letter-spacing: -0.03em;
 }
 
+.panel-copy {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
 .badge-group {
   display: flex;
   flex-wrap: wrap;

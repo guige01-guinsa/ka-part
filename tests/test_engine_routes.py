@@ -324,6 +324,43 @@ def test_user_management_crud_and_permission_boundaries(app_client) -> None:
     assert client.get(f"/api/users/{user_id}").status_code == 404
 
 
+def test_public_register_flow_creates_inactive_user_pending_approval(app_client) -> None:
+    client = app_client
+    _bootstrap_admin_and_tenant(client)
+
+    options = client.get("/api/auth/register_options")
+    assert options.status_code == 200
+    assert options.json()["enabled"] is True
+    assert any(item["id"] == "ys_thesharp" for item in options.json()["items"])
+
+    created = client.post(
+        "/api/auth/register",
+        json={
+            "tenant_id": "ys_thesharp",
+            "login_id": "request01",
+            "name": "가입신청자",
+            "phone": "010-7777-8888",
+            "password": "password123",
+        },
+    )
+    assert created.status_code == 200
+    assert "관리자 승인" in created.json()["message"]
+    user_id = int(created.json()["item"]["id"])
+    assert created.json()["item"]["is_active"] == 0
+    assert created.json()["item"]["tenant_id"] == "ys_thesharp"
+
+    blocked = client.post("/api/auth/login", json={"login_id": "request01", "password": "password123"})
+    assert blocked.status_code == 401
+
+    activated = client.patch(f"/api/users/{user_id}", json={"name": "가입신청자", "role": "staff", "phone": "010-7777-8888", "note": "승인 완료", "is_active": True})
+    assert activated.status_code == 200
+    assert activated.json()["item"]["is_active"] == 1
+
+    approved = client.post("/api/auth/login", json={"login_id": "request01", "password": "password123"})
+    assert approved.status_code == 200
+    assert approved.json()["user"]["login_id"] == "request01"
+
+
 def test_voice_twilio_flow_creates_complaint_and_tracks_session(app_client) -> None:
     client = app_client
     _bootstrap_admin_and_tenant(client)

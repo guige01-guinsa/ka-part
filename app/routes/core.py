@@ -224,6 +224,59 @@ def auth_bootstrap_status() -> Dict[str, Any]:
     return {"ok": True, "needs_bootstrap": count_staff_admins(active_only=True) == 0}
 
 
+@router.get("/auth/register_options")
+def auth_register_options() -> Dict[str, Any]:
+    cleanup_expired_sessions()
+    items = [
+        {
+            "id": str(row.get("id") or ""),
+            "name": str(row.get("name") or ""),
+            "site_code": str(row.get("site_code") or ""),
+            "site_name": str(row.get("site_name") or ""),
+        }
+        for row in list_tenants(active_only=True)
+    ]
+    return {"ok": True, "enabled": bool(items), "items": items}
+
+
+@router.post("/auth/register")
+def auth_register(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    cleanup_expired_sessions()
+    tenant_id = str(payload.get("tenant_id") or "").strip().lower()
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="단지를 선택하세요.")
+    tenant = get_tenant(tenant_id)
+    if not tenant or str(tenant.get("status") or "") != "active":
+        raise HTTPException(status_code=404, detail="가입 가능한 단지를 찾을 수 없습니다.")
+
+    login_id = _clean_login_id(payload.get("login_id"))
+    name = _clean_name(payload.get("name"))
+    password = _clean_password(payload.get("password"))
+    if get_staff_user_by_login(login_id):
+        raise HTTPException(status_code=409, detail="이미 존재하는 아이디입니다.")
+
+    phone = _clean_optional_text(payload.get("phone"), field_name="연락처", max_len=40)
+    note = _clean_optional_text(payload.get("note"), field_name="메모", max_len=2000)
+    created = create_staff_user(
+        tenant_id=tenant_id,
+        login_id=login_id,
+        name=name,
+        role="staff",
+        phone=phone,
+        note=(f"[self-register] {note}".strip() if note else "[self-register] 로그인 화면 회원등록"),
+        password_hash=hash_password(password),
+        is_active=0,
+    )
+    created.pop("password_hash", None)
+    append_audit_log(tenant_id, "self_register", login_id, {"user_id": int(created["id"])})
+    return {
+        "ok": True,
+        "message": "회원등록 요청이 접수되었습니다. 관리자 승인 후 로그인할 수 있습니다.",
+        "item": _public_user(created),
+        "tenant": tenant,
+    }
+
+
 @router.post("/auth/bootstrap")
 def auth_bootstrap(request: Request, payload: Dict[str, Any] = Body(...)) -> JSONResponse:
     cleanup_expired_sessions()
