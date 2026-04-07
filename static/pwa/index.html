@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AI 민원처리 엔진</title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
+  />
+  <meta name="theme-color" content="#133936" />
+  <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260407mvp" />
+</head>
+<body class="portal-shell">
+  <div class="page-orb orb-a" aria-hidden="true"></div>
+  <div class="page-orb orb-b" aria-hidden="true"></div>
+
+  <header class="hero reveal">
+    <div class="hero-copy">
+      <div class="eyebrow">Complaint Engine MVP</div>
+      <h1>전화, 카톡, 방문 민원을 한 화면에서 접수하고 자동 분류합니다.</h1>
+      <p id="heroLine" class="hero-line">계정과 테넌트 정보를 불러오는 중입니다.</p>
+      <div class="hero-actions">
+        <button id="btnReloadAll" class="ghost-btn" type="button">전체 새로고침</button>
+        <button id="btnLogout" class="ghost-btn" type="button">로그아웃</button>
+      </div>
+    </div>
+    <div class="hero-metrics">
+      <article class="metric-card">
+        <span>오늘 접수</span>
+        <strong id="metricTodayTotal">0</strong>
+      </article>
+      <article class="metric-card">
+        <span>오늘 완료</span>
+        <strong id="metricTodayDone">0</strong>
+      </article>
+      <article class="metric-card">
+        <span>미처리</span>
+        <strong id="metricPending">0</strong>
+      </article>
+      <article class="metric-card">
+        <span>이월</span>
+        <strong id="metricCarry">0</strong>
+      </article>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Intake</p>
+          <h2>민원 입력</h2>
+        </div>
+        <div id="tenantBadge" class="badge-group"></div>
+      </div>
+
+      <div class="form-grid">
+        <label id="tenantSelectWrap" class="field hidden">
+          <span>테넌트</span>
+          <select id="tenantSelect"></select>
+        </label>
+        <label class="field">
+          <span>동</span>
+          <input id="buildingInput" type="text" maxlength="20" placeholder="예: 101" />
+        </label>
+        <label class="field">
+          <span>호</span>
+          <input id="unitInput" type="text" maxlength="20" placeholder="예: 1203" />
+        </label>
+        <label class="field">
+          <span>접수채널</span>
+          <select id="channelInput">
+            <option value="전화">전화</option>
+            <option value="카톡">카톡</option>
+            <option value="방문">방문</option>
+            <option value="앱">앱</option>
+            <option value="기타">기타</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>담당자</span>
+          <input id="managerInput" type="text" maxlength="60" placeholder="예: 김대리" />
+        </label>
+        <label class="field">
+          <span>민원인 연락처</span>
+          <input id="phoneInput" type="text" maxlength="40" placeholder="예: 010-1234-5678" />
+        </label>
+        <label class="field field-span">
+          <span>민원내용</span>
+          <textarea id="contentInput" rows="5" placeholder="예: 101동 엘리베이터가 멈췄어요."></textarea>
+        </label>
+        <label class="field">
+          <span>사진 업로드 (최대 6장)</span>
+          <input id="photoInput" type="file" accept="image/*" multiple />
+        </label>
+        <div id="photoHint" class="inline-note">선택된 사진이 없습니다.</div>
+        <div class="field field-span">
+          <span>AI 추천</span>
+          <div id="aiSuggestion" class="detail-block">민원내용을 입력하고 AI 자동분류를 실행하세요.</div>
+        </div>
+      </div>
+      <div class="cta-row">
+        <button id="btnClassify" class="action-btn action-secondary" type="button">AI 자동분류</button>
+        <button id="btnCreateComplaint" class="action-btn" type="button">민원 저장</button>
+      </div>
+      <div id="intakeMsg" class="inline-message" aria-live="polite"></div>
+    </section>
+
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Dashboard</p>
+          <h2>실시간 대시보드</h2>
+        </div>
+        <button id="btnRefreshDashboard" class="ghost-btn" type="button">대시보드 새로고침</button>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">긴급 민원</div>
+          <div id="urgentList" class="timeline"></div>
+          <div class="subhead">반복 민원</div>
+          <div id="repeatList" class="timeline"></div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">유형별 현황</div>
+          <div id="typeSummary" class="timeline"></div>
+          <div class="subhead">담당자 부하</div>
+          <div id="managerSummary" class="timeline"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Queue</p>
+          <h2>민원 목록</h2>
+        </div>
+      </div>
+      <div class="filter-row">
+        <label class="field field-inline">
+          <span>상태</span>
+          <select id="filterStatus">
+            <option value="">전체</option>
+            <option value="접수">접수</option>
+            <option value="처리중">처리중</option>
+            <option value="완료">완료</option>
+            <option value="이월">이월</option>
+          </select>
+        </label>
+        <label class="field field-inline">
+          <span>동</span>
+          <input id="filterBuilding" type="text" maxlength="20" placeholder="예: 101" />
+        </label>
+        <button id="btnLoadComplaints" class="ghost-btn" type="button">목록 조회</button>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>일시</th>
+              <th>동/호</th>
+              <th>유형</th>
+              <th>긴급도</th>
+              <th>상태</th>
+              <th>담당</th>
+              <th>내용요약</th>
+            </tr>
+          </thead>
+          <tbody id="complaintsTableBody"></tbody>
+        </table>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">상세</div>
+          <div id="complaintDetail" class="detail-block">목록에서 민원을 선택하세요.</div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">상태 변경</div>
+          <label class="field">
+            <span>상태</span>
+            <select id="detailStatus">
+              <option value="접수">접수</option>
+              <option value="처리중">처리중</option>
+              <option value="완료">완료</option>
+              <option value="이월">이월</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>담당자</span>
+            <input id="detailManager" type="text" maxlength="60" placeholder="예: 김대리" />
+          </label>
+          <label class="field">
+            <span>메모</span>
+            <textarea id="detailNote" rows="3" placeholder="처리 메모를 입력하세요."></textarea>
+          </label>
+          <button id="btnUpdateComplaint" class="action-btn" type="button">상태 저장</button>
+          <div class="subhead">첨부 관리</div>
+          <label class="field">
+            <span>사진 추가 (최대 6장)</span>
+            <input id="detailPhotoInput" type="file" accept="image/*" multiple />
+          </label>
+          <div class="cta-row attachment-actions">
+            <button id="btnAddAttachments" class="ghost-btn" type="button">사진 추가</button>
+            <label class="check-all">
+              <input id="attachmentSelectAll" type="checkbox" />
+              <span>전체 선택</span>
+            </label>
+            <button id="btnDeleteSelectedAttachments" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnDeleteAllAttachments" class="ghost-btn" type="button">전체 제거</button>
+          </div>
+          <div id="detailAttachments" class="attachment-grid"></div>
+          <div id="detailHistory" class="timeline"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Report</p>
+          <h2>일일보고 자동 생성</h2>
+        </div>
+        <button id="btnGenerateReport" class="action-btn action-secondary" type="button">오늘 보고 생성</button>
+      </div>
+      <div id="reportBox" class="detail-block">버튼을 누르면 일일보고가 생성됩니다.</div>
+    </section>
+
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Kakao Digest</p>
+          <h2>카톡 대화 자동 정리</h2>
+        </div>
+        <button id="btnDigestChat" class="action-btn action-secondary" type="button">카톡 분석</button>
+      </div>
+      <label class="field">
+        <span>카톡 대화 원문</span>
+        <textarea id="chatInput" rows="8" placeholder="카카오톡 단체방 대화를 붙여 넣으세요."></textarea>
+      </label>
+      <div id="chatDigestBox" class="detail-block">카톡 분석 결과가 여기에 표시됩니다.</div>
+    </section>
+
+    <section id="adminPanel" class="panel reveal hidden">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Admin</p>
+          <h2>테넌트 관리</h2>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>tenant_id</span>
+          <input id="newTenantId" type="text" maxlength="32" placeholder="예: ys_thesharp" />
+        </label>
+        <label class="field">
+          <span>이름</span>
+          <input id="newTenantName" type="text" maxlength="120" placeholder="예: 연산더샵" />
+        </label>
+        <label class="field">
+          <span>site_code</span>
+          <input id="newTenantSiteCode" type="text" maxlength="32" placeholder="예: APT00001" />
+        </label>
+        <label class="field">
+          <span>site_name</span>
+          <input id="newTenantSiteName" type="text" maxlength="120" placeholder="예: 연산더샵" />
+        </label>
+      </div>
+      <div class="cta-row">
+        <button id="btnCreateTenant" class="action-btn" type="button">테넌트 생성</button>
+        <button id="btnLoadTenants" class="ghost-btn" type="button">목록 새로고침</button>
+      </div>
+      <div id="adminMsg" class="inline-message" aria-live="polite"></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>tenant_id</th>
+              <th>이름</th>
+              <th>site_code</th>
+              <th>상태</th>
+              <th>마지막 사용</th>
+              <th>액션</th>
+            </tr>
+          </thead>
+          <tbody id="tenantsTableBody"></tbody>
+        </table>
+      </div>
+      <div id="apiKeyBox" class="detail-block">새 테넌트를 만들거나 키를 재발급하면 여기에 API Key가 표시됩니다.</div>
+    </section>
+  </main>
+
+  <script src="/pwa/auth.js?v=20260407a"></script>
+  <script src="/pwa/portal.js?v=20260407mvp"></script>
+</body>
+</html>

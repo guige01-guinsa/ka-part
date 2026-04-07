@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>민원처리시스템 로그인</title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
+  />
+  <meta name="theme-color" content="#133936" />
+  <link rel="manifest" href="/pwa/manifest.webmanifest?v=3" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260407a" />
+</head>
+<body class="portal-shell">
+  <div class="page-orb orb-a" aria-hidden="true"></div>
+  <div class="page-orb orb-b" aria-hidden="true"></div>
+
+  <header class="hero reveal">
+    <div class="hero-copy">
+      <div class="eyebrow">Sign In</div>
+      <h1>AI 민원처리 엔진</h1>
+      <p class="hero-line">기존 민원시스템은 제거하고, 직원 입력형 웹 MVP와 테넌트 기반 모듈 구조로 다시 설계했습니다.</p>
+      <div class="hero-actions">
+        <a class="ghost-btn" href="/pwa/public.html">운영안내</a>
+      </div>
+    </div>
+    <div class="hero-metrics">
+      <article class="metric-card">
+        <span>제품 범위</span>
+        <strong>민원 전용</strong>
+      </article>
+      <article class="metric-card">
+        <span>관리 방식</span>
+        <strong>단일 포털</strong>
+      </article>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Account</p>
+          <h2>로그인</h2>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>아이디</span>
+          <input id="loginId" type="text" autocomplete="username" placeholder="예: admin01" />
+        </label>
+        <label class="field">
+          <span>비밀번호</span>
+          <input id="password" type="password" autocomplete="current-password" placeholder="8자 이상" />
+        </label>
+      </div>
+      <div class="cta-row">
+        <button id="btnLogin" class="action-btn" type="button">로그인</button>
+      </div>
+      <div id="loginMsg" class="inline-message" aria-live="polite"></div>
+    </section>
+
+    <section id="bootstrapCard" class="panel reveal hidden">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Bootstrap</p>
+          <h2>최초 관리자 생성</h2>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label class="field">
+          <span>관리자 아이디</span>
+          <input id="bsLoginId" type="text" placeholder="예: admin01" />
+        </label>
+        <label class="field">
+          <span>이름</span>
+          <input id="bsName" type="text" placeholder="예: 운영관리자" />
+        </label>
+        <label class="field">
+          <span>비밀번호</span>
+          <input id="bsPassword" type="password" placeholder="8자 이상" />
+        </label>
+        <label class="field">
+          <span>비밀번호 확인</span>
+          <input id="bsPassword2" type="password" placeholder="비밀번호 재입력" />
+        </label>
+      </div>
+      <div class="cta-row">
+        <button id="btnBootstrap" class="action-btn action-secondary" type="button">최초 관리자 생성</button>
+      </div>
+      <div id="bootstrapMsg" class="inline-message" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <script src="/pwa/auth.js?v=20260407a"></script>
+  <script src="/pwa/login.js?v=20260407a"></script>
+</body>
+</html>

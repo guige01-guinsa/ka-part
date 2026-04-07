@@ -1,0 +1,93 @@
+(() => {
+  "use strict";
+
+  const $ = (sel) => document.querySelector(sel);
+
+  function setMessage(selector, message, isError = false) {
+    const el = $(selector);
+    if (!el) return;
+    el.textContent = String(message || "");
+    el.classList.toggle("error", !!isError);
+  }
+
+  function nextPath() {
+    try {
+      const url = new URL(window.location.href);
+      const next = String(url.searchParams.get("next") || "").trim();
+      return next || "/pwa/";
+    } catch (_e) {
+      return "/pwa/";
+    }
+  }
+
+  async function bootstrapStatus() {
+    const data = await window.KAAuth.requestJson("/api/auth/bootstrap_status", { noAuth: true });
+    const needsBootstrap = !!(data && data.needs_bootstrap);
+    $("#bootstrapCard")?.classList.toggle("hidden", !needsBootstrap);
+    return needsBootstrap;
+  }
+
+  async function doLogin() {
+    const loginId = String($("#loginId").value || "").trim().toLowerCase();
+    const password = String($("#password").value || "");
+    if (!loginId || !password) throw new Error("아이디와 비밀번호를 입력하세요.");
+    const data = await window.KAAuth.requestJson("/api/auth/login", {
+      method: "POST",
+      noAuth: true,
+      body: JSON.stringify({ login_id: loginId, password }),
+    });
+    if (!data || !data.user) throw new Error("로그인 응답이 올바르지 않습니다.");
+    window.KAAuth.setSession("", data.user);
+    window.location.replace(String(nextPath() || data.landing_path || "/pwa/"));
+  }
+
+  async function doBootstrap() {
+    const loginId = String($("#bsLoginId").value || "").trim().toLowerCase();
+    const name = String($("#bsName").value || "").trim();
+    const password = String($("#bsPassword").value || "");
+    const password2 = String($("#bsPassword2").value || "");
+    if (!loginId || !name || !password || !password2) throw new Error("모든 항목을 입력하세요.");
+    if (password !== password2) throw new Error("비밀번호 확인이 일치하지 않습니다.");
+    const data = await window.KAAuth.requestJson("/api/auth/bootstrap", {
+      method: "POST",
+      noAuth: true,
+      body: JSON.stringify({ login_id: loginId, name, password }),
+    });
+    if (!data || !data.user) throw new Error("초기 관리자 생성에 실패했습니다.");
+    window.KAAuth.setSession("", data.user);
+    window.location.replace(String(data.landing_path || "/pwa/"));
+  }
+
+  function wire() {
+    $("#btnLogin")?.addEventListener("click", () => {
+      setMessage("#loginMsg", "");
+      doLogin().catch((error) => setMessage("#loginMsg", error.message || String(error), true));
+    });
+    $("#btnBootstrap")?.addEventListener("click", () => {
+      setMessage("#bootstrapMsg", "");
+      doBootstrap().catch((error) => setMessage("#bootstrapMsg", error.message || String(error), true));
+    });
+  }
+
+  async function init() {
+    const token = window.KAAuth.getToken();
+    if (token) {
+      try {
+        const me = await window.KAAuth.requestJson("/api/auth/me");
+        if (me && me.user) {
+          window.KAAuth.setSession(token, me.user);
+          window.location.replace(String(me.landing_path || "/pwa/"));
+          return;
+        }
+      } catch (_e) {
+        window.KAAuth.clearSession({ includeSensitive: true, broadcast: false });
+      }
+    }
+    await bootstrapStatus();
+  }
+
+  wire();
+  init().catch((error) => {
+    setMessage("#loginMsg", error.message || String(error), true);
+  });
+})();
