@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=3" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260407u1" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260408r1" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -62,7 +62,7 @@
       <div id="loginMsg" class="inline-message" aria-live="polite"></div>
     </section>
 
-    <section id="registerCard" class="panel reveal hidden">
+    <section id="registerCard" class="panel reveal">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Register</p>
@@ -73,7 +73,9 @@
       <div class="form-grid">
         <label class="field">
           <span>단지 선택</span>
-          <select id="regTenantId"></select>
+          <select id="regTenantId">
+            <option value="">단지 목록 불러오는 중...</option>
+          </select>
         </label>
         <label class="field">
           <span>이름</span>
@@ -135,6 +137,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/login.js?v=20260407a"></script>
+  <script src="/pwa/login.js?v=20260408r1"></script>
 </body>
 </html>

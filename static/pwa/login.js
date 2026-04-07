@@ -32,6 +32,13 @@
     if (!select) return;
     const rows = Array.isArray(items) ? items : [];
     select.innerHTML = "";
+    if (!rows.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "가입 가능한 단지가 없습니다.";
+      select.appendChild(option);
+      return;
+    }
     rows.forEach((item) => {
       const option = document.createElement("option");
       option.value = String(item.id || "").trim();
@@ -53,8 +60,11 @@
   async function registerOptions() {
     const data = await window.KAAuth.requestJson("/api/auth/register_options", { noAuth: true });
     const enabled = !!(data && data.enabled);
-    $("#registerCard")?.classList.toggle("hidden", !enabled);
-    if (enabled) renderRegisterOptions(data.items || []);
+    renderRegisterOptions((data && data.items) || []);
+    $("#btnRegister")?.toggleAttribute("disabled", !enabled);
+    if (!enabled) {
+      setMessage("#registerMsg", "현재는 회원등록 가능한 단지가 없습니다.", true);
+    }
     return enabled;
   }
 
@@ -114,8 +124,7 @@
     });
     $("#btnShowRegister")?.addEventListener("click", () => {
       const card = $("#registerCard");
-      if (!card || card.classList.contains("hidden")) {
-        setMessage("#loginMsg", "현재는 회원등록 가능한 단지가 없습니다.", true);
+      if (!card) {
         return;
       }
       card.scrollIntoView({ behavior: "smooth", block: "start" });
