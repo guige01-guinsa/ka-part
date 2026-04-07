@@ -1013,6 +1013,104 @@ def list_staff_users(*, active_only: bool = False, tenant_id: str = "") -> List[
         con.close()
 
 
+def update_staff_user(
+    user_id: int,
+    *,
+    name: Optional[str] = None,
+    role: Optional[str] = None,
+    phone: Optional[str] = None,
+    note: Optional[str] = None,
+    is_site_admin: Optional[bool] = None,
+    is_active: Optional[bool] = None,
+) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        current = con.execute(
+            """
+            SELECT
+              id, tenant_id, login_id, name, role, phone, note, site_code, site_name, site_id, address,
+              office_phone, office_fax, unit_label, household_key, password_hash,
+              is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            FROM staff_users
+            WHERE id=?
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+        if not current:
+            raise ValueError("user not found")
+
+        next_name = _clean_text(name, 40) if name is not None else str(current["name"] or "").strip()
+        if not next_name:
+            raise ValueError("name is required")
+        next_role = _clean_text(role, 40) if role is not None else str(current["role"] or "").strip() or "staff"
+        next_phone = _clean_text(phone, 40) if phone is not None else current["phone"]
+        next_note = _clean_text(note, 2000) if note is not None else current["note"]
+        next_is_site_admin = int(current["is_site_admin"] or 0) if is_site_admin is None else (1 if is_site_admin else 0)
+        next_is_active = int(current["is_active"] or 0) if is_active is None else (1 if is_active else 0)
+
+        con.execute(
+            """
+            UPDATE staff_users
+            SET name=?, role=?, phone=?, note=?, is_site_admin=?, is_active=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                next_name,
+                next_role,
+                next_phone,
+                next_note,
+                next_is_site_admin,
+                next_is_active,
+                now_iso(),
+                int(user_id),
+            ),
+        )
+        con.commit()
+        fresh = con.execute(
+            """
+            SELECT
+              id, tenant_id, login_id, name, role, phone, note, site_code, site_name, site_id, address,
+              office_phone, office_fax, unit_label, household_key, password_hash,
+              is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            FROM staff_users
+            WHERE id=?
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+        return dict(fresh) if fresh else {}
+    finally:
+        con.close()
+
+
+def delete_staff_user(user_id: int) -> Dict[str, Any]:
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        row = con.execute(
+            """
+            SELECT
+              id, tenant_id, login_id, name, role, phone, note, site_code, site_name, site_id, address,
+              office_phone, office_fax, unit_label, household_key, password_hash,
+              is_admin, is_site_admin, admin_scope, is_active, created_at, updated_at, last_login_at
+            FROM staff_users
+            WHERE id=?
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+        if not row:
+            raise ValueError("user not found")
+        out = dict(row)
+        con.execute("DELETE FROM staff_users WHERE id=?", (int(user_id),))
+        con.commit()
+        return out
+    finally:
+        con.close()
+
+
 def count_staff_admins(*, active_only: bool = True) -> int:
     con = _connect()
     try:

@@ -7,13 +7,41 @@
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+pip install -r requirements-dev.txt
+powershell -ExecutionPolicy Bypass -File .\scripts\dev-run.ps1
 ```
 
 - 공개 안내: `http://localhost:8000/pwa/public.html`
 - 로그인: `http://localhost:8000/pwa/login.html`
 - 운영 포털: `http://localhost:8000/pwa/`
+
+## Dev Workflow
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\dev-setup.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\dev-run.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\dev-test.ps1
+```
+
+macOS/Linux:
+
+```bash
+bash ./scripts/dev-setup.sh
+bash ./scripts/dev-run.sh
+bash ./scripts/dev-test.sh
+```
+
+- 로컬 개발 데이터는 `runtime/local` 아래에 저장됩니다.
+- 기본 개발 실행은 `ALLOW_INSECURE_DEFAULTS=1`, `KA_HSTS_ENABLED=0`, `KA_STORAGE_ROOT=runtime/local`를 사용합니다.
+- `dev-run`에 `-SeedDemo`를 주면 로컬 테스트용 관리자/테넌트가 자동 생성됩니다.
+
+기본 로컬 시드값:
+
+- 관리자: `devadmin` / `DevPassword123!`
+- tenant_id: `demo_apt`
+- API Key: `sk-ka-dev-local-demo-key`
 
 ## Main API
 
@@ -30,6 +58,11 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `GET /api/admin/tenants`
 - `POST /api/admin/tenants`
 - `POST /api/admin/tenants/{tenant_id}/rotate_key`
+- `GET /api/voice/config`
+- `GET /api/voice/sessions`
+- `POST /api/voice/twilio/inbound`
+- `POST /api/voice/twilio/gather`
+- `POST /api/voice/twilio/status`
 
 ## Auth
 
@@ -42,6 +75,24 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 사진 첨부 최대 6장
 - 첨부 전체선택, 선택삭제, 전체삭제
 - Render 영속 스토리지용 `KA_STORAGE_ROOT` 지원
+- 전화 AI 자동응답 웹훅과 통화기록 저장
+
+## Voice AI
+
+- 현재 구현은 `Twilio Voice webhook + AI 분기 로직 + 민원 자동 생성` 구조입니다.
+- Inbound webhook 예시: `POST https://ka-part.com/api/voice/twilio/inbound?tenant_id=ys_thesharp`
+- Status callback 예시: `POST https://ka-part.com/api/voice/twilio/status?tenant_id=ys_thesharp`
+
+권장 환경변수:
+
+- `KA_PUBLIC_BASE_URL=https://ka-part.com`
+- `KA_VOICE_DEFAULT_TENANT_ID=ys_thesharp`
+- `KA_VOICE_HANDOFF_NUMBER=01012345678`
+- `KA_VOICE_SAY_LANGUAGE=ko-KR`
+- `KA_VOICE_GATHER_LANGUAGE=ko-KR`
+
+- 관리자 로그인 후 `GET /api/voice/config?tenant_id=...`로 실제 설정용 URL을 확인할 수 있습니다.
+- 긴급 키워드나 상담원 연결 요청이 감지되면 담당자 번호로 넘기고, 동시에 민원도 자동 등록합니다.
 
 ## Deployment Seed
 
@@ -69,6 +120,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q tests/test_engine_routes.py
 python -m compileall app
+python -m ruff check app tests
+pytest -q tests/test_engine_routes.py
 ```

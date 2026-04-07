@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -14,6 +14,7 @@ from ..db import (
     create_auth_session,
     create_staff_user,
     create_tenant,
+    delete_staff_user,
     get_auth_user_by_token,
     get_staff_user,
     get_staff_user_by_login,
@@ -29,6 +30,7 @@ from ..db import (
     rotate_tenant_api_key,
     set_staff_user_password,
     set_tenant_status,
+    update_staff_user,
     verify_password,
 )
 
@@ -43,6 +45,7 @@ AUTH_COOKIE_SECURE = str(os.getenv("KA_AUTH_COOKIE_SECURE") or ("0" if ALLOW_INS
 AUTH_COOKIE_MAX_AGE = max(300, int(os.getenv("KA_AUTH_COOKIE_MAX_AGE") or "43200"))
 
 VALID_LOGIN_RE = re.compile(r"^[a-z0-9._-]{2,32}$")
+USER_ROLE_VALUES = ("staff", "desk", "manager", "vendor", "reader", "integration")
 
 
 def _client_ip(request: Request) -> str:
@@ -86,6 +89,27 @@ def _public_user(user: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(user)
     out.pop("password_hash", None)
     return out
+
+
+def _clean_role(value: Any, *, allow_super_admin: bool = False) -> str:
+    role = str(value or "staff").strip().lower() or "staff"
+    allowed = set(USER_ROLE_VALUES)
+    if allow_super_admin:
+        allowed.add("super_admin")
+    if role not in allowed:
+        raise HTTPException(status_code=400, detail="지원하지 않는 역할입니다.")
+    return role
+
+
+def _clean_optional_text(value: Any, *, field_name: str, max_len: int) -> str:
+    text = str(value or "").strip()
+    if len(text) > max_len:
+        raise HTTPException(status_code=400, detail=f"{field_name}는 {max_len}자 이하여야 합니다.")
+    return text
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _cookie_secure(request: Request) -> bool:
@@ -144,6 +168,49 @@ def _require_admin(request: Request) -> Tuple[Dict[str, Any], str]:
     if int(user.get("is_admin") or 0) != 1:
         raise HTTPException(status_code=403, detail="최고관리자만 사용할 수 있습니다.")
     return user, token
+
+
+def _can_manage_users(user: Dict[str, Any]) -> bool:
+    return int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1
+
+
+def _require_user_manager(request: Request) -> Tuple[Dict[str, Any], str]:
+    user, token = _require_auth(request)
+    if not _can_manage_users(user):
+        raise HTTPException(status_code=403, detail="사용자 관리 권한이 없습니다.")
+    return user, token
+
+
+def _managed_tenant_id(user: Dict[str, Any], payload: Dict[str, Any]) -> str:
+    if int(user.get("is_admin") or 0) == 1:
+        tenant_id = str(payload.get("tenant_id") or "").strip().lower()
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id가 필요합니다.")
+        return tenant_id
+    tenant_id = str(user.get("tenant_id") or "").strip().lower()
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="계정에 tenant_id가 연결되어 있지 않습니다.")
+    return tenant_id
+
+
+def _assert_manageable_target(manager: Dict[str, Any], target: Dict[str, Any], *, allow_view_only: bool = False) -> None:
+    if int(manager.get("is_admin") or 0) == 1:
+        return
+    manager_tenant_id = str(manager.get("tenant_id") or "").strip().lower()
+    target_tenant_id = str(target.get("tenant_id") or "").strip().lower()
+    if not manager_tenant_id or manager_tenant_id != target_tenant_id:
+        raise HTTPException(status_code=403, detail="다른 테넌트 사용자는 관리할 수 없습니다.")
+    if not allow_view_only and (int(target.get("is_admin") or 0) == 1 or int(target.get("is_site_admin") or 0) == 1):
+        raise HTTPException(status_code=403, detail="현장관리자는 관리자 계정을 수정할 수 없습니다.")
+
+
+def _assert_admin_guard(target: Dict[str, Any], *, deactivating: bool = False, deleting: bool = False) -> None:
+    if int(target.get("is_admin") or 0) != 1 or int(target.get("is_active") or 0) != 1:
+        return
+    if not deactivating and not deleting:
+        return
+    if count_staff_admins(active_only=True) <= 1:
+        raise HTTPException(status_code=400, detail="마지막 활성 최고관리자는 비활성화하거나 삭제할 수 없습니다.")
 
 
 @router.api_route("/health", methods=["GET", "HEAD"])
@@ -318,7 +385,7 @@ def users_list(
     active_only: bool = Query(default=True),
     tenant_id: str = Query(default=""),
 ) -> Dict[str, Any]:
-    user, _token = _require_auth(request)
+    user, _token = _require_user_manager(request)
     if int(user.get("is_admin") or 0) == 1:
         rows = list_staff_users(active_only=bool(active_only), tenant_id=tenant_id)
     else:
@@ -333,34 +400,131 @@ def users_list(
 
 @router.post("/users")
 def users_create(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    user, _token = _require_auth(request)
-    if int(user.get("is_admin") or 0) == 1:
-        tenant_id = str(payload.get("tenant_id") or "").strip().lower()
-    else:
-        tenant_id = str(user.get("tenant_id") or "").strip().lower()
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="tenant_id가 필요합니다.")
+    user, _token = _require_user_manager(request)
     login_id = _clean_login_id(payload.get("login_id"))
     name = _clean_name(payload.get("name"))
     password = _clean_password(payload.get("password"))
-    role = str(payload.get("role") or "staff").strip() or "staff"
     if get_staff_user_by_login(login_id):
         raise HTTPException(status_code=409, detail="이미 존재하는 아이디입니다.")
+
+    is_super_admin = int(user.get("is_admin") or 0) == 1
+    make_admin = is_super_admin and _truthy(payload.get("is_admin"))
+    if not is_super_admin and (_truthy(payload.get("is_admin")) or _truthy(payload.get("is_site_admin"))):
+        raise HTTPException(status_code=403, detail="현장관리자는 관리자 계정을 생성할 수 없습니다.")
+
+    tenant_id = None if make_admin else _managed_tenant_id(user, payload)
+    role = "super_admin" if make_admin else _clean_role(payload.get("role") or ("manager" if _truthy(payload.get("is_site_admin")) else "staff"))
+    is_site_admin = 1 if (is_super_admin and not make_admin and _truthy(payload.get("is_site_admin"))) else 0
     created = create_staff_user(
         tenant_id=tenant_id,
         login_id=login_id,
         name=name,
         role=role,
+        phone=_clean_optional_text(payload.get("phone"), field_name="연락처", max_len=40),
         password_hash=hash_password(password),
-        site_code=payload.get("site_code"),
-        site_name=payload.get("site_name"),
-        note=payload.get("note"),
-        is_site_admin=1 if payload.get("is_site_admin") else 0,
+        note=_clean_optional_text(payload.get("note"), field_name="메모", max_len=2000),
+        is_admin=1 if make_admin else 0,
+        admin_scope="super_admin" if make_admin else None,
+        is_site_admin=is_site_admin,
         is_active=1,
     )
     created.pop("password_hash", None)
-    append_audit_log(tenant_id, "create_user", str(user.get("login_id") or ""), {"login_id": login_id})
+    append_audit_log(str(created.get("tenant_id") or user.get("tenant_id") or ""), "create_user", str(user.get("login_id") or ""), {"login_id": login_id})
     return {"ok": True, "item": created}
+
+
+@router.get("/users/{user_id}")
+def users_get(request: Request, user_id: int) -> Dict[str, Any]:
+    user, _token = _require_user_manager(request)
+    item = get_staff_user(int(user_id))
+    if not item:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    _assert_manageable_target(user, item, allow_view_only=True)
+    return {"ok": True, "item": _public_user(item)}
+
+
+@router.patch("/users/{user_id}")
+def users_update(request: Request, user_id: int, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    user, _token = _require_user_manager(request)
+    target = get_staff_user(int(user_id))
+    if not target:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    if int(target.get("id") or 0) == int(user.get("id") or 0):
+        raise HTTPException(status_code=400, detail="본인 계정은 사용자관리 화면에서 수정할 수 없습니다.")
+    _assert_manageable_target(user, target, allow_view_only=False)
+
+    if int(user.get("is_admin") or 0) != 1 and "is_site_admin" in payload:
+        raise HTTPException(status_code=403, detail="현장관리자는 관리자 권한을 변경할 수 없습니다.")
+
+    next_active = payload.get("is_active")
+    if next_active is not None:
+        _assert_admin_guard(target, deactivating=not _truthy(next_active))
+
+    item = update_staff_user(
+        int(user_id),
+        name=_clean_name(payload.get("name")) if "name" in payload else None,
+        role=_clean_role(payload.get("role")) if "role" in payload else None,
+        phone=_clean_optional_text(payload.get("phone"), field_name="연락처", max_len=40) if "phone" in payload else None,
+        note=_clean_optional_text(payload.get("note"), field_name="메모", max_len=2000) if "note" in payload else None,
+        is_site_admin=_truthy(payload.get("is_site_admin")) if "is_site_admin" in payload and int(user.get("is_admin") or 0) == 1 else None,
+        is_active=_truthy(next_active) if next_active is not None else None,
+    )
+    if int(item.get("is_active") or 0) != 1:
+        revoke_all_user_sessions(int(user_id))
+    item.pop("password_hash", None)
+    append_audit_log(
+        str(item.get("tenant_id") or user.get("tenant_id") or ""),
+        "update_user",
+        str(user.get("login_id") or ""),
+        {"user_id": int(user_id)},
+    )
+    return {"ok": True, "item": item}
+
+
+@router.post("/users/{user_id}/reset_password")
+def users_reset_password(request: Request, user_id: int, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    user, _token = _require_user_manager(request)
+    target = get_staff_user(int(user_id))
+    if not target:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    if int(target.get("id") or 0) == int(user.get("id") or 0):
+        raise HTTPException(status_code=400, detail="본인 비밀번호는 비밀번호 변경 메뉴를 사용하세요.")
+    _assert_manageable_target(user, target, allow_view_only=False)
+    new_password = _clean_password(payload.get("password"), field_name="초기화 비밀번호")
+    ok = set_staff_user_password(int(user_id), new_password)
+    if not ok:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    revoke_all_user_sessions(int(user_id))
+    append_audit_log(
+        str(target.get("tenant_id") or user.get("tenant_id") or ""),
+        "reset_user_password",
+        str(user.get("login_id") or ""),
+        {"user_id": int(user_id)},
+    )
+    fresh = get_staff_user(int(user_id)) or target
+    return {"ok": True, "item": _public_user(fresh)}
+
+
+@router.delete("/users/{user_id}")
+def users_delete(request: Request, user_id: int) -> Dict[str, Any]:
+    user, _token = _require_user_manager(request)
+    target = get_staff_user(int(user_id))
+    if not target:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    if int(target.get("id") or 0) == int(user.get("id") or 0):
+        raise HTTPException(status_code=400, detail="본인 계정은 삭제할 수 없습니다.")
+    _assert_manageable_target(user, target, allow_view_only=False)
+    _assert_admin_guard(target, deleting=True)
+    revoke_all_user_sessions(int(user_id))
+    deleted = delete_staff_user(int(user_id))
+    deleted.pop("password_hash", None)
+    append_audit_log(
+        str(deleted.get("tenant_id") or user.get("tenant_id") or ""),
+        "delete_user",
+        str(user.get("login_id") or ""),
+        {"user_id": int(user_id), "login_id": deleted.get("login_id")},
+    )
+    return {"ok": True, "item": deleted}
 
 
 @router.get("/admin/tenants")

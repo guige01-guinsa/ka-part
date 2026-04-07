@@ -10,6 +10,8 @@ from .db import bootstrap_from_env, init_db
 from .engine_db import init_engine_db
 from .routes.core import router as core_router
 from .routes.engine import router as engine_router
+from .routes.voice import router as voice_router
+from .voice_db import init_voice_db
 
 logger = logging.getLogger("ka-part")
 
@@ -18,6 +20,7 @@ logger = logging.getLogger("ka-part")
 async def lifespan(_app: FastAPI):
     init_db()
     init_engine_db()
+    init_voice_db()
     seeded = bootstrap_from_env()
     if seeded.get("admin") or seeded.get("tenant") or seeded.get("users"):
         logger.info(
@@ -58,6 +61,7 @@ async def _security_headers(request: Request, call_next):
 
 app.include_router(core_router, prefix="/api")
 app.include_router(engine_router, prefix="/api")
+app.include_router(voice_router, prefix="/api")
 
 app.mount("/fonts", StaticFiles(directory="fonts"), name="fonts")
 app.mount("/pwa", StaticFiles(directory="static/pwa", html=True), name="pwa")

@@ -5,10 +5,10 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from ..ai_service import analyze_chat_digest, classify_complaint_text
+from ..ai_service import MAX_CHAT_DIGEST_IMAGES, analyze_chat_digest, classify_complaint_text, normalize_summary_text
 from ..db import (
     STORAGE_ROOT,
     append_audit_log,
@@ -20,12 +20,11 @@ from ..db import (
     mark_tenant_used,
 )
 from ..engine_db import (
-    CHANNEL_VALUES,
     add_attachment,
     create_complaint,
     dashboard_summary,
-    delete_complaint,
     delete_attachments,
+    delete_complaint,
     generate_daily_report,
     get_complaint,
     list_complaints,
@@ -35,6 +34,7 @@ from ..engine_db import (
 router = APIRouter()
 AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
 UPLOAD_ROOT = (STORAGE_ROOT / "uploads" / "complaints").resolve()
+DIGEST_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 
 def _access_token(request: Request) -> str:
@@ -121,6 +121,34 @@ def _resolve_uploaded_path(file_url: str) -> Path | None:
     return target
 
 
+async def _read_digest_images(files: List[UploadFile]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    uploads = list(files or [])
+    if len(uploads) > MAX_CHAT_DIGEST_IMAGES:
+        raise HTTPException(status_code=400, detail=f"이미지는 최대 {MAX_CHAT_DIGEST_IMAGES}장까지 업로드할 수 있습니다.")
+    for upload in uploads:
+        content_type = str(upload.content_type or "").strip().lower()
+        if not content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="이미지 파일만 업로드할 수 있습니다.")
+        raw = await upload.read()
+        try:
+            if len(raw) > DIGEST_IMAGE_MAX_BYTES:
+                raise HTTPException(status_code=400, detail="이미지 한 장은 10MB 이하여야 합니다.")
+            items.append(
+                {
+                    "filename": str(upload.filename or "chat-image").strip() or "chat-image",
+                    "content_type": content_type or "image/jpeg",
+                    "bytes": raw,
+                }
+            )
+        finally:
+            try:
+                await upload.close()
+            except Exception:
+                pass
+    return items
+
+
 @router.post("/ai/classify")
 def ai_classify(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     tenant_id, user, tenant = _tenant_id_from_request(request, payload)
@@ -148,6 +176,32 @@ def ai_kakao_digest(request: Request, payload: Dict[str, Any] = Body(...)) -> Di
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_usage(tenant_id, "ai.kakao_digest")
     append_audit_log(tenant_id, "ai_kakao_digest", _actor_label(user, tenant), {"lines": len(text.splitlines())})
+    return {"ok": True, "item": item}
+
+
+@router.post("/ai/kakao_digest/images")
+async def ai_kakao_digest_images(
+    request: Request,
+    tenant_id: str = Form(default=""),
+    text: str = Form(default=""),
+    files: List[UploadFile] = File(default=[]),
+) -> Dict[str, Any]:
+    payload = {"tenant_id": tenant_id}
+    resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
+    image_inputs = await _read_digest_images(list(files or []))
+    if not str(text or "").strip() and not image_inputs:
+        raise HTTPException(status_code=400, detail="text or image is required")
+    try:
+        item = analyze_chat_digest(str(text or "").strip(), image_inputs=image_inputs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_usage(resolved_tenant_id, "ai.kakao_digest.images")
+    append_audit_log(
+        resolved_tenant_id,
+        "ai_kakao_digest_images",
+        _actor_label(user, tenant),
+        {"lines": len(str(text or "").splitlines()), "images": len(image_inputs)},
+    )
     return {"ok": True, "item": item}
 
 
@@ -195,7 +249,12 @@ def complaints_create(request: Request, payload: Dict[str, Any] = Body(...)) -> 
             complainant_phone=str(payload.get("complainant_phone") or "").strip(),
             channel=str(payload.get("channel") or "기타").strip() or "기타",
             content=content,
-            summary=str(payload.get("summary") or (ai_data or {}).get("summary") or "").strip(),
+            summary=normalize_summary_text(
+                str(payload.get("summary") or (ai_data or {}).get("summary") or "").strip(),
+                building=str(payload.get("building") or "").strip(),
+                unit=str(payload.get("unit") or "").strip(),
+                complaint_type=str(payload.get("type") or (ai_data or {}).get("type") or "기타").strip(),
+            ),
             complaint_type=str(payload.get("type") or (ai_data or {}).get("type") or "기타").strip(),
             urgency=str(payload.get("urgency") or (ai_data or {}).get("urgency") or "일반").strip(),
             status=str(payload.get("status") or "접수").strip() or "접수",

@@ -2,14 +2,24 @@
   "use strict";
 
   const $ = (sel) => document.querySelector(sel);
-  const CHANNEL_VALUES = ["전화", "카톡", "방문", "앱", "기타"];
   const STATUS_VALUES = ["접수", "처리중", "완료", "이월"];
+  const USER_ROLE_OPTIONS = [
+    { value: "desk", label: "민원접수" },
+    { value: "manager", label: "운영담당" },
+    { value: "staff", label: "일반직원" },
+    { value: "vendor", label: "외주업체" },
+    { value: "reader", label: "읽기전용" },
+    { value: "integration", label: "연동계정" },
+  ];
 
   let me = null;
   let tenants = [];
   let selectedComplaintId = 0;
   let selectedComplaint = null;
   let lastAiResult = null;
+  let users = [];
+  let selectedUserId = 0;
+  let selectedUser = null;
 
   function setMessage(selector, message, isError = false) {
     const el = $(selector);
@@ -39,6 +49,10 @@
     return !!(me && me.user && me.user.is_admin);
   }
 
+  function canManageUsers() {
+    return !!(me && me.user && (me.user.is_admin || me.user.is_site_admin));
+  }
+
   function currentTenantId() {
     if (isAdmin()) {
       return String($("#tenantSelect")?.value || "").trim();
@@ -46,8 +60,41 @@
     return String((me && (me.tenant?.id || me.user?.tenant_id)) || "").trim();
   }
 
+  function currentTenantLabel() {
+    const tenantId = currentTenantId();
+    if (isAdmin()) {
+      const tenant = tenants.find((item) => String(item.id) === tenantId);
+      return tenant ? `${tenant.name} (${tenant.id})` : (tenantId || "전체");
+    }
+    return String(me?.tenant?.name || me?.user?.tenant_id || "-");
+  }
+
   async function api(url, opts = {}) {
     return window.KAAuth.requestJson(url, opts);
+  }
+
+  async function authFetchJson(url, opts = {}) {
+    const headers = { ...(opts.headers || {}) };
+    const token = window.KAAuth.getToken();
+    if (token && !headers.Authorization) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    const response = await fetch(url, {
+      ...opts,
+      headers,
+      credentials: "same-origin",
+    });
+    const contentType = response.headers.get("content-type") || "";
+    const body = contentType.includes("application/json") ? await response.json() : await response.text();
+    if (response.status === 401) {
+      window.KAAuth.clearSession({ includeSensitive: true, broadcast: true });
+      window.KAAuth.redirectLogin();
+      throw new Error(typeof body === "string" ? body : String(body.detail || "401"));
+    }
+    if (!response.ok) {
+      throw new Error(typeof body === "string" ? body : String(body.detail || body.message || response.status));
+    }
+    return body;
   }
 
   function complaintPayloadFromForm() {
@@ -82,6 +129,23 @@
     el.textContent = `선택 ${files.length}장 / 최대 ${limit}장: ${files.map((file) => file.name).join(", ")}`;
   }
 
+  function renderRoleOptions(selector, selected = "") {
+    const el = $(selector);
+    if (!el) return;
+    el.innerHTML = USER_ROLE_OPTIONS
+      .map((item) => `<option value="${escapeHtml(item.value)}"${item.value === selected ? " selected" : ""}>${escapeHtml(item.label)}</option>`)
+      .join("");
+  }
+
+  function roleLabel(user) {
+    if (!user) return "-";
+    if (user.is_admin) return "최고관리자";
+    const matched = USER_ROLE_OPTIONS.find((item) => item.value === String(user.role || ""));
+    const base = matched ? matched.label : String(user.role || "일반직원");
+    if (user.is_site_admin) return `현장관리자 / ${base}`;
+    return base;
+  }
+
   function renderTenantBadge() {
     const wrap = $("#tenantBadge");
     if (!wrap || !me) return;
@@ -92,14 +156,17 @@
     } else if (isAdmin()) {
       chips.push('<span class="badge">최고관리자</span>');
     }
+    if (canManageUsers() && !isAdmin()) {
+      chips.push('<span class="badge">현장관리자 권한</span>');
+    }
     wrap.innerHTML = chips.join("");
   }
 
   function applyHero() {
     renderTenantBadge();
-    const role = isAdmin() ? "최고관리자" : (me?.user?.role || "staff");
+    const role = isAdmin() ? "최고관리자" : (me?.user?.is_site_admin ? "현장관리자" : (me?.user?.role || "staff"));
     const tenantLabel = me?.tenant?.name || me?.user?.tenant_id || "선택 필요";
-    $("#heroLine").textContent = `${role} 계정으로 접속 중입니다. 현재 작업 테넌트는 ${tenantLabel}입니다. 전화, 카톡, 방문 민원을 접수하고 자동 분류할 수 있습니다.`;
+    $("#heroLine").textContent = `${role} 계정으로 접속 중입니다. 현재 작업 테넌트는 ${tenantLabel}입니다. 전화, 카톡, 방문 민원과 카톡 이미지 캡처까지 한 화면에서 정리할 수 있습니다.`;
   }
 
   function renderAiSuggestion(result) {
@@ -117,6 +184,13 @@
     ].join("<br>");
   }
 
+  function syncUserTenantDisplay() {
+    const el = $("#userTenantDisplay");
+    if (el) {
+      el.value = currentTenantLabel();
+    }
+  }
+
   async function loadTenants() {
     if (!isAdmin()) return [];
     const data = await api("/api/admin/tenants");
@@ -130,6 +204,7 @@
         select.value = String(tenants[0].id);
       }
     }
+    syncUserTenantDisplay();
     renderTenantsTable();
     return tenants;
   }
@@ -194,10 +269,9 @@
       if (!item?.id) break;
       const fd = new FormData();
       fd.append("file", file, file.name || "photo");
-      await fetch(`/api/complaints/${item.id}/attachments?tenant_id=${encodeURIComponent(payload.tenant_id)}`, {
+      await authFetchJson(`/api/complaints/${item.id}/attachments?tenant_id=${encodeURIComponent(payload.tenant_id)}`, {
         method: "POST",
         body: fd,
-        credentials: "same-origin",
       });
     }
     setMessage("#intakeMsg", "민원을 저장했습니다.");
@@ -322,10 +396,9 @@
     for (const file of files) {
       const fd = new FormData();
       fd.append("file", file, file.name || "photo");
-      await fetch(`/api/complaints/${selectedComplaintId}/attachments?tenant_id=${encodeURIComponent(tenantId)}`, {
+      await authFetchJson(`/api/complaints/${selectedComplaintId}/attachments?tenant_id=${encodeURIComponent(tenantId)}`, {
         method: "POST",
         body: fd,
-        credentials: "same-origin",
       });
     }
     $("#detailPhotoInput").value = "";
@@ -367,6 +440,7 @@
 
   async function generateReport() {
     const tenantId = currentTenantId();
+    if (!tenantId) return;
     const data = await api(`/api/report/daily?tenant_id=${encodeURIComponent(tenantId)}`);
     $("#reportBox").textContent = String(data.item?.report_text || "");
   }
@@ -374,11 +448,28 @@
   async function digestChat() {
     const tenantId = currentTenantId();
     const text = String($("#chatInput").value || "").trim();
-    if (!text) throw new Error("카톡 대화를 붙여 넣으세요.");
-    const data = await api("/api/ai/kakao_digest", {
-      method: "POST",
-      body: JSON.stringify({ tenant_id: tenantId, text }),
-    });
+    const files = selectedFiles("#chatImageInput");
+    if (!text && !files.length) throw new Error("카톡 대화 또는 이미지를 입력하세요.");
+    if (files.length > 6) throw new Error("카톡 이미지는 최대 6장까지 업로드할 수 있습니다.");
+
+    let data;
+    if (files.length) {
+      const fd = new FormData();
+      fd.append("tenant_id", tenantId);
+      fd.append("text", text);
+      for (const file of files) {
+        fd.append("files", file, file.name || "chat-image");
+      }
+      data = await authFetchJson("/api/ai/kakao_digest/images", {
+        method: "POST",
+        body: fd,
+      });
+    } else {
+      data = await api("/api/ai/kakao_digest", {
+        method: "POST",
+        body: JSON.stringify({ tenant_id: tenantId, text }),
+      });
+    }
     $("#chatDigestBox").textContent = String(data.item?.report_text || "");
   }
 
@@ -402,10 +493,174 @@
     await loadTenants();
   }
 
+  function clearUserCreateForm() {
+    ["#newUserLoginId", "#newUserName", "#newUserPhone", "#newUserPassword", "#newUserNote"].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.value = "";
+    });
+    $("#newUserIsSiteAdmin").checked = false;
+    renderRoleOptions("#newUserRole", "desk");
+  }
+
+  function clearSelectedUserEditor() {
+    selectedUserId = 0;
+    selectedUser = null;
+    $("#userDetail").textContent = "사용자를 선택하세요.";
+    ["#editUserName", "#editUserPhone", "#editUserNote", "#resetUserPassword"].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.value = "";
+    });
+    $("#editUserActive").checked = true;
+    $("#editUserIsSiteAdmin").checked = false;
+    renderRoleOptions("#editUserRole", "desk");
+  }
+
+  function renderUserDetail(user) {
+    selectedUserId = Number(user.id || 0);
+    selectedUser = user;
+    $("#userDetail").innerHTML = [
+      `<strong>${escapeHtml(user.name || user.login_id || "-")}</strong>`,
+      `아이디: ${escapeHtml(user.login_id || "-")}`,
+      `권한: ${escapeHtml(roleLabel(user))}`,
+      `연락처: ${escapeHtml(user.phone || "-")}`,
+      `상태: ${escapeHtml(user.is_active ? "활성" : "비활성")}`,
+      `최근 로그인: ${escapeHtml(formatDateTime(user.last_login_at))}`,
+      `메모: ${escapeHtml(user.note || "-")}`,
+    ].join("<br>");
+    $("#editUserName").value = String(user.name || "");
+    $("#editUserPhone").value = String(user.phone || "");
+    $("#editUserNote").value = String(user.note || "");
+    $("#editUserActive").checked = !!user.is_active;
+    $("#editUserIsSiteAdmin").checked = !!user.is_site_admin;
+    renderRoleOptions("#editUserRole", String(user.role || "desk"));
+  }
+
+  function renderUsersTable() {
+    const body = $("#usersTableBody");
+    if (!body) return;
+    body.innerHTML = users.length
+      ? users.map((user) => `
+        <tr class="user-row" data-id="${Number(user.id || 0)}">
+          <td class="mono">${escapeHtml(user.login_id || "")}</td>
+          <td>${escapeHtml(user.name || "")}</td>
+          <td>${escapeHtml(roleLabel(user))}</td>
+          <td>${escapeHtml(user.phone || "-")}</td>
+          <td>${escapeHtml(user.is_active ? "활성" : "비활성")}</td>
+          <td>${escapeHtml(formatDateTime(user.last_login_at))}</td>
+          <td><button class="ghost-btn user-select" type="button" data-id="${Number(user.id || 0)}">선택</button></td>
+        </tr>
+      `).join("")
+      : '<tr><td colspan="7" class="empty-state">조회된 사용자가 없습니다.</td></tr>';
+    body.querySelectorAll(".user-select").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const userId = Number(btn.getAttribute("data-id") || 0);
+        await loadUser(userId);
+      });
+    });
+  }
+
+  async function loadUsers() {
+    if (!canManageUsers()) return [];
+    syncUserTenantDisplay();
+    const tenantId = currentTenantId();
+    const params = new URLSearchParams();
+    params.set("active_only", "false");
+    if (tenantId) params.set("tenant_id", tenantId);
+    const data = await api(`/api/users?${params.toString()}`);
+    users = Array.isArray(data.items) ? data.items : [];
+    renderUsersTable();
+    if (selectedUserId) {
+      const found = users.find((item) => Number(item.id || 0) === selectedUserId);
+      if (found) {
+        renderUserDetail(found);
+      } else {
+        clearSelectedUserEditor();
+      }
+    }
+    return users;
+  }
+
+  async function loadUser(userId) {
+    if (!userId) throw new Error("사용자를 먼저 선택하세요.");
+    const data = await api(`/api/users/${userId}`);
+    renderUserDetail(data.item || {});
+  }
+
+  async function createUser() {
+    const tenantId = currentTenantId();
+    if (!tenantId && !isAdmin()) throw new Error("작업할 테넌트가 없습니다.");
+    const payload = {
+      tenant_id: tenantId,
+      login_id: String($("#newUserLoginId").value || "").trim().toLowerCase(),
+      name: String($("#newUserName").value || "").trim(),
+      role: String($("#newUserRole").value || "desk").trim(),
+      phone: String($("#newUserPhone").value || "").trim(),
+      password: String($("#newUserPassword").value || ""),
+      note: String($("#newUserNote").value || "").trim(),
+    };
+    if (isAdmin()) {
+      payload.is_site_admin = !!$("#newUserIsSiteAdmin").checked;
+    }
+    const data = await api("/api/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    clearUserCreateForm();
+    setMessage("#usersMsg", `${data.item?.login_id || "새 사용자"} 계정을 등록했습니다.`);
+    await loadUsers();
+  }
+
+  async function updateUser() {
+    if (!selectedUserId) throw new Error("수정할 사용자를 선택하세요.");
+    const payload = {
+      name: String($("#editUserName").value || "").trim(),
+      role: String($("#editUserRole").value || "desk").trim(),
+      phone: String($("#editUserPhone").value || "").trim(),
+      note: String($("#editUserNote").value || "").trim(),
+      is_active: !!$("#editUserActive").checked,
+    };
+    if (isAdmin()) {
+      payload.is_site_admin = !!$("#editUserIsSiteAdmin").checked;
+    }
+    const data = await api(`/api/users/${selectedUserId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    setMessage("#usersMsg", `${data.item?.login_id || "사용자"} 정보를 저장했습니다.`);
+    await loadUsers();
+    await loadUser(selectedUserId);
+  }
+
+  async function resetSelectedUserPassword() {
+    if (!selectedUserId) throw new Error("사용자를 먼저 선택하세요.");
+    const password = String($("#resetUserPassword").value || "");
+    if (!password) throw new Error("초기화할 비밀번호를 입력하세요.");
+    await api(`/api/users/${selectedUserId}/reset_password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+    $("#resetUserPassword").value = "";
+    setMessage("#usersMsg", "비밀번호를 초기화했습니다.");
+  }
+
+  async function deleteSelectedUser() {
+    if (!selectedUserId || !selectedUser) throw new Error("삭제할 사용자를 선택하세요.");
+    if (!window.confirm(`${selectedUser.login_id} 계정을 삭제하시겠습니까?`)) return;
+    await api(`/api/users/${selectedUserId}`, {
+      method: "DELETE",
+    });
+    setMessage("#usersMsg", `${selectedUser.login_id} 계정을 삭제했습니다.`);
+    clearSelectedUserEditor();
+    await loadUsers();
+  }
+
   async function reloadAll() {
     await loadDashboard();
     await loadComplaints();
     await generateReport();
+    if (canManageUsers()) {
+      await loadUsers();
+    }
   }
 
   function wire() {
@@ -429,8 +684,15 @@
     $("#btnDigestChat")?.addEventListener("click", () => digestChat().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnCreateTenant")?.addEventListener("click", () => createTenant().catch((error) => setMessage("#adminMsg", error.message || String(error), true)));
     $("#btnLoadTenants")?.addEventListener("click", () => loadTenants().catch((error) => setMessage("#adminMsg", error.message || String(error), true)));
+    $("#btnLoadUsers")?.addEventListener("click", () => loadUsers().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
+    $("#btnCreateUser")?.addEventListener("click", () => createUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
+    $("#btnClearUserForm")?.addEventListener("click", () => clearUserCreateForm());
+    $("#btnUpdateUser")?.addEventListener("click", () => updateUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
+    $("#btnResetUserPassword")?.addEventListener("click", () => resetSelectedUserPassword().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
+    $("#btnDeleteUser")?.addEventListener("click", () => deleteSelectedUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#tenantSelect")?.addEventListener("change", () => reloadAll().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#photoInput")?.addEventListener("change", () => updatePhotoHint("#photoInput", "#photoHint"));
+    $("#chatImageInput")?.addEventListener("change", () => updatePhotoHint("#chatImageInput", "#chatImageHint"));
     $("#attachmentSelectAll")?.addEventListener("change", (event) => {
       const checked = !!event.target.checked;
       document.querySelectorAll(".attachment-check").forEach((el) => {
@@ -441,11 +703,19 @@
 
   async function init() {
     me = await api("/api/auth/me");
+    renderRoleOptions("#newUserRole", "desk");
+    renderRoleOptions("#editUserRole", "desk");
     applyHero();
+    syncUserTenantDisplay();
     if (isAdmin()) {
       $("#tenantSelectWrap")?.classList.remove("hidden");
       $("#adminPanel")?.classList.remove("hidden");
+      $("#newUserSiteAdminWrap")?.classList.remove("hidden");
+      $("#editUserSiteAdminWrap")?.classList.remove("hidden");
       await loadTenants();
+    }
+    if (canManageUsers()) {
+      $("#userPanel")?.classList.remove("hidden");
     }
     await reloadAll();
   }

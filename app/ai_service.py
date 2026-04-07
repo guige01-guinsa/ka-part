@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from .engine_db import COMPLAINT_TYPES, STATUS_VALUES, URGENCY_VALUES
@@ -28,6 +30,7 @@ STATUS_KEYWORDS = {
     "처리중": ("처리중", "진행중", "출동", "확인중"),
     "이월": ("이월", "내일", "다음날"),
 }
+MAX_CHAT_DIGEST_IMAGES = 6
 
 
 def _collapse_space(value: Any) -> str:
@@ -86,21 +89,45 @@ def _make_summary(text: str, complaint_type: str) -> str:
         headline = headline[:44].rstrip() + "..."
     if complaint_type != "기타" and complaint_type not in headline:
         headline = f"{complaint_type} / {headline}"
-    if prefix:
+    if prefix and not any(part and part in headline for part in prefix):
         return f"{' '.join(prefix)} {headline}".strip()
     return headline
 
 
-def _openai_classify(text: str) -> Dict[str, str] | None:
+def normalize_summary_text(summary: str, *, building: str = "", unit: str = "", complaint_type: str = "") -> str:
+    normalized = _collapse_space(summary)
+    if not normalized:
+        return normalized
+    prefix_parts = []
+    if building:
+        prefix_parts.append(f"{str(building).strip()}동")
+    if unit:
+        prefix_parts.append(f"{str(unit).strip()}호")
+    prefix = " ".join(part for part in prefix_parts if part).strip()
+    if prefix:
+        normalized = re.sub(rf"^(?:{re.escape(prefix)}\s+)+", f"{prefix} ", normalized).strip()
+    if complaint_type and complaint_type != "기타":
+        tag = f"{complaint_type} / "
+        normalized = re.sub(rf"^(?:{re.escape(tag)})+", tag, normalized).strip()
+    return normalized
+
+
+def _openai_client(default_model: str = "gpt-5") -> Tuple[Any | None, str]:
     api_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
-        return None
+        return None, ""
     try:
         from openai import OpenAI
     except Exception:
+        return None, ""
+    model = str(os.getenv("OPENAI_MODEL") or default_model).strip() or default_model
+    return OpenAI(api_key=api_key), model
+
+
+def _openai_classify(text: str) -> Dict[str, str] | None:
+    client, model = _openai_client()
+    if not client:
         return None
-    model = str(os.getenv("OPENAI_MODEL") or "gpt-5").strip()
-    client = OpenAI(api_key=api_key)
     prompt = f"""
 너는 아파트 관리사무소 민원 분류 시스템이다.
 반드시 JSON으로만 답하라.
@@ -128,7 +155,7 @@ def _openai_classify(text: str) -> Dict[str, str] | None:
         return {
             "type": complaint_type,
             "urgency": urgency,
-            "summary": summary or _make_summary(text, complaint_type),
+            "summary": normalize_summary_text(summary or _make_summary(text, complaint_type), complaint_type=complaint_type),
             "model": model,
             "source": "openai",
         }
@@ -148,7 +175,7 @@ def classify_complaint_text(text: str) -> Dict[str, str]:
     return {
         "type": complaint_type,
         "urgency": urgency,
-        "summary": _make_summary(normalized, complaint_type),
+        "summary": normalize_summary_text(_make_summary(normalized, complaint_type), complaint_type=complaint_type),
         "model": "heuristic",
         "source": "fallback",
     }
@@ -170,6 +197,15 @@ def _guess_manager(text: str) -> str:
     return ""
 
 
+def _summary_for_report(row: Dict[str, Any]) -> str:
+    summary = _collapse_space(row.get("summary") or row.get("content") or "")
+    complaint_type = _collapse_space(row.get("type") or "")
+    prefix = f"{complaint_type} / "
+    if complaint_type and summary.startswith(prefix):
+        return summary[len(prefix):].strip()
+    return summary
+
+
 def _normalize_chat_line(line: str) -> str:
     text = _collapse_space(line)
     text = re.sub(r"^\d{4}년\s*\d{1,2}월\s*\d{1,2}일\s*(오전|오후)?\s*\d{1,2}:\d{2},?\s*", "", text)
@@ -188,16 +224,104 @@ def _looks_like_issue(text: str) -> bool:
     return "민원" in text or "고장" in text or "불편" in text
 
 
-def analyze_chat_digest(text: str) -> Dict[str, Any]:
-    normalized = _collapse_space(text)
-    if not normalized:
-        raise ValueError("text is required")
+def _image_data_url(image_item: Dict[str, Any]) -> str:
+    raw = image_item.get("bytes")
+    if not isinstance(raw, (bytes, bytearray)) or not raw:
+        return ""
+    mime = str(image_item.get("content_type") or "image/jpeg").strip() or "image/jpeg"
+    encoded = base64.b64encode(bytes(raw)).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
 
+
+def _openai_image_digest(text: str, image_inputs: List[Dict[str, Any]]) -> Tuple[List[str], List[str], str]:
+    client, model = _openai_client()
+    if not client or not image_inputs:
+        return [], [], ""
+
+    prompt = """
+너는 아파트 관리사무소 카카오톡 대화 정리 도우미다.
+입력으로 텍스트 대화와 카카오톡 캡처, 현장 사진이 함께 들어온다.
+
+해야 할 일:
+1. 이미지 안에서 민원성 텍스트나 시설 이상 징후를 읽어라.
+2. 중복 제거 전 원시 민원 문장(image_lines)을 1줄씩 만들어라.
+3. 운영자가 빠르게 확인할 수 있는 이미지 요약(image_notes)을 만들어라.
+4. 반드시 JSON으로만 답하라.
+
+출력 형식:
+{"image_lines":[""],"image_notes":[""]}
+
+원칙:
+- image_lines는 민원 등록에 바로 쓸 수 있는 짧은 문장으로 작성한다.
+- 동/호, 시설명, 장애 상태가 보이면 포함한다.
+- 불명확한 경우 추정이라고 쓰지 말고 image_notes에만 적는다.
+- 민원이 아니면 image_lines에는 넣지 않는다.
+""".strip()
+    content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+    if _collapse_space(text):
+        content.append({"type": "input_text", "text": f"기존 텍스트 대화:\n{text}"})
+
+    for index, image_item in enumerate(image_inputs, start=1):
+        filename = str(image_item.get("filename") or f"image-{index}").strip()
+        if filename:
+            content.append({"type": "input_text", "text": f"이미지 {index} 파일명: {filename}"})
+        data_url = _image_data_url(image_item)
+        if data_url:
+            content.append({"type": "input_image", "image_url": data_url})
+
+    try:
+        response = client.responses.create(model=model, input=[{"role": "user", "content": content}])
+        raw = str(getattr(response, "output_text", "") or "").strip()
+        if not raw:
+            return [], [], ""
+        data = json.loads(raw)
+        image_lines = [_collapse_space(item) for item in data.get("image_lines") or [] if _collapse_space(item)]
+        image_notes = [_collapse_space(item) for item in data.get("image_notes") or [] if _collapse_space(item)]
+        return image_lines, image_notes, model
+    except Exception:
+        return [], [], ""
+
+
+def _fallback_image_digest(image_inputs: List[Dict[str, Any]]) -> Tuple[List[str], List[str], str]:
+    image_lines: List[str] = []
+    image_notes: List[str] = []
+
+    for index, image_item in enumerate(image_inputs, start=1):
+        filename = str(image_item.get("filename") or f"image-{index}").strip()
+        stem = _collapse_space(Path(filename).stem.replace("-", " ").replace("_", " "))
+        if _looks_like_issue(stem):
+            complaint_type = _infer_type(stem)
+            image_lines.append(stem)
+            image_notes.append(f"{filename}: {_make_summary(stem, complaint_type)}")
+            continue
+        image_notes.append(f"{filename}: 이미지 첨부 {index}건")
+
+    if image_inputs and not any(_looks_like_issue(_collapse_space(Path(str(item.get('filename') or '')).stem.replace('-', ' ').replace('_', ' '))) for item in image_inputs):
+        image_notes.append("이미지 상세 인식은 OPENAI_API_KEY 설정 시 더 정확해집니다.")
+    return image_lines, image_notes, "filename-fallback"
+
+
+def _digest_image_lines(text: str, image_inputs: List[Dict[str, Any]]) -> Tuple[List[str], List[str], str]:
+    trimmed = image_inputs[:MAX_CHAT_DIGEST_IMAGES]
+    image_lines, image_notes, model = _openai_image_digest(text, trimmed)
+    if image_lines or image_notes:
+        return image_lines, image_notes, model
+    return _fallback_image_digest(trimmed)
+
+
+def analyze_chat_digest(text: str, image_inputs: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
+    image_inputs = list(image_inputs or [])
+    normalized = _collapse_space(text)
+    if not normalized and not image_inputs:
+        raise ValueError("text or image is required")
+
+    image_lines, image_notes, image_model = _digest_image_lines(normalized, image_inputs)
     rows: List[Dict[str, Any]] = []
     seen = set()
     today = datetime.now().replace(microsecond=0).isoformat(sep=" ")
+    raw_sources = list(str(text or "").splitlines()) + image_lines
 
-    for raw_line in str(text or "").splitlines():
+    for raw_line in raw_sources:
         line = _normalize_chat_line(raw_line)
         if not line:
             continue
@@ -254,21 +378,25 @@ def analyze_chat_digest(text: str) -> Dict[str, Any]:
     if urgent_rows:
         for row in urgent_rows:
             location = " ".join(x for x in (f"{row['building']}동" if row["building"] else "", f"{row['unit']}호" if row["unit"] else "") if x)
-            lines.append(f"- {location or '위치미상'} / {row['summary']}")
+            lines.append(f"- {location or '위치미상'} / {_summary_for_report(row)}")
     else:
         lines.append("없음")
     lines.extend(["", "🔧 주요 민원"])
     if major_rows:
         for row in major_rows:
-            lines.append(f"- {row['type']} / {row['summary']} / {row['status']}")
+            lines.append(f"- {row['type']} / {_summary_for_report(row)} / {row['status']}")
     else:
         lines.append("없음")
     lines.extend(["", "📌 내일 처리"])
     if tomorrow_rows:
         for row in tomorrow_rows:
-            lines.append(f"- {row['summary']} / {row['status']}")
+            lines.append(f"- {_summary_for_report(row)} / {row['status']}")
     else:
         lines.append("없음")
+    if image_notes:
+        lines.extend(["", "🖼 첨부 이미지 요약"])
+        for note in image_notes[:10]:
+            lines.append(f"- {note}")
     lines.extend(["", "📋 엑셀 입력용 리스트", "접수일시 | 동 | 호 | 민원유형 | 내용요약 | 긴급도 | 상태 | 담당자추정"])
     for row in rows:
         lines.append(
@@ -295,5 +423,9 @@ def analyze_chat_digest(text: str) -> Dict[str, Any]:
         "major_items": major_rows,
         "tomorrow_items": tomorrow_rows,
         "excel_rows": rows,
+        "image_lines": image_lines,
+        "image_notes": image_notes,
+        "input_image_count": len(image_inputs),
+        "image_analysis_model": image_model,
         "report_text": "\n".join(lines),
     }

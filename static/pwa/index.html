@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260407mvp" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260407u1" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -240,7 +240,128 @@
         <span>카톡 대화 원문</span>
         <textarea id="chatInput" rows="8" placeholder="카카오톡 단체방 대화를 붙여 넣으세요."></textarea>
       </label>
+      <label class="field">
+        <span>카톡 캡처 또는 현장 사진 (최대 6장)</span>
+        <input id="chatImageInput" type="file" accept="image/*" multiple />
+      </label>
+      <div id="chatImageHint" class="inline-note">선택된 이미지가 없습니다.</div>
       <div id="chatDigestBox" class="detail-block">카톡 분석 결과가 여기에 표시됩니다.</div>
+    </section>
+
+    <section id="userPanel" class="panel reveal hidden">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Users</p>
+          <h2>회원가입 및 사용자 권한관리</h2>
+        </div>
+        <button id="btnLoadUsers" class="ghost-btn" type="button">사용자 새로고침</button>
+      </div>
+      <div class="form-grid compact-grid">
+        <label class="field">
+          <span>작업 테넌트</span>
+          <input id="userTenantDisplay" type="text" readonly />
+        </label>
+        <label class="field">
+          <span>회원 아이디</span>
+          <input id="newUserLoginId" type="text" maxlength="32" placeholder="예: desk02" />
+        </label>
+        <label class="field">
+          <span>이름</span>
+          <input id="newUserName" type="text" maxlength="40" placeholder="예: 민원접수" />
+        </label>
+        <label class="field">
+          <span>역할</span>
+          <select id="newUserRole"></select>
+        </label>
+        <label class="field">
+          <span>연락처</span>
+          <input id="newUserPhone" type="text" maxlength="40" placeholder="예: 010-2345-6789" />
+        </label>
+        <label class="field">
+          <span>초기 비밀번호</span>
+          <input id="newUserPassword" type="password" maxlength="72" placeholder="8자 이상" />
+        </label>
+        <label class="field field-span">
+          <span>메모</span>
+          <textarea id="newUserNote" rows="3" placeholder="예: 야간 접수 전용 계정"></textarea>
+        </label>
+        <label id="newUserSiteAdminWrap" class="field field-span hidden">
+          <span>권한</span>
+          <label class="check-all">
+            <input id="newUserIsSiteAdmin" type="checkbox" />
+            <span>현장관리자 권한 부여</span>
+          </label>
+        </label>
+      </div>
+      <div class="cta-row">
+        <button id="btnCreateUser" class="action-btn" type="button">회원 등록</button>
+        <button id="btnClearUserForm" class="ghost-btn" type="button">입력 초기화</button>
+      </div>
+      <div id="usersMsg" class="inline-message" aria-live="polite"></div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>아이디</th>
+              <th>이름</th>
+              <th>권한</th>
+              <th>연락처</th>
+              <th>상태</th>
+              <th>최근 로그인</th>
+              <th>액션</th>
+            </tr>
+          </thead>
+          <tbody id="usersTableBody"></tbody>
+        </table>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">선택 사용자</div>
+          <div id="userDetail" class="detail-block">사용자를 선택하세요.</div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">권한 수정</div>
+          <label class="field">
+            <span>이름</span>
+            <input id="editUserName" type="text" maxlength="40" placeholder="사용자 이름" />
+          </label>
+          <label class="field">
+            <span>역할</span>
+            <select id="editUserRole"></select>
+          </label>
+          <label class="field">
+            <span>연락처</span>
+            <input id="editUserPhone" type="text" maxlength="40" placeholder="연락처" />
+          </label>
+          <label class="field">
+            <span>메모</span>
+            <textarea id="editUserNote" rows="3" placeholder="운영 메모"></textarea>
+          </label>
+          <label class="field">
+            <span>활성 상태</span>
+            <label class="check-all">
+              <input id="editUserActive" type="checkbox" checked />
+              <span>활성 사용자</span>
+            </label>
+          </label>
+          <label id="editUserSiteAdminWrap" class="field hidden">
+            <span>관리 권한</span>
+            <label class="check-all">
+              <input id="editUserIsSiteAdmin" type="checkbox" />
+              <span>현장관리자 권한</span>
+            </label>
+          </label>
+          <label class="field">
+            <span>비밀번호 재설정</span>
+            <input id="resetUserPassword" type="password" maxlength="72" placeholder="새 비밀번호 입력" />
+          </label>
+          <div class="cta-row">
+            <button id="btnUpdateUser" class="action-btn" type="button">사용자 저장</button>
+            <button id="btnResetUserPassword" class="ghost-btn" type="button">비밀번호 초기화</button>
+            <button id="btnDeleteUser" class="action-btn action-danger" type="button">사용자 삭제</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section id="adminPanel" class="panel reveal hidden">
@@ -293,6 +414,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260407mvp"></script>
+  <script src="/pwa/portal.js?v=20260407u1"></script>
 </body>
 </html>

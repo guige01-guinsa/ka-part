@@ -1,2 +1,2 @@
 # Run ka-part locally (Windows PowerShell)
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+powershell -ExecutionPolicy Bypass -File .\scripts\dev-run.ps1

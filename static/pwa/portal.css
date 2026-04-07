@@ -304,6 +304,11 @@ body {
   outline: none;
 }
 
+.field input[readonly] {
+  background: rgba(23, 38, 37, 0.04);
+  color: var(--muted);
+}
+
 .field textarea {
   resize: vertical;
   min-height: 126px;
@@ -484,6 +489,11 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.check-all input {
+  width: 16px;
+  height: 16px;
 }
 
 .attachment-meta {
