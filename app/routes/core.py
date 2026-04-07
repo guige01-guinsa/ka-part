@@ -534,6 +534,37 @@ def users_update(request: Request, user_id: int, payload: Dict[str, Any] = Body(
     return {"ok": True, "item": item}
 
 
+@router.post("/users/{user_id}/approve")
+def users_approve(request: Request, user_id: int) -> Dict[str, Any]:
+    user, _token = _require_user_manager(request)
+    target = get_staff_user(int(user_id))
+    if not target:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+    if int(target.get("id") or 0) == int(user.get("id") or 0):
+        raise HTTPException(status_code=400, detail="본인 계정은 승인할 수 없습니다.")
+    _assert_manageable_target(user, target, allow_view_only=False)
+
+    item = target
+    if int(target.get("is_active") or 0) != 1:
+        item = update_staff_user(
+            int(user_id),
+            name=str(target.get("name") or "").strip(),
+            role=str(target.get("role") or "staff").strip() or "staff",
+            phone=str(target.get("phone") or "").strip(),
+            note=str(target.get("note") or "").strip(),
+            is_site_admin=bool(target.get("is_site_admin")),
+            is_active=True,
+        )
+    item.pop("password_hash", None)
+    append_audit_log(
+        str(item.get("tenant_id") or user.get("tenant_id") or ""),
+        "approve_user",
+        str(user.get("login_id") or ""),
+        {"user_id": int(user_id), "login_id": item.get("login_id")},
+    )
+    return {"ok": True, "item": item}
+
+
 @router.post("/users/{user_id}/reset_password")
 def users_reset_password(request: Request, user_id: int, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     user, _token = _require_user_manager(request)

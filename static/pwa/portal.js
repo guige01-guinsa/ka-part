@@ -146,6 +146,15 @@
     return base;
   }
 
+  function isPendingApproval(user) {
+    return !!user && !user.is_active && String(user.note || "").includes("[self-register]");
+  }
+
+  function userStatusLabel(user) {
+    if (isPendingApproval(user)) return "승인대기";
+    return user && user.is_active ? "활성" : "비활성";
+  }
+
   function renderTenantBadge() {
     const wrap = $("#tenantBadge");
     if (!wrap || !me) return;
@@ -523,7 +532,7 @@
       `아이디: ${escapeHtml(user.login_id || "-")}`,
       `권한: ${escapeHtml(roleLabel(user))}`,
       `연락처: ${escapeHtml(user.phone || "-")}`,
-      `상태: ${escapeHtml(user.is_active ? "활성" : "비활성")}`,
+      `상태: ${escapeHtml(userStatusLabel(user))}`,
       `최근 로그인: ${escapeHtml(formatDateTime(user.last_login_at))}`,
       `메모: ${escapeHtml(user.note || "-")}`,
     ].join("<br>");
@@ -533,11 +542,19 @@
     $("#editUserActive").checked = !!user.is_active;
     $("#editUserIsSiteAdmin").checked = !!user.is_site_admin;
     renderRoleOptions("#editUserRole", String(user.role || "desk"));
+    $("#btnApproveUser")?.toggleAttribute("disabled", !isPendingApproval(user));
   }
 
   function renderUsersTable() {
     const body = $("#usersTableBody");
     if (!body) return;
+    const pendingUsers = users.filter((user) => isPendingApproval(user));
+    const hint = $("#pendingUsersHint");
+    if (hint) {
+      hint.textContent = pendingUsers.length
+        ? `승인대기 회원 ${pendingUsers.length}건이 있습니다. 목록에서 바로 승인하거나 선택 후 승인할 수 있습니다.`
+        : "승인대기 회원이 없습니다.";
+    }
     body.innerHTML = users.length
       ? users.map((user) => `
         <tr class="user-row" data-id="${Number(user.id || 0)}">
@@ -545,9 +562,12 @@
           <td>${escapeHtml(user.name || "")}</td>
           <td>${escapeHtml(roleLabel(user))}</td>
           <td>${escapeHtml(user.phone || "-")}</td>
-          <td>${escapeHtml(user.is_active ? "활성" : "비활성")}</td>
+          <td>${escapeHtml(userStatusLabel(user))}</td>
           <td>${escapeHtml(formatDateTime(user.last_login_at))}</td>
-          <td><button class="ghost-btn user-select" type="button" data-id="${Number(user.id || 0)}">선택</button></td>
+          <td class="table-actions">
+            <button class="ghost-btn user-select" type="button" data-id="${Number(user.id || 0)}">선택</button>
+            ${isPendingApproval(user) ? `<button class="action-btn action-secondary user-approve" type="button" data-id="${Number(user.id || 0)}">승인</button>` : ""}
+          </td>
         </tr>
       `).join("")
       : '<tr><td colspan="7" class="empty-state">조회된 사용자가 없습니다.</td></tr>';
@@ -555,6 +575,12 @@
       btn.addEventListener("click", async () => {
         const userId = Number(btn.getAttribute("data-id") || 0);
         await loadUser(userId);
+      });
+    });
+    body.querySelectorAll(".user-approve").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const userId = Number(btn.getAttribute("data-id") || 0);
+        await approveUser(userId);
       });
     });
   }
@@ -631,6 +657,16 @@
     await loadUser(selectedUserId);
   }
 
+  async function approveUser(userId = selectedUserId) {
+    if (!userId) throw new Error("승인할 사용자를 선택하세요.");
+    const data = await api(`/api/users/${userId}/approve`, {
+      method: "POST",
+    });
+    setMessage("#usersMsg", `${data.item?.login_id || "사용자"} 승인을 완료했습니다.`);
+    await loadUsers();
+    await loadUser(userId);
+  }
+
   async function resetSelectedUserPassword() {
     if (!selectedUserId) throw new Error("사용자를 먼저 선택하세요.");
     const password = String($("#resetUserPassword").value || "");
@@ -687,6 +723,7 @@
     $("#btnLoadUsers")?.addEventListener("click", () => loadUsers().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#btnCreateUser")?.addEventListener("click", () => createUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#btnClearUserForm")?.addEventListener("click", () => clearUserCreateForm());
+    $("#btnApproveUser")?.addEventListener("click", () => approveUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#btnUpdateUser")?.addEventListener("click", () => updateUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#btnResetUserPassword")?.addEventListener("click", () => resetSelectedUserPassword().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#btnDeleteUser")?.addEventListener("click", () => deleteSelectedUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
@@ -705,6 +742,7 @@
     me = await api("/api/auth/me");
     renderRoleOptions("#newUserRole", "desk");
     renderRoleOptions("#editUserRole", "desk");
+    $("#btnApproveUser")?.toggleAttribute("disabled", true);
     applyHero();
     syncUserTenantDisplay();
     if (isAdmin()) {

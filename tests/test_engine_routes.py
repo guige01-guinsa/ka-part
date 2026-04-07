@@ -352,7 +352,7 @@ def test_public_register_flow_creates_inactive_user_pending_approval(app_client)
     blocked = client.post("/api/auth/login", json={"login_id": "request01", "password": "password123"})
     assert blocked.status_code == 401
 
-    activated = client.patch(f"/api/users/{user_id}", json={"name": "가입신청자", "role": "staff", "phone": "010-7777-8888", "note": "승인 완료", "is_active": True})
+    activated = client.post(f"/api/users/{user_id}/approve")
     assert activated.status_code == 200
     assert activated.json()["item"]["is_active"] == 1
 

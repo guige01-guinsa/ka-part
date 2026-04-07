@@ -183,6 +183,14 @@ body {
   background: linear-gradient(135deg, #c95b46, var(--danger));
 }
 
+.action-btn:disabled,
+.ghost-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .hero-metrics {
   display: grid;
   gap: 12px;
@@ -244,6 +252,12 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.table-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .badge,

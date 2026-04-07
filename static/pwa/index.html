@@ -253,6 +253,7 @@
         <div>
           <p class="section-kicker">Users</p>
           <h2>회원가입 및 사용자 권한관리</h2>
+          <p id="pendingUsersHint" class="panel-copy">승인대기 회원이 있으면 여기서 바로 승인할 수 있습니다.</p>
         </div>
         <button id="btnLoadUsers" class="ghost-btn" type="button">사용자 새로고침</button>
       </div>
@@ -356,6 +357,7 @@
             <input id="resetUserPassword" type="password" maxlength="72" placeholder="새 비밀번호 입력" />
           </label>
           <div class="cta-row">
+            <button id="btnApproveUser" class="action-btn action-secondary" type="button">승인</button>
             <button id="btnUpdateUser" class="action-btn" type="button">사용자 저장</button>
             <button id="btnResetUserPassword" class="ghost-btn" type="button">비밀번호 초기화</button>
             <button id="btnDeleteUser" class="action-btn action-danger" type="button">사용자 삭제</button>
