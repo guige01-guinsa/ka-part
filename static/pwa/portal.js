@@ -37,6 +37,7 @@
   let selectedVendorId = 0;
   let documentNumberingConfig = null;
   let chatSourcePreviewUrls = [];
+  let chatDigestPreviewUrls = [];
 
   function setMessage(selector, message, isError = false) {
     const el = $(selector);
@@ -394,6 +395,51 @@
     chatSourcePreviewUrls = [];
   }
 
+  function revokeChatDigestPreviewUrls() {
+    for (const url of chatDigestPreviewUrls) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch (_) {
+        // ignore revoke errors for already released object URLs
+      }
+    }
+    chatDigestPreviewUrls = [];
+  }
+
+  function clearChatDigestImagePreview() {
+    revokeChatDigestPreviewUrls();
+    const box = $("#chatImagePreview");
+    if (box) {
+      box.innerHTML = "";
+      box.classList.add("hidden");
+    }
+  }
+
+  function renderSelectedChatImages(files) {
+    const box = $("#chatImagePreview");
+    if (!box) return;
+    revokeChatDigestPreviewUrls();
+    if (!files.length) {
+      box.innerHTML = "";
+      box.classList.add("hidden");
+      return;
+    }
+    box.innerHTML = files
+      .map((file, index) => {
+        const url = URL.createObjectURL(file);
+        chatDigestPreviewUrls.push(url);
+        return [
+          '<article class="chat-source-card">',
+          `<strong>선택 이미지 ${index + 1}</strong>`,
+          `<img src="${escapeHtml(url)}" alt="카톡 분석 선택 이미지 ${index + 1}" loading="lazy" />`,
+          `<span class="meta">${escapeHtml(file.name || `image-${index + 1}`)}</span>`,
+          "</article>",
+        ].join("");
+      })
+      .join("");
+    box.classList.remove("hidden");
+  }
+
   function clearChatSourcePreview() {
     revokeChatSourcePreviewUrls();
     const box = $("#chatSourcePreview");
@@ -439,11 +485,19 @@
     }
   }
 
+  function setChatPasteZoneState(active = false, dragover = false) {
+    const zone = $("#chatPasteZone");
+    if (!zone) return;
+    zone.classList.toggle("active", !!active);
+    zone.classList.toggle("dragover", !!dragover);
+  }
+
   function updateChatDigestHint() {
     const text = String($("#chatInput")?.value || "").trim();
     const files = selectedFiles("#chatImageInput");
     const imageHint = $("#chatImageHint");
     const modeHint = $("#chatDigestModeHint");
+    renderSelectedChatImages(files);
     if (imageHint) {
       if (files.length) {
         imageHint.textContent = `선택 ${files.length}장 / 최대 ${MAX_CHAT_DIGEST_IMAGES}장: ${files.map((file) => file.name).join(", ")}`;
@@ -456,9 +510,9 @@
     }
     if (modeHint) {
       if (files.length) {
-        modeHint.textContent = "현재 선택한 이미지와 입력한 원문을 함께 분석합니다. 이 입력칸에 카톡 캡처 이미지를 Ctrl+V로 추가할 수도 있습니다.";
+        modeHint.textContent = "현재 선택한 이미지와 입력한 원문을 함께 분석합니다. 위 붙여넣기 영역, 클립보드 불러오기 버튼, 파일 선택을 모두 사용할 수 있습니다.";
       } else {
-        modeHint.textContent = "텍스트만 입력한 경우 원문을 PNG 이미지로 자동 저장해 함께 분석합니다. 이 입력칸에 카톡 캡처 이미지를 Ctrl+V로 붙여 넣어도 됩니다.";
+        modeHint.textContent = "텍스트만 입력한 경우 원문을 PNG 이미지로 자동 저장해 함께 분석합니다. 위 붙여넣기 영역이나 클립보드 불러오기 버튼으로 카톡 캡처 이미지를 추가할 수 있습니다.";
       }
     }
   }
@@ -501,7 +555,8 @@
   }
 
   function extractClipboardImageFiles(event) {
-    const items = Array.from(event?.clipboardData?.items || []);
+    const clipboardData = event?.clipboardData || event;
+    const items = Array.from(clipboardData?.items || []);
     const files = [];
     for (const item of items) {
       if (!String(item.type || "").startsWith("image/")) continue;
@@ -510,21 +565,71 @@
       const ext = String(blob.type || "image/png").split("/")[1] || "png";
       files.push(new File([blob], `kakao-paste-${Date.now()}-${files.length + 1}.${ext}`, { type: blob.type || "image/png", lastModified: Date.now() }));
     }
+    if (files.length) {
+      return files;
+    }
+    for (const file of Array.from(clipboardData?.files || [])) {
+      if (!(file instanceof File)) continue;
+      if (!String(file.type || "").startsWith("image/")) continue;
+      files.push(file);
+    }
     return files;
+  }
+
+  function addChatDigestImages(files, sourceLabel = "카톡 캡처 이미지") {
+    if (!files.length) return false;
+    const merged = mergeFilesIntoInput("#chatImageInput", files, MAX_CHAT_DIGEST_IMAGES);
+    clearChatSourcePreview();
+    updateChatDigestHint();
+    if (merged.added < files.length) {
+      setMessage("#intakeMsg", `${sourceLabel}는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 저장됩니다.`, true);
+      return true;
+    }
+    setMessage("#intakeMsg", `${sourceLabel} ${merged.added}장을 불러왔습니다.`);
+    return true;
   }
 
   function handleChatInputPaste(event) {
     const pastedImages = extractClipboardImageFiles(event);
-    if (!pastedImages.length) return;
+    if (!pastedImages.length) return false;
+    event.__kaChatPasteHandled = true;
     event.preventDefault();
-    const merged = mergeFilesIntoInput("#chatImageInput", pastedImages, MAX_CHAT_DIGEST_IMAGES);
-    clearChatSourcePreview();
-    updateChatDigestHint();
-    if (merged.added < pastedImages.length) {
-      setMessage("#intakeMsg", `카톡 캡처 이미지는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 저장됩니다.`, true);
-      return;
+    return addChatDigestImages(pastedImages, "카톡 캡처 이미지");
+  }
+
+  async function readClipboardImageFiles() {
+    if (!navigator.clipboard || typeof navigator.clipboard.read !== "function") {
+      throw new Error("이 브라우저는 클립보드 이미지 읽기를 지원하지 않습니다. 붙여넣기 영역을 클릭한 뒤 Ctrl+V를 사용해 주세요.");
     }
-    setMessage("#intakeMsg", `카톡 캡처 이미지 ${merged.added}장을 붙여 넣었습니다.`);
+    const items = await navigator.clipboard.read();
+    const files = [];
+    for (const item of items) {
+      const imageType = item.types.find((type) => String(type || "").startsWith("image/"));
+      if (!imageType) continue;
+      const blob = await item.getType(imageType);
+      const ext = String(blob.type || "image/png").split("/")[1] || "png";
+      files.push(new File([blob], `kakao-clipboard-${Date.now()}-${files.length + 1}.${ext}`, { type: blob.type || "image/png", lastModified: Date.now() }));
+    }
+    return files;
+  }
+
+  async function importClipboardImages() {
+    const files = await readClipboardImageFiles();
+    if (!files.length) {
+      throw new Error("클립보드에서 이미지가 발견되지 않았습니다.");
+    }
+    addChatDigestImages(files, "클립보드 이미지");
+  }
+
+  function handleChatImageDrop(event) {
+    event.preventDefault();
+    setChatPasteZoneState(false, false);
+    const files = Array.from(event?.dataTransfer?.files || []).filter((file) => String(file.type || "").startsWith("image/"));
+    if (!files.length) {
+      setMessage("#intakeMsg", "드롭한 파일 중 이미지가 없습니다.", true);
+      return false;
+    }
+    return addChatDigestImages(files, "드롭 이미지");
   }
 
   function renderRoleOptions(selector, selected = "") {
@@ -1835,6 +1940,7 @@
     $("#btnDigestPdf")?.addEventListener("click", () => downloadDigestPdf().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnPreviewDigestSource")?.addEventListener("click", () => previewChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDownloadDigestSource")?.addEventListener("click", () => downloadChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
+    $("#btnPasteDigestImage")?.addEventListener("click", () => importClipboardImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnLoadOpsDashboard")?.addEventListener("click", () => loadOpsDashboard().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
     $("#btnCreateNotice")?.addEventListener("click", () => createNotice().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
     $("#btnUpdateNotice")?.addEventListener("click", () => updateNotice().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
@@ -1886,6 +1992,32 @@
       updateChatDigestHint();
     });
     $("#chatInput")?.addEventListener("paste", (event) => handleChatInputPaste(event));
+    $("#chatPasteZone")?.addEventListener("click", () => {
+      setChatPasteZoneState(true, false);
+      $("#chatPasteZone")?.focus();
+    });
+    $("#chatPasteZone")?.addEventListener("focus", () => setChatPasteZoneState(true, false));
+    $("#chatPasteZone")?.addEventListener("blur", () => setChatPasteZoneState(false, false));
+    $("#chatPasteZone")?.addEventListener("paste", (event) => handleChatInputPaste(event));
+    $("#chatPasteZone")?.addEventListener("dragenter", (event) => {
+      event.preventDefault();
+      setChatPasteZoneState(true, true);
+    });
+    $("#chatPasteZone")?.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      setChatPasteZoneState(true, true);
+    });
+    $("#chatPasteZone")?.addEventListener("dragleave", () => setChatPasteZoneState(false, false));
+    $("#chatPasteZone")?.addEventListener("drop", (event) => handleChatImageDrop(event));
+    document.addEventListener("paste", (event) => {
+      if (event.defaultPrevented || event.__kaChatPasteHandled) return;
+      const active = document.activeElement;
+      const zone = $("#chatPasteZone");
+      const target = event.target;
+      const insideChatDigest = [zone, $("#chatInput"), $("#chatImageInput")].some((el) => el && (target === el || active === el || (target instanceof Node && el.contains(target)) || (active instanceof Node && el.contains(active))));
+      if (!insideChatDigest) return;
+      handleChatInputPaste(event);
+    });
     $("#attachmentSelectAll")?.addEventListener("change", (event) => {
       const checked = !!event.target.checked;
       document.querySelectorAll(".attachment-check").forEach((el) => {
@@ -1904,6 +2036,7 @@
     syncOpsWriteState();
     syncComplaintDeleteOption();
     $("#filterStatus").value = "접수";
+    clearChatDigestImagePreview();
     clearChatSourcePreview();
     updateChatDigestHint();
     clearNoticeForm();
