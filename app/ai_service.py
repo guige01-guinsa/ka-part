@@ -217,6 +217,9 @@ def _normalize_chat_line(line: str) -> str:
 def _looks_like_issue(text: str) -> bool:
     if len(text) < 6:
         return False
+    building, unit = _extract_building_unit(text)
+    if building and unit:
+        return True
     if any(keyword in text for _, keywords in TYPE_KEYWORDS for keyword in keywords):
         return True
     if any(keyword in text for keyword in URGENT_KEYWORDS):

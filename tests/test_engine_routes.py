@@ -212,6 +212,29 @@ def test_kakao_digest_explains_when_image_has_no_detected_issue(app_client) -> N
     assert "이미지 본문을 읽지 못해 파일명 기준으로만 확인했습니다." in str(item["analysis_notice"])
 
 
+def test_kakao_digest_treats_building_and_unit_as_complaint_signal(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    digest = client.post(
+        "/api/ai/kakao_digest/images",
+        headers=headers,
+        data={"text": ""},
+        files=[
+            ("files", ("101동-1203호-카톡캡처.png", io.BytesIO(b"fake-image-1"), "image/png")),
+        ],
+    )
+    assert digest.status_code == 200
+    item = digest.json()["item"]
+    assert item["input_image_count"] == 1
+    assert item["total"] == 1
+    row = item["excel_rows"][0]
+    assert row["building"] == "101"
+    assert row["unit"] == "1203"
+    assert row["status"] == "접수"
+
+
 def test_kakao_digest_accepts_up_to_thirty_images(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)
