@@ -5,7 +5,7 @@ import sqlite3
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
-from .db import DB_PATH, now_iso
+from .db import DB_PATH, normalize_document_numbering_config, now_iso
 
 NOTICE_CATEGORY_VALUES = ("공지", "기안", "구매", "견적및발주", "작업내용", "기타")
 NOTICE_STATUS_VALUES = ("draft", "published", "archived")
@@ -445,7 +445,22 @@ def summarize_document_categories(*, tenant_id: str) -> List[Dict[str, Any]]:
 def _next_document_reference_no(con: sqlite3.Connection, *, tenant_id: str, category: str) -> str:
     clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
     clean_category = _clean_choice(category, DOCUMENT_CATEGORY_VALUES, field="category", default="기타")
-    prefix = f"{DOCUMENT_CATEGORY_CODES.get(clean_category, 'ETC')}-{date.today().strftime('%Y%m%d')}-"
+    row = con.execute(
+        "SELECT ops_document_numbering_json FROM tenants WHERE id=? LIMIT 1",
+        (clean_tenant_id,),
+    ).fetchone()
+    config = normalize_document_numbering_config(row["ops_document_numbering_json"] if row else None)
+    separator = str(config.get("separator") or "-")
+    date_mode = str(config.get("date_mode") or "yyyymmdd")
+    sequence_digits = int(config.get("sequence_digits") or 3)
+    category_codes = dict(config.get("category_codes") or {})
+    prefix_parts = [str(category_codes.get(clean_category) or DOCUMENT_CATEGORY_CODES.get(clean_category, "ETC")).strip()]
+    if date_mode == "yyyymmdd":
+        prefix_parts.append(date.today().strftime("%Y%m%d"))
+    elif date_mode == "yyyymm":
+        prefix_parts.append(date.today().strftime("%Y%m"))
+    prefix_core = separator.join([part for part in prefix_parts if part]) if separator else "".join(prefix_parts)
+    prefix = f"{prefix_core}{separator}" if prefix_core and separator else prefix_core
     rows = con.execute(
         "SELECT reference_no FROM ops_documents WHERE tenant_id=? AND reference_no LIKE ?",
         (clean_tenant_id, f"{prefix}%"),
@@ -453,10 +468,10 @@ def _next_document_reference_no(con: sqlite3.Connection, *, tenant_id: str, cate
     max_seq = 0
     for row in rows:
         reference_no = str(row["reference_no"] or "").strip()
-        matched = re.match(rf"^{re.escape(prefix)}(\d{{3,}})$", reference_no)
+        matched = re.match(rf"^{re.escape(prefix)}(\d{{2,}})$", reference_no)
         if matched:
             max_seq = max(max_seq, int(matched.group(1)))
-    return f"{prefix}{max_seq + 1:03d}"
+    return f"{prefix}{max_seq + 1:0{sequence_digits}d}"
 
 
 def next_document_reference_no(*, tenant_id: str, category: str) -> str:

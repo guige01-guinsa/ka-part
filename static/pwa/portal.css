@@ -340,6 +340,12 @@ body {
   min-width: 220px;
 }
 
+.code-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .field span {
   color: var(--muted);
   font-size: 12px;
@@ -672,6 +678,10 @@ body {
 
   .form-grid,
   .form-grid.compact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .code-grid {
     grid-template-columns: 1fr;
   }
 

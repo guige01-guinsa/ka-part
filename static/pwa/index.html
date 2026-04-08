@@ -450,6 +450,45 @@
             </label>
             <div id="opsDocumentCategorySummary" class="badge-group"></div>
           </div>
+          <details class="feed-item">
+            <summary>문서번호 체계 설정</summary>
+            <div class="form-grid compact-grid">
+              <label class="field">
+                <span>구분자</span>
+                <input id="docNumberSeparator" type="text" maxlength="2" placeholder="예: -" />
+              </label>
+              <label class="field">
+                <span>날짜 형식</span>
+                <select id="docNumberDateMode">
+                  <option value="yyyymmdd">YYYYMMDD</option>
+                  <option value="yyyymm">YYYYMM</option>
+                  <option value="none">날짜 없음</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>일련번호 자리수</span>
+                <input id="docNumberDigits" type="number" min="2" max="6" step="1" value="3" />
+              </label>
+              <div class="field field-span">
+                <span>분류코드</span>
+                <div class="code-grid">
+                  <label class="field"><span>계약</span><input id="docCodeContract" type="text" maxlength="8" /></label>
+                  <label class="field"><span>공문</span><input id="docCodeLetter" type="text" maxlength="8" /></label>
+                  <label class="field"><span>보고</span><input id="docCodeReport" type="text" maxlength="8" /></label>
+                  <label class="field"><span>예산</span><input id="docCodeBudget" type="text" maxlength="8" /></label>
+                  <label class="field"><span>입주</span><input id="docCodeMoveIn" type="text" maxlength="8" /></label>
+                  <label class="field"><span>점검</span><input id="docCodeInspection" type="text" maxlength="8" /></label>
+                  <label class="field"><span>기타</span><input id="docCodeOther" type="text" maxlength="8" /></label>
+                </div>
+              </div>
+            </div>
+            <div class="cta-row">
+              <button id="btnLoadDocNumberingConfig" class="ghost-btn" type="button">설정 불러오기</button>
+              <button id="btnSaveDocNumberingConfig" data-ops-config="1" class="ghost-btn" type="button">설정 저장</button>
+              <button id="btnResetDocNumberingConfig" data-ops-config="1" class="ghost-btn" type="button">기본값 복원</button>
+            </div>
+            <div id="opsDocNumberingPreview" class="detail-block">문서번호 체계 설정을 불러오는 중입니다.</div>
+          </details>
           <div class="table-wrap">
             <table class="data-table">
               <thead>

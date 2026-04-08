@@ -35,6 +35,7 @@
   let selectedDocumentId = 0;
   let selectedScheduleId = 0;
   let selectedVendorId = 0;
+  let documentNumberingConfig = null;
 
   function setMessage(selector, message, isError = false) {
     const el = $(selector);
@@ -80,6 +81,10 @@
     if (!me || !me.user) return false;
     if (me.user.is_admin || me.user.is_site_admin) return true;
     return ["manager", "desk", "staff"].includes(String(me.user.role || ""));
+  }
+
+  function canManageDocNumberingConfig() {
+    return !!(me && me.user && (me.user.is_admin || me.user.is_site_admin));
   }
 
   function currentTenantId() {
@@ -320,6 +325,10 @@
     document.querySelectorAll("[data-ops-write='1']").forEach((el) => {
       el.disabled = !editable;
     });
+    const configurable = canManageDocNumberingConfig();
+    document.querySelectorAll("[data-ops-config='1']").forEach((el) => {
+      el.disabled = !configurable;
+    });
     const hint = $("#opsReadOnlyHint");
     if (!hint) return;
     hint.textContent = editable
@@ -358,6 +367,59 @@
     $("#documentSummary").value = "";
     if ($("#documentSampleFile")) $("#documentSampleFile").value = "";
     $("#opsDocumentDetail").textContent = "문서를 선택하거나 새로 등록하세요.";
+  }
+
+  function numberingConfigFromForm() {
+    return {
+      separator: String($("#docNumberSeparator")?.value || "").trim(),
+      date_mode: String($("#docNumberDateMode")?.value || "yyyymmdd").trim(),
+      sequence_digits: Number($("#docNumberDigits")?.value || 3),
+      category_codes: {
+        계약: String($("#docCodeContract")?.value || "").trim(),
+        공문: String($("#docCodeLetter")?.value || "").trim(),
+        보고: String($("#docCodeReport")?.value || "").trim(),
+        예산: String($("#docCodeBudget")?.value || "").trim(),
+        입주: String($("#docCodeMoveIn")?.value || "").trim(),
+        점검: String($("#docCodeInspection")?.value || "").trim(),
+        기타: String($("#docCodeOther")?.value || "").trim(),
+      },
+    };
+  }
+
+  function applyDocumentNumberingConfig(config) {
+    const item = config || {};
+    const codes = item.category_codes || {};
+    $("#docNumberSeparator").value = String(item.separator || "-");
+    $("#docNumberDateMode").value = String(item.date_mode || "yyyymmdd");
+    $("#docNumberDigits").value = String(item.sequence_digits || 3);
+    $("#docCodeContract").value = String(codes["계약"] || "");
+    $("#docCodeLetter").value = String(codes["공문"] || "");
+    $("#docCodeReport").value = String(codes["보고"] || "");
+    $("#docCodeBudget").value = String(codes["예산"] || "");
+    $("#docCodeMoveIn").value = String(codes["입주"] || "");
+    $("#docCodeInspection").value = String(codes["점검"] || "");
+    $("#docCodeOther").value = String(codes["기타"] || "");
+  }
+
+  function renderDocumentNumberingPreview(item) {
+    const box = $("#opsDocNumberingPreview");
+    if (!box) return;
+    const config = item?.config || {};
+    const previews = item?.preview_examples || {};
+    const dateLabelMap = {
+      yyyymmdd: "YYYYMMDD",
+      yyyymm: "YYYYMM",
+      none: "날짜 없음",
+    };
+    box.innerHTML = [
+      `<strong>현재 규칙</strong>`,
+      `구분자: ${escapeHtml(config.separator || "-") || "(없음)"}`,
+      `날짜 형식: ${escapeHtml(dateLabelMap[config.date_mode] || config.date_mode || "-")}`,
+      `일련번호 자리수: ${escapeHtml(String(config.sequence_digits || 3))}`,
+      ``,
+      `<strong>다음 번호 미리보기</strong>`,
+      ...DOCUMENT_CATEGORY_VALUES.map((category) => `${escapeHtml(category)}: ${escapeHtml(previews[category] || "-")}`),
+    ].join("<br>");
   }
 
   function clearScheduleForm() {
@@ -682,6 +744,42 @@
       due_date: String($("#documentDueDate").value || "").trim(),
       reference_no: String($("#documentRefNo").value || "").trim(),
     };
+  }
+
+  async function loadDocumentNumberingConfig() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return null;
+    const data = await api(`/api/ops/documents/numbering_config?tenant_id=${encodeURIComponent(tenantId)}`);
+    documentNumberingConfig = data.item || null;
+    applyDocumentNumberingConfig(documentNumberingConfig?.config || {});
+    renderDocumentNumberingPreview(documentNumberingConfig);
+    return documentNumberingConfig;
+  }
+
+  async function saveDocumentNumberingConfig() {
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const data = await api("/api/ops/documents/numbering_config", {
+      method: "PATCH",
+      body: JSON.stringify({ tenant_id: tenantId, config: numberingConfigFromForm() }),
+    });
+    documentNumberingConfig = data.item || null;
+    applyDocumentNumberingConfig(documentNumberingConfig?.config || {});
+    renderDocumentNumberingPreview(documentNumberingConfig);
+    setMessage("#opsDocumentMsg", "문서번호 체계 설정을 저장했습니다.");
+  }
+
+  async function resetDocumentNumberingConfig() {
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const data = await api("/api/ops/documents/numbering_config", {
+      method: "PATCH",
+      body: JSON.stringify({ tenant_id: tenantId, reset: true }),
+    });
+    documentNumberingConfig = data.item || null;
+    applyDocumentNumberingConfig(documentNumberingConfig?.config || {});
+    renderDocumentNumberingPreview(documentNumberingConfig);
+    setMessage("#opsDocumentMsg", "문서번호 체계를 기본값으로 복원했습니다.");
   }
 
   async function fillNextDocumentReference() {
@@ -1340,6 +1438,7 @@
     await generateReport();
     await loadOpsDashboard();
     await loadOpsNotices();
+    await loadDocumentNumberingConfig();
     await loadOpsDocuments();
     await loadOpsVendors();
     await loadOpsSchedules();
@@ -1377,6 +1476,9 @@
     $("#btnUpdateDocument")?.addEventListener("click", () => updateDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnDeleteDocument")?.addEventListener("click", () => deleteDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnAutoDocumentRefNo")?.addEventListener("click", () => fillNextDocumentReference().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnLoadDocNumberingConfig")?.addEventListener("click", () => loadDocumentNumberingConfig().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnSaveDocNumberingConfig")?.addEventListener("click", () => saveDocumentNumberingConfig().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnResetDocNumberingConfig")?.addEventListener("click", () => resetDocumentNumberingConfig().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnRenderDocumentPdf")?.addEventListener("click", () => renderDocumentPdf().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnSampleDocumentPdf")?.addEventListener("click", () => renderSampleDocumentPdf().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnExportDocumentLedger")?.addEventListener("click", () => exportDocumentLedgerExcel().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));

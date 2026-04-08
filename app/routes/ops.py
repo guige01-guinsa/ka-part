@@ -6,7 +6,15 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
-from ..db import append_audit_log, get_tenant, log_usage
+from ..db import (
+    append_audit_log,
+    default_document_numbering_config,
+    get_tenant,
+    get_tenant_document_numbering_config,
+    log_usage,
+    normalize_document_numbering_config,
+    update_tenant_document_numbering_config,
+)
 from ..document_sample_service import extract_document_sample
 from ..ops_db import (
     create_document,
@@ -83,6 +91,20 @@ def _require_ops_editor(request: Request, payload: Optional[Dict[str, Any]] = No
     return user, tenant_id
 
 
+def _require_ops_manager(request: Request, payload: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], str]:
+    user, tenant_id = _resolve_ops_context(request, payload)
+    if int(user.get("is_admin") or 0) != 1 and int(user.get("is_site_admin") or 0) != 1:
+        raise HTTPException(status_code=403, detail="문서번호 체계 설정 권한이 없습니다.")
+    return user, tenant_id
+
+
+def _numbering_preview_map(*, tenant_id: str) -> Dict[str, str]:
+    return {
+        category: next_document_reference_no(tenant_id=tenant_id, category=category)
+        for category in ("계약", "공문", "보고", "예산", "입주", "점검", "기타")
+    }
+
+
 @router.get("/ops/dashboard")
 def ops_dashboard(request: Request, tenant_id: str = Query(default="")) -> Dict[str, Any]:
     user, resolved_tenant_id = _resolve_ops_context(request, {"tenant_id": tenant_id})
@@ -154,6 +176,47 @@ def ops_documents_list(
         "items": list_documents(tenant_id=resolved_tenant_id, status=status, category=category),
         "category_counts": summarize_document_categories(tenant_id=resolved_tenant_id),
         "selected_category": str(category or "").strip(),
+    }
+
+
+@router.get("/ops/documents/numbering_config")
+def ops_documents_numbering_config(request: Request, tenant_id: str = Query(default="")) -> Dict[str, Any]:
+    _user, resolved_tenant_id = _resolve_ops_context(request, {"tenant_id": tenant_id})
+    config = get_tenant_document_numbering_config(resolved_tenant_id)
+    return {
+        "ok": True,
+        "item": {
+            "config": config,
+            "defaults": default_document_numbering_config(),
+            "preview_examples": _numbering_preview_map(tenant_id=resolved_tenant_id),
+        },
+    }
+
+
+@router.patch("/ops/documents/numbering_config")
+def ops_documents_numbering_config_update(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    user, tenant_id = _require_ops_manager(request, payload)
+    if bool(payload.get("reset")):
+        config = update_tenant_document_numbering_config(tenant_id, default_document_numbering_config())
+    else:
+        raw_config = payload.get("config")
+        if raw_config is None:
+            raw_config = {
+                "separator": payload.get("separator"),
+                "date_mode": payload.get("date_mode"),
+                "sequence_digits": payload.get("sequence_digits"),
+                "category_codes": payload.get("category_codes"),
+            }
+        config = update_tenant_document_numbering_config(tenant_id, normalize_document_numbering_config(raw_config))
+    log_usage(tenant_id, "ops.documents.numbering_config.update")
+    append_audit_log(tenant_id, "update_document_numbering_config", _actor_label(user), {"config": config})
+    return {
+        "ok": True,
+        "item": {
+            "config": config,
+            "defaults": default_document_numbering_config(),
+            "preview_examples": _numbering_preview_map(tenant_id=tenant_id),
+        },
     }
 
 

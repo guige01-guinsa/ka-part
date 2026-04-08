@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import re
 import sys
 from pathlib import Path
 
@@ -595,6 +596,67 @@ def test_operations_admin_module_blocks_reader_write_access(app_client) -> None:
 
     allowed_read = client.get("/api/ops/notices")
     assert allowed_read.status_code == 200
+
+
+def test_document_numbering_config_is_tenant_configurable(app_client) -> None:
+    client = app_client
+    _bootstrap_admin_and_tenant(client)
+
+    default_config = client.get("/api/ops/documents/numbering_config?tenant_id=ys_thesharp")
+    assert default_config.status_code == 200
+    assert default_config.json()["item"]["config"]["date_mode"] == "yyyymmdd"
+    assert default_config.json()["item"]["config"]["category_codes"]["보고"] == "RPT"
+
+    updated = client.patch(
+        "/api/ops/documents/numbering_config",
+        json={
+            "tenant_id": "ys_thesharp",
+            "config": {
+                "separator": "_",
+                "date_mode": "yyyymm",
+                "sequence_digits": 4,
+                "category_codes": {
+                    "계약": "CONT",
+                    "공문": "LTR",
+                    "보고": "REP",
+                    "예산": "BUD",
+                    "입주": "MOVE",
+                    "점검": "CHK",
+                    "기타": "ETC",
+                },
+            },
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["item"]["config"]["separator"] == "_"
+    assert updated.json()["item"]["config"]["sequence_digits"] == 4
+    assert updated.json()["item"]["preview_examples"]["보고"].startswith("REP_")
+
+    next_reference = client.get("/api/ops/documents/next_reference?tenant_id=ys_thesharp&category=보고")
+    assert next_reference.status_code == 200
+    generated = str(next_reference.json()["item"]["reference_no"])
+    assert re.match(r"^REP_\d{6}_\d{4}$", generated)
+
+    created = client.post(
+        "/api/ops/documents",
+        json={
+            "tenant_id": "ys_thesharp",
+            "title": "커스텀 번호 보고서",
+            "summary": "설정 변경 후 자동번호 테스트",
+            "category": "보고",
+            "status": "작성중",
+        },
+    )
+    assert created.status_code == 200
+    assert re.match(r"^REP_\d{6}_\d{4}$", str(created.json()["item"]["reference_no"]))
+
+    reset = client.patch(
+        "/api/ops/documents/numbering_config",
+        json={"tenant_id": "ys_thesharp", "reset": True},
+    )
+    assert reset.status_code == 200
+    assert reset.json()["item"]["config"]["separator"] == "-"
+    assert reset.json()["item"]["config"]["date_mode"] == "yyyymmdd"
 
 
 def test_operations_admin_document_pdf_generation_and_sample_reference(app_client) -> None:

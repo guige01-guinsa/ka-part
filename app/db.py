@@ -20,6 +20,22 @@ DB_PATH = DATA_DIR / "ka.db"
 
 _TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
 _LOGIN_ID_RE = re.compile(r"^[a-z0-9._-]{2,32}$")
+_DOC_NUMBERING_DATE_MODES = {"none", "yyyymm", "yyyymmdd"}
+_DOC_NUMBERING_CATEGORY_DEFAULT_CODES = {
+    "계약": "CTR",
+    "공문": "LTR",
+    "보고": "RPT",
+    "예산": "BDG",
+    "입주": "MOV",
+    "점검": "INS",
+    "기타": "ETC",
+}
+_DOC_NUMBERING_DEFAULTS = {
+    "separator": "-",
+    "date_mode": "yyyymmdd",
+    "sequence_digits": 3,
+    "category_codes": dict(_DOC_NUMBERING_CATEGORY_DEFAULT_CODES),
+}
 
 
 def now_iso() -> str:
@@ -108,6 +124,51 @@ def _clean_text(value: Any, max_len: int) -> str | None:
     return text[:max_len]
 
 
+def default_document_numbering_config() -> Dict[str, Any]:
+    return json.loads(json.dumps(_DOC_NUMBERING_DEFAULTS, ensure_ascii=False))
+
+
+def normalize_document_numbering_config(value: Any) -> Dict[str, Any]:
+    raw: Dict[str, Any]
+    if isinstance(value, str):
+        try:
+            raw = json.loads(value) if str(value).strip() else {}
+        except Exception:
+            raw = {}
+    elif isinstance(value, dict):
+        raw = dict(value)
+    else:
+        raw = {}
+
+    separator = str(raw.get("separator") or _DOC_NUMBERING_DEFAULTS["separator"]).strip()
+    if len(separator) > 2 or any(ch.isalnum() for ch in separator):
+        separator = _DOC_NUMBERING_DEFAULTS["separator"]
+
+    date_mode = str(raw.get("date_mode") or _DOC_NUMBERING_DEFAULTS["date_mode"]).strip().lower()
+    if date_mode not in _DOC_NUMBERING_DATE_MODES:
+        date_mode = str(_DOC_NUMBERING_DEFAULTS["date_mode"])
+
+    try:
+        sequence_digits = int(raw.get("sequence_digits") or _DOC_NUMBERING_DEFAULTS["sequence_digits"])
+    except Exception:
+        sequence_digits = int(_DOC_NUMBERING_DEFAULTS["sequence_digits"])
+    sequence_digits = max(2, min(6, sequence_digits))
+
+    raw_codes = raw.get("category_codes") or raw.get("codes") or {}
+    codes: Dict[str, str] = {}
+    for category, default_code in _DOC_NUMBERING_CATEGORY_DEFAULT_CODES.items():
+        candidate = str((raw_codes or {}).get(category) or default_code).strip().upper()
+        candidate = re.sub(r"[^A-Z0-9]", "", candidate)[:8] or default_code
+        codes[category] = candidate
+
+    return {
+        "separator": separator,
+        "date_mode": date_mode,
+        "sequence_digits": sequence_digits,
+        "category_codes": codes,
+    }
+
+
 def _ensure_column(con: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
     rows = con.execute(f"PRAGMA table_info({table})").fetchall()
     names = {str(row["name"]) for row in rows}
@@ -132,6 +193,7 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
           site_code TEXT,
           site_name TEXT,
           api_key_hash TEXT NOT NULL UNIQUE,
+          ops_document_numbering_json TEXT,
           status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','inactive')),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
@@ -202,6 +264,7 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(con, "staff_users", "tenant_id", "tenant_id TEXT REFERENCES tenants(id) ON DELETE SET NULL")
+    _ensure_column(con, "tenants", "ops_document_numbering_json", "ops_document_numbering_json TEXT")
 
 
 def init_db() -> None:
@@ -290,7 +353,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 def _tenant_row(con: sqlite3.Connection, tenant_id: str) -> Optional[sqlite3.Row]:
     return con.execute(
         """
-        SELECT id, name, site_code, site_name, status, created_at, updated_at, last_used_at
+        SELECT id, name, site_code, site_name, ops_document_numbering_json, status, created_at, updated_at, last_used_at
         FROM tenants
         WHERE id=?
         LIMIT 1
@@ -339,6 +402,7 @@ def create_tenant(
         con.commit()
         row = _tenant_row(con, clean_tenant_id)
         out = dict(row) if row else {"id": clean_tenant_id, "name": clean_name}
+        out["ops_document_numbering"] = normalize_document_numbering_config(out.pop("ops_document_numbering_json", None))
         out["api_key"] = raw_api_key
         return out
     finally:
@@ -481,6 +545,7 @@ def ensure_bootstrap_tenant(
         con.commit()
         fresh = _tenant_row(con, clean_tenant_id)
         out = dict(fresh) if fresh else {"id": clean_tenant_id, "name": clean_name}
+        out["ops_document_numbering"] = normalize_document_numbering_config(out.pop("ops_document_numbering_json", None))
         out["api_key"] = raw_api_key
         return out
     finally:
@@ -654,14 +719,17 @@ def list_tenants(*, active_only: bool = False) -> List[Dict[str, Any]]:
     try:
         _ensure_schema(con)
         sql = """
-            SELECT id, name, site_code, site_name, status, created_at, updated_at, last_used_at
+            SELECT id, name, site_code, site_name, ops_document_numbering_json, status, created_at, updated_at, last_used_at
             FROM tenants
         """
         if active_only:
             sql += " WHERE status='active'"
         sql += " ORDER BY name ASC, id ASC"
         rows = con.execute(sql).fetchall()
-        return [dict(row) for row in rows]
+        items = [dict(row) for row in rows]
+        for item in items:
+            item["ops_document_numbering"] = normalize_document_numbering_config(item.pop("ops_document_numbering_json", None))
+        return items
     finally:
         con.close()
 
@@ -671,7 +739,11 @@ def get_tenant(tenant_id: str) -> Optional[Dict[str, Any]]:
     try:
         _ensure_schema(con)
         row = _tenant_row(con, tenant_id)
-        return dict(row) if row else None
+        if not row:
+            return None
+        item = dict(row)
+        item["ops_document_numbering"] = normalize_document_numbering_config(item.pop("ops_document_numbering_json", None))
+        return item
     finally:
         con.close()
 
@@ -691,6 +763,7 @@ def rotate_tenant_api_key(tenant_id: str) -> Dict[str, Any]:
         con.commit()
         row = _tenant_row(con, clean_tenant_id)
         out = dict(row) if row else {"id": clean_tenant_id}
+        out["ops_document_numbering"] = normalize_document_numbering_config(out.pop("ops_document_numbering_json", None))
         out["api_key"] = raw_api_key
         return out
     finally:
@@ -722,14 +795,52 @@ def get_tenant_by_api_key(api_key: str) -> Optional[Dict[str, Any]]:
         _ensure_schema(con)
         row = con.execute(
             """
-            SELECT id, name, site_code, site_name, status, created_at, updated_at, last_used_at
+            SELECT id, name, site_code, site_name, ops_document_numbering_json, status, created_at, updated_at, last_used_at
             FROM tenants
             WHERE api_key_hash=? AND status='active'
             LIMIT 1
             """,
             (digest,),
         ).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        item = dict(row)
+        item["ops_document_numbering"] = normalize_document_numbering_config(item.pop("ops_document_numbering_json", None))
+        return item
+    finally:
+        con.close()
+
+
+def get_tenant_document_numbering_config(tenant_id: str) -> Dict[str, Any]:
+    clean_tenant_id = _clean_tenant_id(tenant_id)
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        row = con.execute(
+            "SELECT ops_document_numbering_json FROM tenants WHERE id=? LIMIT 1",
+            (clean_tenant_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("tenant not found")
+        return normalize_document_numbering_config(row["ops_document_numbering_json"])
+    finally:
+        con.close()
+
+
+def update_tenant_document_numbering_config(tenant_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    clean_tenant_id = _clean_tenant_id(tenant_id)
+    normalized = normalize_document_numbering_config(config)
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        cur = con.execute(
+            "UPDATE tenants SET ops_document_numbering_json=?, updated_at=? WHERE id=?",
+            (json.dumps(normalized, ensure_ascii=False, separators=(",", ":")), now_iso(), clean_tenant_id),
+        )
+        if cur.rowcount <= 0:
+            raise ValueError("tenant not found")
+        con.commit()
+        return normalized
     finally:
         con.close()
 
