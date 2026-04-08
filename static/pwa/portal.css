@@ -293,6 +293,18 @@ body {
   font-weight: 700;
 }
 
+.summary-chip-btn {
+  border: 1px solid transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.summary-chip-btn.active {
+  border-color: rgba(13, 106, 103, 0.28);
+  background: rgba(13, 106, 103, 0.16);
+  box-shadow: 0 0 0 3px rgba(13, 106, 103, 0.08);
+}
+
 .form-grid,
 .feed-grid,
 .stage-grid {
@@ -322,6 +334,10 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.filter-field {
+  min-width: 220px;
 }
 
 .field span {
@@ -580,6 +596,12 @@ body {
 
 .data-table tbody tr:hover {
   background: rgba(13, 106, 103, 0.04);
+}
+
+.category-group-row td {
+  background: rgba(13, 106, 103, 0.08);
+  color: var(--accent-strong);
+  font-weight: 700;
 }
 
 .mono {

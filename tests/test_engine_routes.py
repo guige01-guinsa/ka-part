@@ -467,6 +467,20 @@ def test_operations_admin_module_supports_crud_and_dashboard(app_client) -> None
     assert document.status_code == 200
     document_id = int(document.json()["item"]["id"])
 
+    archived_document = client.post(
+        "/api/ops/documents",
+        json={
+            "tenant_id": "ys_thesharp",
+            "title": "외벽 보수 계약서",
+            "summary": "외벽 보수 계약 완료본 보관",
+            "category": "계약",
+            "status": "보관",
+            "owner": "관리소장",
+            "reference_no": "CT-2026-001",
+        },
+    )
+    assert archived_document.status_code == 200
+
     schedule = client.post(
         "/api/ops/schedules",
         json={
@@ -495,6 +509,14 @@ def test_operations_admin_module_supports_crud_and_dashboard(app_client) -> None
     notices = client.get("/api/ops/notices?tenant_id=ys_thesharp")
     assert notices.status_code == 200
     assert notices.json()["items"][0]["title"] == "4월 정기 소독 안내"
+
+    documents = client.get("/api/ops/documents?tenant_id=ys_thesharp&category=보고")
+    assert documents.status_code == 200
+    assert len(documents.json()["items"]) == 1
+    assert documents.json()["items"][0]["title"] == "소방 점검 보고서"
+    category_counts = {row["category"]: row for row in documents.json()["category_counts"]}
+    assert category_counts["보고"]["total_count"] == 1
+    assert category_counts["계약"]["total_count"] == 1
 
     updated_document = client.patch(
         f"/api/ops/documents/{document_id}",

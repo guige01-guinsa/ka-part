@@ -432,6 +432,22 @@
           </div>
           <div class="inline-note">제목과 요약/메모만 입력해도 기안서 PDF를 바로 생성할 수 있습니다. 샘플 파일은 참조용 PDF 생성에만 사용됩니다.</div>
           <div id="opsDocumentMsg" class="inline-message" aria-live="polite"></div>
+          <div class="filter-row">
+            <label class="field filter-field">
+              <span>문서관리대장 분류</span>
+              <select id="documentCategoryFilter">
+                <option value="">전체</option>
+                <option value="계약">계약</option>
+                <option value="공문">공문</option>
+                <option value="보고">보고</option>
+                <option value="예산">예산</option>
+                <option value="입주">입주</option>
+                <option value="점검">점검</option>
+                <option value="기타">기타</option>
+              </select>
+            </label>
+            <div id="opsDocumentCategorySummary" class="badge-group"></div>
+          </div>
           <div class="table-wrap">
             <table class="data-table">
               <thead>

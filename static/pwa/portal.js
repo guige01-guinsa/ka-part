@@ -4,6 +4,7 @@
   const $ = (sel) => document.querySelector(sel);
   const STATUS_VALUES = ["접수", "처리중", "완료", "이월"];
   const MAX_CHAT_DIGEST_IMAGES = 30;
+  const DOCUMENT_CATEGORY_VALUES = ["계약", "공문", "보고", "예산", "입주", "점검", "기타"];
   const NOTICE_STATUS_LABELS = {
     draft: "임시저장",
     published: "게시중",
@@ -419,6 +420,73 @@
     ].join("<br>");
   }
 
+  function selectedDocumentCategoryFilter() {
+    return String($("#documentCategoryFilter")?.value || "").trim();
+  }
+
+  function documentCategoryOrder(category) {
+    const index = DOCUMENT_CATEGORY_VALUES.indexOf(String(category || ""));
+    return index === -1 ? DOCUMENT_CATEGORY_VALUES.length : index;
+  }
+
+  function renderDocumentCategorySummary(counts, selectedCategory = "") {
+    const summary = $("#opsDocumentCategorySummary");
+    if (!summary) return;
+    const rows = Array.isArray(counts) ? counts : [];
+    const total = rows.reduce((acc, row) => acc + Number(row.total_count || 0), 0);
+    summary.innerHTML = [
+      `<button class="summary-chip summary-chip-btn${selectedCategory ? "" : " active"}" type="button" data-category="">전체 ${escapeHtml(String(total))}건</button>`,
+      ...DOCUMENT_CATEGORY_VALUES.map((category) => {
+        const matched = rows.find((row) => String(row.category || "") === category);
+        const totalCount = Number((matched || {}).total_count || 0);
+        const openCount = Number((matched || {}).open_count || 0);
+        return `<button class="summary-chip summary-chip-btn${selectedCategory === category ? " active" : ""}" type="button" data-category="${escapeHtml(category)}">${escapeHtml(category)} ${escapeHtml(String(totalCount))}건 / 진행 ${escapeHtml(String(openCount))}</button>`;
+      }),
+    ].join("");
+    summary.querySelectorAll("[data-category]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const value = String(button.getAttribute("data-category") || "");
+        if ($("#documentCategoryFilter")) $("#documentCategoryFilter").value = value;
+        loadOpsDocuments().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true));
+      });
+    });
+  }
+
+  function documentLedgerRowHtml(item) {
+    return `
+      <tr class="ops-document-row" data-id="${Number(item.id || 0)}">
+        <td>${escapeHtml(item.title || "-")}</td>
+        <td>${escapeHtml(item.category || "-")}</td>
+        <td>${escapeHtml(item.status || "-")}</td>
+        <td>${escapeHtml(item.owner || "-")}</td>
+        <td>${escapeHtml(formatDate(item.due_date))}</td>
+      </tr>
+    `;
+  }
+
+  function buildDocumentLedgerHtml(items) {
+    const rows = Array.isArray(items) ? items : [];
+    if (!rows.length) {
+      return '<tr><td colspan="5" class="empty-state">등록된 문서가 없습니다.</td></tr>';
+    }
+    const groups = new Map();
+    for (const row of rows) {
+      const category = String(row.category || "기타");
+      if (!groups.has(category)) groups.set(category, []);
+      groups.get(category).push(row);
+    }
+    return Array.from(groups.keys())
+      .sort((left, right) => documentCategoryOrder(left) - documentCategoryOrder(right) || left.localeCompare(right, "ko"))
+      .map((category) => {
+        const groupedRows = groups.get(category) || [];
+        return [
+          `<tr class="category-group-row"><td colspan="5">${escapeHtml(category)} · ${escapeHtml(String(groupedRows.length))}건</td></tr>`,
+          groupedRows.map((item) => documentLedgerRowHtml(item)).join(""),
+        ].join("");
+      })
+      .join("");
+  }
+
   function renderScheduleDetail(item) {
     selectedScheduleId = Number(item.id || 0);
     $("#scheduleTitle").value = String(item.title || "");
@@ -510,20 +578,14 @@
   async function loadOpsDocuments() {
     const tenantId = currentTenantId();
     if (!tenantId) return [];
-    const data = await api(`/api/ops/documents?tenant_id=${encodeURIComponent(tenantId)}`);
+    const category = selectedDocumentCategoryFilter();
+    const params = new URLSearchParams({ tenant_id: tenantId });
+    if (category) params.set("category", category);
+    const data = await api(`/api/ops/documents?${params.toString()}`);
     opsDocuments = Array.isArray(data.items) ? data.items : [];
+    renderDocumentCategorySummary(data.category_counts || [], category);
     const body = $("#opsDocumentsTableBody");
-    body.innerHTML = opsDocuments.length
-      ? opsDocuments.map((item) => `
-        <tr class="ops-document-row" data-id="${Number(item.id || 0)}">
-          <td>${escapeHtml(item.title || "-")}</td>
-          <td>${escapeHtml(item.category || "-")}</td>
-          <td>${escapeHtml(item.status || "-")}</td>
-          <td>${escapeHtml(item.owner || "-")}</td>
-          <td>${escapeHtml(formatDate(item.due_date))}</td>
-        </tr>
-      `).join("")
-      : '<tr><td colspan="5" class="empty-state">등록된 문서가 없습니다.</td></tr>';
+    body.innerHTML = buildDocumentLedgerHtml(opsDocuments);
     body.querySelectorAll(".ops-document-row").forEach((rowEl) => {
       rowEl.addEventListener("click", () => {
         const item = opsDocuments.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
@@ -1296,6 +1358,7 @@
     $("#btnRenderDocumentPdf")?.addEventListener("click", () => renderDocumentPdf().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnSampleDocumentPdf")?.addEventListener("click", () => renderSampleDocumentPdf().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnClearDocument")?.addEventListener("click", () => clearDocumentForm());
+    $("#documentCategoryFilter")?.addEventListener("change", () => loadOpsDocuments().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnCreateVendor")?.addEventListener("click", () => createVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
     $("#btnUpdateVendor")?.addEventListener("click", () => updateVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
     $("#btnDeleteVendor")?.addEventListener("click", () => deleteVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));

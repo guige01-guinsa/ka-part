@@ -22,6 +22,7 @@ from ..ops_db import (
     list_schedules,
     list_vendors,
     ops_dashboard_summary,
+    summarize_document_categories,
     update_document,
     update_notice,
     update_schedule,
@@ -139,9 +140,19 @@ def ops_notices_delete(request: Request, notice_id: int, payload: Dict[str, Any]
 
 
 @router.get("/ops/documents")
-def ops_documents_list(request: Request, tenant_id: str = Query(default=""), status: str = Query(default="")) -> Dict[str, Any]:
+def ops_documents_list(
+    request: Request,
+    tenant_id: str = Query(default=""),
+    status: str = Query(default=""),
+    category: str = Query(default=""),
+) -> Dict[str, Any]:
     _user, resolved_tenant_id = _resolve_ops_context(request, {"tenant_id": tenant_id})
-    return {"ok": True, "items": list_documents(tenant_id=resolved_tenant_id, status=status)}
+    return {
+        "ok": True,
+        "items": list_documents(tenant_id=resolved_tenant_id, status=status, category=category),
+        "category_counts": summarize_document_categories(tenant_id=resolved_tenant_id),
+        "selected_category": str(category or "").strip(),
+    }
 
 
 @router.post("/ops/documents")

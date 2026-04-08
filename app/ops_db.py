@@ -373,7 +373,7 @@ def create_document(
         con.close()
 
 
-def list_documents(*, tenant_id: str, status: str = "", limit: int = 100) -> List[Dict[str, Any]]:
+def list_documents(*, tenant_id: str, status: str = "", category: str = "", limit: int = 100) -> List[Dict[str, Any]]:
     clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
     con = _connect()
     try:
@@ -389,10 +389,44 @@ def list_documents(*, tenant_id: str, status: str = "", limit: int = 100) -> Lis
         if str(status or "").strip():
             sql += " AND status=?"
             params.append(_clean_choice(status, DOCUMENT_STATUS_VALUES, field="status"))
+        if str(category or "").strip():
+            sql += " AND category=?"
+            params.append(_clean_choice(category, DOCUMENT_CATEGORY_VALUES, field="category"))
         sql += " ORDER BY CASE WHEN due_date IS NULL OR due_date='' THEN 1 ELSE 0 END, due_date ASC, updated_at DESC, id DESC LIMIT ?"
         params.append(max(1, min(500, int(limit))))
         rows = con.execute(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def summarize_document_categories(*, tenant_id: str) -> List[Dict[str, Any]]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        rows = con.execute(
+            """
+            SELECT
+              category,
+              COUNT(*) AS total_count,
+              SUM(CASE WHEN status IN ('작성중','검토중') THEN 1 ELSE 0 END) AS open_count
+            FROM ops_documents
+            WHERE tenant_id=?
+            GROUP BY category
+            """,
+            (clean_tenant_id,),
+        ).fetchall()
+        category_map = {str(row["category"]): dict(row) for row in rows}
+        return [
+            {
+                "category": category,
+                "total_count": int((category_map.get(category) or {}).get("total_count") or 0),
+                "open_count": int((category_map.get(category) or {}).get("open_count") or 0),
+            }
+            for category in DOCUMENT_CATEGORY_VALUES
+            if category in category_map
+        ]
     finally:
         con.close()
 
