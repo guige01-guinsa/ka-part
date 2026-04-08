@@ -263,6 +263,57 @@ def test_kakao_digest_pdf_supports_text_and_images(app_client) -> None:
     assert response.content.startswith(b"%PDF")
 
 
+def test_kakao_digest_import_creates_complaints(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    response = client.post(
+        "/api/ai/kakao_digest/import",
+        headers=headers,
+        json={
+            "tenant_id": "ys_thesharp",
+            "channel": "카톡",
+            "image_analysis_model": "gpt-5",
+            "source_text": "카톡 테스트 원문",
+            "rows": [
+                {
+                    "building": "101",
+                    "unit": "1203",
+                    "type": "누수",
+                    "summary": "101동 1203호 누수 심함",
+                    "urgency": "긴급",
+                    "status": "접수",
+                    "manager": "",
+                    "content": "101동 1203호 누수 심함",
+                },
+                {
+                    "building": "103",
+                    "unit": "",
+                    "type": "승강기",
+                    "summary": "103동 엘리베이터 멈춤",
+                    "urgency": "긴급",
+                    "status": "접수",
+                    "manager": "",
+                    "content": "103동 엘리베이터 멈춤 긴급",
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["created_count"] == 2
+
+    listed = client.get("/api/complaints?tenant_id=ys_thesharp", headers=headers)
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert len(items) == 2
+    assert any(item["channel"] == "카톡" for item in items)
+    for item in items:
+        detail = client.get(f"/api/complaints/{item['id']}?tenant_id=ys_thesharp", headers=headers)
+        assert detail.status_code == 200
+        assert detail.json()["item"]["ai_model"] == "gpt-5"
+
+
 def test_attachment_limit_and_group_delete(app_client, tmp_path) -> None:
     client = app_client
     _bootstrap_admin_and_tenant(client)

@@ -38,6 +38,9 @@
   let documentNumberingConfig = null;
   let chatSourcePreviewUrls = [];
   let chatDigestPreviewUrls = [];
+  let lastDigestResult = null;
+  let lastDigestImported = false;
+  let lastDigestSelectedKeys = new Set();
 
   function setMessage(selector, message, isError = false) {
     const el = $(selector);
@@ -694,6 +697,107 @@
       `<strong>요약:</strong> ${escapeHtml(result.summary)}`,
       `<strong>모델:</strong> ${escapeHtml(result.model || "-")}`,
     ].join("<br>");
+  }
+
+  function digestRowKey(row) {
+    return [
+      String(row?.building || "").trim(),
+      String(row?.unit || "").trim(),
+      String(row?.type || "").trim(),
+      String(row?.summary || "").trim(),
+      String(row?.content || "").trim(),
+    ].join("||");
+  }
+
+  function selectedDigestRows() {
+    const rows = Array.isArray(lastDigestResult?.excel_rows) ? lastDigestResult.excel_rows : [];
+    if (!rows.length) return [];
+    return rows.filter((row) => lastDigestSelectedKeys.has(digestRowKey(row)));
+  }
+
+  function resetDigestImportState() {
+    lastDigestResult = null;
+    lastDigestImported = false;
+    lastDigestSelectedKeys = new Set();
+    const button = $("#btnImportDigestComplaints");
+    if (button) {
+      button.disabled = true;
+      button.textContent = "분석 결과 민원 등록";
+    }
+    const hint = $("#chatDigestImportHint");
+    if (hint) {
+      hint.textContent = "카톡 분석 후 첫 항목을 민원 입력폼에 자동 채우고, 추출된 전체 항목은 버튼 한 번으로 민원 등록할 수 있습니다.";
+    }
+  }
+
+  function updateDigestImportState() {
+    const rows = Array.isArray(lastDigestResult?.excel_rows) ? lastDigestResult.excel_rows : [];
+    const count = rows.length;
+    const selectedCount = rows.filter((row) => lastDigestSelectedKeys.has(digestRowKey(row))).length;
+    const button = $("#btnImportDigestComplaints");
+    if (button) {
+      button.disabled = count === 0 || selectedCount === 0 || lastDigestImported;
+      button.textContent = count ? `선택 민원 등록 (${selectedCount}/${count}건)` : "분석 결과 민원 등록";
+    }
+    const hint = $("#chatDigestImportHint");
+    if (!hint) return;
+    if (!count) {
+      hint.textContent = "분석 결과에서 민원 항목이 추출되면 입력폼 자동채우기와 일괄 등록이 활성화됩니다.";
+      return;
+    }
+    if (lastDigestImported) {
+      hint.textContent = `방금 분석 결과 ${count}건을 민원으로 등록했습니다. 다시 분석하면 새 결과로 갱신됩니다.`;
+      return;
+    }
+    if (count === 1) {
+      hint.textContent = "분석 결과 1건을 찾았습니다. 민원 입력폼에 자동 채웠고, 바로 저장하거나 선택 민원 등록 버튼을 사용할 수 있습니다.";
+      return;
+    }
+    hint.textContent = `분석 결과 ${count}건을 찾았습니다. 체크된 민원만 등록되며, 여러 건이면 자동 저장하지 않고 선택 등록으로 처리하는 것이 안전합니다.`;
+  }
+
+  function consumeDigestRow(createdItem) {
+    const rows = Array.isArray(lastDigestResult?.excel_rows) ? lastDigestResult.excel_rows : [];
+    if (!rows.length || !createdItem) return;
+    const createdBuilding = String(createdItem.building || "").trim();
+    const createdUnit = String(createdItem.unit || "").trim();
+    const createdType = String(createdItem.type || "").trim();
+    const createdSummary = String(createdItem.summary || "").trim();
+    const matchIndex = rows.findIndex((row) => (
+      String(row.building || "").trim() === createdBuilding &&
+      String(row.unit || "").trim() === createdUnit &&
+      String(row.type || "").trim() === createdType &&
+      String(row.summary || "").trim() === createdSummary
+    ));
+    if (matchIndex < 0) return;
+    const removed = rows.splice(matchIndex, 1)[0];
+    if (removed) {
+      lastDigestSelectedKeys.delete(digestRowKey(removed));
+    }
+    lastDigestResult = { ...(lastDigestResult || {}), excel_rows: rows, total: rows.length };
+    updateDigestImportState();
+  }
+
+  function applyDigestLeadToIntake(item) {
+    const rows = Array.isArray(item?.excel_rows) ? item.excel_rows : [];
+    if (rows.length !== 1) {
+      lastAiResult = null;
+      renderAiSuggestion(null);
+      return;
+    }
+    const lead = rows[0] || {};
+    $("#buildingInput").value = String(lead.building || "").trim();
+    $("#unitInput").value = String(lead.unit || "").trim();
+    $("#channelInput").value = "카톡";
+    $("#managerInput").value = String(lead.manager || "").trim();
+    $("#contentInput").value = String(lead.content || lead.summary || "").trim();
+    lastAiResult = {
+      type: String(lead.type || "기타").trim() || "기타",
+      urgency: String(lead.urgency || "일반").trim() || "일반",
+      summary: String(lead.summary || lead.content || "").trim(),
+      model: String(item?.image_analysis_model || "kakao-digest").trim() || "kakao-digest",
+    };
+    renderAiSuggestion(lastAiResult);
   }
 
   function syncUserTenantDisplay() {
@@ -1434,6 +1538,7 @@
   async function createComplaint() {
     const payload = complaintPayloadFromForm();
     const files = selectedFiles("#photoInput");
+    const hadDigestRows = Array.isArray(lastDigestResult?.excel_rows) && lastDigestResult.excel_rows.length > 0;
     if (!payload.tenant_id) throw new Error("테넌트를 선택하세요.");
     if (!payload.content) throw new Error("민원내용을 입력하세요.");
     if (files.length > 6) throw new Error("사진은 최대 6장까지 업로드할 수 있습니다.");
@@ -1462,9 +1567,43 @@
     $("#phoneInput").value = "";
     $("#photoInput").value = "";
     updatePhotoHint("#photoInput", "#photoHint");
-    lastAiResult = null;
-    renderAiSuggestion(null);
+    if (hadDigestRows) {
+      consumeDigestRow(item);
+      $("#chatDigestBox").innerHTML = renderChatDigestResult(lastDigestResult);
+      wireDigestResultControls();
+      applyDigestLeadToIntake(lastDigestResult);
+    } else {
+      lastAiResult = null;
+      renderAiSuggestion(null);
+    }
     await reloadAll();
+  }
+
+  async function importDigestComplaints() {
+    const rows = selectedDigestRows();
+    if (!rows.length) throw new Error("먼저 카톡 분석을 실행해 민원 항목을 추출하세요.");
+    if (lastDigestImported) throw new Error("현재 분석 결과는 이미 민원 등록을 마쳤습니다. 다시 분석한 뒤 사용하세요.");
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const data = await api("/api/ai/kakao_digest/import", {
+      method: "POST",
+      body: JSON.stringify({
+        tenant_id: tenantId,
+        rows,
+        source_text: String($("#chatInput").value || "").trim(),
+        image_analysis_model: String(lastDigestResult?.image_analysis_model || "").trim(),
+        channel: "카톡",
+      }),
+    });
+    lastDigestImported = true;
+    updateDigestImportState();
+    $("#chatDigestBox").innerHTML = renderChatDigestResult(lastDigestResult);
+    wireDigestResultControls();
+    const created = Array.isArray(data.items) ? data.items.length : Number(data.created_count || 0);
+    setMessage("#intakeMsg", `카톡 분석 결과 ${created}건을 민원으로 등록했습니다.`);
+    $("#filterStatus").value = "접수";
+    await loadComplaints();
+    await loadDashboard();
   }
 
   async function loadDashboard() {
@@ -1643,29 +1782,76 @@
     $("#reportBox").textContent = String(data.item?.report_text || "");
   }
 
+  function wireDigestResultControls() {
+    document.querySelectorAll(".digest-row-check").forEach((el) => {
+      el.addEventListener("change", () => {
+        const key = String(el.getAttribute("data-row-key") || "").trim();
+        if (!key) return;
+        if (el.checked) {
+          lastDigestSelectedKeys.add(key);
+        } else {
+          lastDigestSelectedKeys.delete(key);
+        }
+        updateDigestImportState();
+      });
+    });
+  }
+
   function renderChatDigestResult(item) {
     const digest = item || {};
-    const lines = [];
+    const rows = Array.isArray(digest.excel_rows) ? digest.excel_rows : [];
+    const sections = [];
     const model = String(digest.image_analysis_model || "").trim();
     const imageCount = Number(digest.input_image_count || 0);
     const total = Number(digest.total || 0);
     if (model || imageCount) {
-      lines.push("분석 메타");
-      lines.push(`- 분석 방식: ${model || "텍스트/규칙 기반"}`);
-      lines.push(`- 입력 이미지 수: ${imageCount}`);
-      lines.push(`- 추출 민원 수: ${total}`);
+      sections.push([
+        "<div class=\"subhead\">분석 메타</div>",
+        "<div class=\"detail-block\">",
+        `분석 방식: ${escapeHtml(model || "텍스트/규칙 기반")}<br>`,
+        `입력 이미지 수: ${escapeHtml(String(imageCount))}<br>`,
+        `추출 민원 수: ${escapeHtml(String(total))}`,
+        "</div>",
+      ].join(""));
     }
     if (digest.analysis_notice) {
-      if (lines.length) lines.push("");
-      lines.push("안내");
-      lines.push(String(digest.analysis_notice || ""));
+      sections.push([
+        "<div class=\"subhead\">안내</div>",
+        `<div class="detail-block">${escapeHtml(String(digest.analysis_notice || ""))}</div>`,
+      ].join(""));
+    }
+    if (rows.length) {
+      sections.push([
+        "<div class=\"subhead\">추출 민원 목록</div>",
+        "<div class=\"table-wrap\"><table class=\"data-table\"><thead><tr>",
+        "<th>선택</th><th>동/호</th><th>유형</th><th>긴급도</th><th>상태</th><th>내용요약</th>",
+        "</tr></thead><tbody>",
+        rows.map((row) => {
+          const key = digestRowKey(row);
+          const checked = lastDigestSelectedKeys.has(key) ? " checked" : "";
+          const location = [String(row.building || "").trim() ? `${escapeHtml(String(row.building || "").trim())}동` : "", String(row.unit || "").trim() ? `${escapeHtml(String(row.unit || "").trim())}호` : ""].filter(Boolean).join(" ");
+          return [
+            "<tr>",
+            `<td><input class="digest-row-check" type="checkbox" data-row-key="${escapeHtml(key)}"${checked}></td>`,
+            `<td>${location || "-"}</td>`,
+            `<td>${escapeHtml(String(row.type || "-"))}</td>`,
+            `<td>${escapeHtml(String(row.urgency || "-"))}</td>`,
+            `<td>${escapeHtml(String(row.status || "-"))}</td>`,
+            `<td>${escapeHtml(String(row.summary || row.content || "-"))}</td>`,
+            "</tr>",
+          ].join("");
+        }).join(""),
+        "</tbody></table></div>",
+      ].join(""));
     }
     const reportText = String(digest.report_text || "").trim();
     if (reportText) {
-      if (lines.length) lines.push("");
-      lines.push(reportText);
+      sections.push([
+        "<div class=\"subhead\">보고서 본문</div>",
+        `<div class="detail-block">${escapeHtml(reportText)}</div>`,
+      ].join(""));
     }
-    return lines.join("\n");
+    return sections.join("");
   }
 
   async function digestChat() {
@@ -1693,9 +1879,24 @@
         body: JSON.stringify({ tenant_id: tenantId, text }),
       });
     }
-    $("#chatDigestBox").textContent = renderChatDigestResult(data.item);
+    lastDigestResult = data.item || null;
+    lastDigestImported = false;
+    lastDigestSelectedKeys = new Set((lastDigestResult?.excel_rows || []).map((row) => digestRowKey(row)));
+    updateDigestImportState();
+    applyDigestLeadToIntake(lastDigestResult);
+    $("#chatDigestBox").innerHTML = renderChatDigestResult(lastDigestResult);
+    wireDigestResultControls();
     if (autogenerated && files.length) {
       setMessage("#intakeMsg", `카톡 원문을 PNG ${files.length}장으로 자동 저장해 함께 분석했습니다.`);
+      return;
+    }
+    const extractedCount = Number(data.item?.total || 0);
+    if (extractedCount > 1) {
+      setMessage("#intakeMsg", `카톡 분석으로 민원 ${extractedCount}건을 찾았습니다. 체크된 항목만 선택 등록하세요.`);
+    } else if (extractedCount === 1) {
+      setMessage("#intakeMsg", "카톡 분석으로 민원 1건을 찾았습니다. 민원 입력폼에 자동 채웠습니다.");
+    } else if (data.item?.analysis_notice) {
+      setMessage("#intakeMsg", String(data.item.analysis_notice), true);
     }
   }
 
@@ -1963,6 +2164,7 @@
     $("#btnDeleteAllAttachments")?.addEventListener("click", () => deleteAttachments(true).catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnGenerateReport")?.addEventListener("click", () => generateReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDigestChat")?.addEventListener("click", () => digestChat().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
+    $("#btnImportDigestComplaints")?.addEventListener("click", () => importDigestComplaints().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDigestPdf")?.addEventListener("click", () => downloadDigestPdf().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnPreviewDigestSource")?.addEventListener("click", () => previewChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDownloadDigestSource")?.addEventListener("click", () => downloadChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
@@ -2011,10 +2213,12 @@
     $("#photoInput")?.addEventListener("change", () => updatePhotoHint("#photoInput", "#photoHint"));
     $("#chatImageInput")?.addEventListener("change", () => {
       clearChatSourcePreview();
+      resetDigestImportState();
       updateChatDigestHint();
     });
     $("#chatInput")?.addEventListener("input", () => {
       clearChatSourcePreview();
+      resetDigestImportState();
       updateChatDigestHint();
     });
     $("#chatInput")?.addEventListener("paste", (event) => handleChatInputPaste(event));
@@ -2064,6 +2268,7 @@
     $("#filterStatus").value = "접수";
     clearChatDigestImagePreview();
     clearChatSourcePreview();
+    resetDigestImportState();
     updateChatDigestHint();
     clearNoticeForm();
     clearComplaintDetail();

@@ -112,6 +112,10 @@ def _download_name(value: str) -> str:
     return cleaned[:80]
 
 
+def _as_row_text(row: Dict[str, Any], key: str, default: str = "") -> str:
+    return str(row.get(key) or default).strip()
+
+
 def _build_summary_input(payload: Dict[str, Any]) -> str:
     parts = []
     building = str(payload.get("building") or "").strip()
@@ -258,6 +262,65 @@ async def ai_kakao_digest_pdf(
     file_name = f"kakao-digest-{_download_name(resolved_tenant_id)}.pdf"
     headers = {"Content-Disposition": f'attachment; filename="{file_name}"'}
     return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers=headers)
+
+
+@router.post("/ai/kakao_digest/import")
+def ai_kakao_digest_import(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    tenant_id, user, tenant = _tenant_id_from_request(request, payload)
+    rows = payload.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(status_code=400, detail="rows is required")
+    if len(rows) > 100:
+        raise HTTPException(status_code=400, detail="한 번에 최대 100건까지 등록할 수 있습니다.")
+
+    actor = user or ensure_service_user(tenant_id)
+    source_text = str(payload.get("source_text") or "").strip()
+    ai_model = str(payload.get("image_analysis_model") or payload.get("ai_model") or "kakao-digest").strip()
+    channel = str(payload.get("channel") or "카톡").strip() or "카톡"
+    created_items: List[Dict[str, Any]] = []
+
+    try:
+        for raw_row in rows:
+            if not isinstance(raw_row, dict):
+                raise HTTPException(status_code=400, detail="rows must contain objects")
+            building = _as_row_text(raw_row, "building")
+            unit = _as_row_text(raw_row, "unit")
+            complaint_type = _as_row_text(raw_row, "type", "기타") or "기타"
+            summary = normalize_summary_text(
+                _as_row_text(raw_row, "summary"),
+                building=building,
+                unit=unit,
+                complaint_type=complaint_type,
+            )
+            item = create_complaint(
+                tenant_id=tenant_id,
+                building=building,
+                unit=unit,
+                complainant_phone=_as_row_text(raw_row, "complainant_phone"),
+                channel=channel,
+                content=_as_row_text(raw_row, "content") or summary,
+                summary=summary,
+                complaint_type=complaint_type,
+                urgency=_as_row_text(raw_row, "urgency", "일반") or "일반",
+                status=_as_row_text(raw_row, "status", "접수") or "접수",
+                manager=_as_row_text(raw_row, "manager"),
+                source_text=source_text,
+                ai_model=ai_model,
+                created_by_user_id=int(actor.get("id")) if actor and actor.get("id") else None,
+                created_by_label=_actor_label(user, tenant),
+            )
+            created_items.append(item)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    log_usage(tenant_id, "ai.kakao_digest.import")
+    append_audit_log(
+        tenant_id,
+        "ai_kakao_digest_import",
+        _actor_label(user, tenant),
+        {"count": len(created_items), "source_text_lines": len(source_text.splitlines())},
+    )
+    return {"ok": True, "created_count": len(created_items), "items": created_items}
 
 
 @router.get("/dashboard/summary")
