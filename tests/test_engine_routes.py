@@ -190,6 +190,25 @@ def test_kakao_digest_supports_images_with_filename_fallback(app_client) -> None
     assert "🖼 첨부 이미지 요약" in item["report_text"]
 
 
+def test_kakao_digest_pdf_supports_text_and_images(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    response = client.post(
+        "/api/ai/kakao_digest/pdf",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": "2026년 4월 8일 오전 9:00, 관리실 : 101동 엘리베이터 멈춤"},
+        files=[
+            ("files", ("101동-엘리베이터-멈춤.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert "attachment;" in response.headers.get("content-disposition", "")
+    assert response.content.startswith(b"%PDF")
+
+
 def test_attachment_limit_and_group_delete(app_client, tmp_path) -> None:
     client = app_client
     _bootstrap_admin_and_tenant(client)

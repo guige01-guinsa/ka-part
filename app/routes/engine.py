@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ..ai_service import MAX_CHAT_DIGEST_IMAGES, analyze_chat_digest, classify_complaint_text, normalize_summary_text
 from ..db import (
@@ -30,6 +30,7 @@ from ..engine_db import (
     list_complaints,
     update_complaint,
 )
+from ..report_pdf import build_kakao_digest_pdf
 
 router = APIRouter()
 AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
@@ -90,6 +91,21 @@ def _actor_label(user: Optional[Dict[str, Any]], tenant: Optional[Dict[str, Any]
     if user:
         return str(user.get("name") or user.get("login_id") or "operator")
     return f"{str((tenant or {}).get('name') or 'tenant')} API"
+
+
+def _tenant_label(tenant_id: str, tenant: Optional[Dict[str, Any]]) -> str:
+    item = tenant or get_tenant(tenant_id) or {}
+    tenant_name = str(item.get("name") or "").strip()
+    resolved_tenant_id = str(item.get("id") or tenant_id or "").strip()
+    if tenant_name and resolved_tenant_id:
+        return f"{tenant_name} ({resolved_tenant_id})"
+    return tenant_name or resolved_tenant_id or "-"
+
+
+def _download_name(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(value or "").strip())
+    cleaned = cleaned.strip("-") or "report"
+    return cleaned[:80]
 
 
 def _build_summary_input(payload: Dict[str, Any]) -> str:
@@ -203,6 +219,41 @@ async def ai_kakao_digest_images(
         {"lines": len(str(text or "").splitlines()), "images": len(image_inputs)},
     )
     return {"ok": True, "item": item}
+
+
+@router.post("/ai/kakao_digest/pdf")
+async def ai_kakao_digest_pdf(
+    request: Request,
+    tenant_id: str = Form(default=""),
+    text: str = Form(default=""),
+    files: List[UploadFile] = File(default=[]),
+) -> StreamingResponse:
+    payload = {"tenant_id": tenant_id}
+    resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
+    source_text = str(text or "").strip()
+    image_inputs = await _read_digest_images(list(files or []))
+    if not source_text and not image_inputs:
+        raise HTTPException(status_code=400, detail="text or image is required")
+    try:
+        digest = analyze_chat_digest(source_text, image_inputs=image_inputs)
+        pdf_bytes = build_kakao_digest_pdf(
+            digest=digest,
+            tenant_label=_tenant_label(resolved_tenant_id, tenant),
+            source_text=source_text,
+            image_inputs=image_inputs,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_usage(resolved_tenant_id, "ai.kakao_digest.pdf")
+    append_audit_log(
+        resolved_tenant_id,
+        "ai_kakao_digest_pdf",
+        _actor_label(user, tenant),
+        {"lines": len(source_text.splitlines()), "images": len(image_inputs)},
+    )
+    file_name = f"kakao-digest-{_download_name(resolved_tenant_id)}.pdf"
+    headers = {"Content-Disposition": f'attachment; filename="{file_name}"'}
+    return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers=headers)
 
 
 @router.get("/dashboard/summary")

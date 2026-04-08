@@ -124,6 +124,46 @@
     return body;
   }
 
+  async function authFetchBlob(url, opts = {}) {
+    const headers = { ...(opts.headers || {}) };
+    const token = window.KAAuth.getToken();
+    if (token && !headers.Authorization) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    const response = await fetch(url, {
+      ...opts,
+      headers,
+      credentials: "same-origin",
+    });
+    if (response.status === 401) {
+      window.KAAuth.clearSession({ includeSensitive: true, broadcast: true });
+      window.KAAuth.redirectLogin();
+      throw new Error("401");
+    }
+    if (!response.ok) {
+      const contentType = response.headers.get("content-type") || "";
+      const body = contentType.includes("application/json") ? await response.json() : await response.text();
+      throw new Error(typeof body === "string" ? body : String(body.detail || body.message || response.status));
+    }
+    const disposition = String(response.headers.get("content-disposition") || "");
+    const matched = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    return {
+      blob: await response.blob(),
+      filename: matched ? matched[1] : "",
+    };
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = String(filename || "report.pdf").trim() || "report.pdf";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function complaintPayloadFromForm() {
     return {
       tenant_id: currentTenantId(),
@@ -949,6 +989,26 @@
     $("#chatDigestBox").textContent = String(data.item?.report_text || "");
   }
 
+  async function downloadDigestPdf() {
+    const tenantId = currentTenantId();
+    const text = String($("#chatInput").value || "").trim();
+    const files = selectedFiles("#chatImageInput");
+    if (!text && !files.length) throw new Error("카톡 대화 또는 이미지를 입력하세요.");
+    if (files.length > 6) throw new Error("카톡 이미지는 최대 6장까지 업로드할 수 있습니다.");
+
+    const fd = new FormData();
+    fd.append("tenant_id", tenantId);
+    fd.append("text", text);
+    for (const file of files) {
+      fd.append("files", file, file.name || "chat-image");
+    }
+    const response = await authFetchBlob("/api/ai/kakao_digest/pdf", {
+      method: "POST",
+      body: fd,
+    });
+    downloadBlob(response.blob, response.filename || `kakao-digest-${tenantId || "report"}.pdf`);
+  }
+
   async function createTenant() {
     const payload = {
       tenant_id: String($("#newTenantId").value || "").trim(),
@@ -1190,6 +1250,7 @@
     $("#btnDeleteAllAttachments")?.addEventListener("click", () => deleteAttachments(true).catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnGenerateReport")?.addEventListener("click", () => generateReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDigestChat")?.addEventListener("click", () => digestChat().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
+    $("#btnDigestPdf")?.addEventListener("click", () => downloadDigestPdf().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnLoadOpsDashboard")?.addEventListener("click", () => loadOpsDashboard().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
     $("#btnCreateNotice")?.addEventListener("click", () => createNotice().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
     $("#btnUpdateNotice")?.addEventListener("click", () => updateNotice().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));

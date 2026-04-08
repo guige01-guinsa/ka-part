@@ -234,7 +234,10 @@
           <p class="section-kicker">Kakao Digest</p>
           <h2>카톡 대화 자동 정리</h2>
         </div>
-        <button id="btnDigestChat" class="action-btn action-secondary" type="button">카톡 분석</button>
+        <div class="cta-row">
+          <button id="btnDigestChat" class="action-btn action-secondary" type="button">카톡 분석</button>
+          <button id="btnDigestPdf" class="ghost-btn" type="button">PDF 다운로드</button>
+        </div>
       </div>
       <label class="field">
         <span>카톡 대화 원문</span>
@@ -245,6 +248,7 @@
         <input id="chatImageInput" type="file" accept="image/*" multiple />
       </label>
       <div id="chatImageHint" class="inline-note">선택된 이미지가 없습니다.</div>
+      <div class="inline-note">PDF는 현재 입력된 텍스트와 선택된 이미지를 기준으로 생성됩니다.</div>
       <div id="chatDigestBox" class="detail-block">카톡 분석 결과가 여기에 표시됩니다.</div>
     </section>
 
