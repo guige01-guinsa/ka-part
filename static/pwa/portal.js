@@ -87,6 +87,10 @@
     return !!(me && me.user && (me.user.is_admin || me.user.is_site_admin));
   }
 
+  function canDeleteComplaints() {
+    return !!(me && me.user && (me.user.is_admin || me.user.is_site_admin));
+  }
+
   function currentTenantId() {
     if (isAdmin()) {
       return String($("#tenantSelect")?.value || "").trim();
@@ -336,6 +340,19 @@
       : "현재 계정은 행정업무 조회만 가능합니다. 수정이 필요하면 현장관리자 이상 권한으로 로그인하세요.";
   }
 
+  function syncComplaintDeleteOption() {
+    const select = $("#detailStatus");
+    if (!select) return;
+    const option = select.querySelector('option[value="__delete__"]');
+    if (!option) return;
+    const allowed = canDeleteComplaints();
+    option.hidden = !allowed;
+    option.disabled = !allowed;
+    if (!allowed && select.value === "__delete__") {
+      select.value = String((selectedComplaint || {}).status || "접수");
+    }
+  }
+
   function renderOpsVendorOptions(selected = "") {
     const el = $("#scheduleVendorId");
     if (!el) return;
@@ -367,6 +384,20 @@
     $("#documentSummary").value = "";
     if ($("#documentSampleFile")) $("#documentSampleFile").value = "";
     $("#opsDocumentDetail").textContent = "문서를 선택하거나 새로 등록하세요.";
+  }
+
+  function clearComplaintDetail() {
+    selectedComplaintId = 0;
+    selectedComplaint = null;
+    $("#complaintDetail").textContent = "목록에서 민원을 선택하세요.";
+    $("#detailStatus").value = "접수";
+    $("#detailManager").value = "";
+    $("#detailNote").value = "";
+    $("#detailPhotoInput").value = "";
+    $("#attachmentSelectAll").checked = false;
+    $("#detailAttachments").innerHTML = '<div class="empty-state">첨부 사진이 없습니다.</div>';
+    $("#detailHistory").innerHTML = '<div class="empty-state">이력이 없습니다.</div>';
+    syncComplaintDeleteOption();
   }
 
   function numberingConfigFromForm() {
@@ -1061,7 +1092,7 @@
     const tenantId = currentTenantId();
     if (!tenantId) return;
     const status = String($("#filterStatus").value || "").trim();
-    const building = String($("#filterBuilding").value || "").trim();
+    const building = String($("#filterBuilding").value || "").trim().replace(/동$/u, "").trim();
     const params = new URLSearchParams({ tenant_id: tenantId });
     if (status) params.set("status", status);
     if (building) params.set("building", building);
@@ -1083,6 +1114,7 @@
     const data = await api(`/api/complaints/${selectedComplaintId}?tenant_id=${encodeURIComponent(tenantId)}`);
     selectedComplaint = data.item || null;
     if (!selectedComplaint) return;
+    syncComplaintDeleteOption();
     $("#complaintDetail").innerHTML = [
       `<strong>${escapeHtml(selectedComplaint.summary || "-")}</strong>`,
       `유형: ${escapeHtml(selectedComplaint.type || "-")}`,
@@ -1153,9 +1185,23 @@
   async function updateSelectedComplaint() {
     if (!selectedComplaintId) throw new Error("목록에서 민원을 먼저 선택하세요.");
     const tenantId = currentTenantId();
+    const nextStatus = String($("#detailStatus").value || "접수").trim();
+    if (nextStatus === "__delete__") {
+      if (!canDeleteComplaints()) throw new Error("관리자 권한으로만 삭제할 수 있습니다.");
+      if (!window.confirm("선택한 민원을 삭제하시겠습니까? 삭제 후 복구할 수 없습니다.")) return;
+      await api(`/api/complaints/${selectedComplaintId}`, {
+        method: "DELETE",
+        body: JSON.stringify({ tenant_id: tenantId }),
+      });
+      clearComplaintDetail();
+      setMessage("#intakeMsg", "민원을 삭제했습니다.");
+      await loadComplaints();
+      await loadDashboard();
+      return;
+    }
     const payload = {
       tenant_id: tenantId,
-      status: String($("#detailStatus").value || "접수"),
+      status: nextStatus,
       manager: String($("#detailManager").value || "").trim(),
       note: String($("#detailNote").value || "").trim(),
     };
@@ -1484,6 +1530,12 @@
     $("#btnExportDocumentLedger")?.addEventListener("click", () => exportDocumentLedgerExcel().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnClearDocument")?.addEventListener("click", () => clearDocumentForm());
     $("#documentCategoryFilter")?.addEventListener("change", () => loadOpsDocuments().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#filterBuilding")?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        loadComplaints().catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
+      }
+    });
     $("#btnCreateVendor")?.addEventListener("click", () => createVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
     $("#btnUpdateVendor")?.addEventListener("click", () => updateVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
     $("#btnDeleteVendor")?.addEventListener("click", () => deleteVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
@@ -1520,7 +1572,10 @@
     applyHero();
     syncUserTenantDisplay();
     syncOpsWriteState();
+    syncComplaintDeleteOption();
+    $("#filterStatus").value = "접수";
     clearNoticeForm();
+    clearComplaintDetail();
     clearDocumentForm();
     clearScheduleForm();
     clearVendorForm();

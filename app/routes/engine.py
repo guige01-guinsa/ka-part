@@ -93,6 +93,10 @@ def _actor_label(user: Optional[Dict[str, Any]], tenant: Optional[Dict[str, Any]
     return f"{str((tenant or {}).get('name') or 'tenant')} API"
 
 
+def _can_delete_complaint(user: Optional[Dict[str, Any]]) -> bool:
+    return bool(user) and (int(user.get("is_admin") or 0) == 1 or int(user.get("is_site_admin") or 0) == 1)
+
+
 def _tenant_label(tenant_id: str, tenant: Optional[Dict[str, Any]]) -> str:
     item = tenant or get_tenant(tenant_id) or {}
     tenant_name = str(item.get("name") or "").strip()
@@ -390,6 +394,8 @@ def complaints_update(request: Request, complaint_id: int, payload: Dict[str, An
 def complaints_delete(request: Request, complaint_id: int, payload: Dict[str, Any] | None = Body(default=None)) -> Dict[str, Any]:
     payload = payload or {}
     tenant_id, user, tenant = _tenant_id_from_request(request, payload)
+    if not _can_delete_complaint(user):
+        raise HTTPException(status_code=403, detail="관리자 권한으로만 민원을 삭제할 수 있습니다.")
     try:
         item = delete_complaint(tenant_id=tenant_id, complaint_id=int(complaint_id))
     except ValueError as exc:

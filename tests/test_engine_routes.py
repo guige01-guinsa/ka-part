@@ -305,6 +305,86 @@ def test_attachment_limit_and_group_delete(app_client, tmp_path) -> None:
     assert client.get(f"/api/complaints/{complaint_id}?tenant_id=ys_thesharp").status_code == 404
 
 
+def test_complaint_filters_and_admin_only_delete(app_client) -> None:
+    client = app_client
+    _bootstrap_admin_and_tenant(client)
+
+    first = client.post(
+        "/api/complaints",
+        json={
+            "tenant_id": "ys_thesharp",
+            "building": "101",
+            "unit": "1203",
+            "channel": "전화",
+            "content": "101동 1203호 누수 신고",
+        },
+    )
+    assert first.status_code == 200
+    first_id = int(first.json()["item"]["id"])
+
+    second = client.post(
+        "/api/complaints",
+        json={
+            "tenant_id": "ys_thesharp",
+            "building": "102",
+            "unit": "905",
+            "channel": "카톡",
+            "content": "102동 905호 주차 문제",
+        },
+    )
+    assert second.status_code == 200
+    second_id = int(second.json()["item"]["id"])
+
+    progressed = client.put(
+        f"/api/complaints/{second_id}",
+        json={"tenant_id": "ys_thesharp", "status": "처리중", "manager": "김대리"},
+    )
+    assert progressed.status_code == 200
+
+    filtered = client.get("/api/complaints?tenant_id=ys_thesharp&status=접수&building=101")
+    assert filtered.status_code == 200
+    filtered_items = filtered.json()["items"]
+    assert len(filtered_items) == 1
+    assert filtered_items[0]["id"] == first_id
+    assert filtered_items[0]["status"] == "접수"
+    assert filtered_items[0]["building"] == "101"
+
+    created_user = client.post(
+        "/api/users",
+        json={
+            "tenant_id": "ys_thesharp",
+            "login_id": "deskdelete01",
+            "name": "삭제테스트직원",
+            "password": "password123",
+            "role": "desk",
+        },
+    )
+    assert created_user.status_code == 200
+
+    client.post("/api/auth/logout")
+    desk_login = client.post("/api/auth/login", json={"login_id": "deskdelete01", "password": "password123"})
+    assert desk_login.status_code == 200
+
+    blocked_delete = client.request(
+        "DELETE",
+        f"/api/complaints/{first_id}",
+        json={"tenant_id": "ys_thesharp"},
+    )
+    assert blocked_delete.status_code == 403
+
+    client.post("/api/auth/logout")
+    admin_login = client.post("/api/auth/login", json={"login_id": "admin01", "password": "password123"})
+    assert admin_login.status_code == 200
+
+    deleted = client.request(
+        "DELETE",
+        f"/api/complaints/{first_id}",
+        json={"tenant_id": "ys_thesharp"},
+    )
+    assert deleted.status_code == 200
+    assert client.get(f"/api/complaints/{first_id}?tenant_id=ys_thesharp").status_code == 404
+
+
 def test_user_management_crud_and_permission_boundaries(app_client) -> None:
     client = app_client
     _bootstrap_admin_and_tenant(client)

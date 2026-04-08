@@ -143,18 +143,18 @@
         <label class="field field-inline">
           <span>상태</span>
           <select id="filterStatus">
-            <option value="">전체</option>
-            <option value="접수">접수</option>
+            <option value="접수" selected>접수</option>
             <option value="처리중">처리중</option>
             <option value="완료">완료</option>
             <option value="이월">이월</option>
+            <option value="">전체</option>
           </select>
         </label>
         <label class="field field-inline">
           <span>동</span>
           <input id="filterBuilding" type="text" maxlength="20" placeholder="예: 101" />
         </label>
-        <button id="btnLoadComplaints" class="ghost-btn" type="button">목록 조회</button>
+        <button id="btnLoadComplaints" class="ghost-btn" type="button">조회</button>
       </div>
       <div class="table-wrap">
         <table class="data-table">
@@ -186,6 +186,7 @@
               <option value="처리중">처리중</option>
               <option value="완료">완료</option>
               <option value="이월">이월</option>
+              <option value="__delete__" hidden disabled>삭제</option>
             </select>
           </label>
           <label class="field">
