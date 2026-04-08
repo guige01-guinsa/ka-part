@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from io import BytesIO
 from typing import Any, Dict, Iterable, List
 
@@ -293,6 +294,162 @@ def build_kakao_digest_pdf(
                 story.append(Paragraph("이미지 원본을 읽지 못했습니다.", styles["caption"]))
             story.append(Paragraph(_escape(caption), styles["caption"]))
             story.append(Spacer(1, 6 * mm))
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def build_reference_document_pdf(
+    *,
+    title: str,
+    source_name: str,
+    body_lines: List[str],
+    preview_image_bytes: bytes = b"",
+) -> bytes:
+    styles = _styles()
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=16 * mm,
+        rightMargin=16 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title=title or "기안서 샘플 PDF",
+        author="KA-PART AI 민원처리 엔진",
+    )
+    story: List[Any] = []
+    story.append(Paragraph(_escape(title or "기안서 샘플 PDF"), styles["title"]))
+    story.append(Paragraph(_escape(f"원본 파일: {source_name or '-'}"), styles["meta"]))
+    story.append(Paragraph("샘플 문서를 참조해 PDF로 재작성한 결과입니다.", styles["meta"]))
+    story.append(Spacer(1, 4 * mm))
+
+    if preview_image_bytes:
+        story.append(Paragraph("원본 미리보기", styles["heading"]))
+        try:
+            story.append(_scaled_image(preview_image_bytes, max_width=170 * mm, max_height=235 * mm))
+        except Exception:
+            story.append(Paragraph("원본 미리보기 이미지를 불러오지 못했습니다.", styles["caption"]))
+        story.append(Spacer(1, 6 * mm))
+
+    story.append(Paragraph("추출 본문", styles["heading"]))
+    if body_lines:
+        for line in body_lines:
+            story.append(Paragraph(_escape(line), styles["body"]))
+            story.append(Spacer(1, 1.8 * mm))
+    else:
+        story.append(Paragraph("추출된 본문이 없습니다.", styles["body"]))
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def build_ops_draft_pdf(
+    *,
+    tenant_label: str,
+    title: str,
+    summary: str,
+    drafter_label: str,
+    reference_no: str = "",
+    category: str = "",
+    owner: str = "",
+    due_date: str = "",
+) -> bytes:
+    styles = _styles()
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=16 * mm,
+        rightMargin=16 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title=title or "기안서",
+        author="KA-PART AI 민원처리 엔진",
+    )
+    report_date = datetime.now().strftime("%Y년 %m월 %d일")
+    safe_title = _collapse(title) or "기안서"
+    safe_summary = _collapse(summary) or "상세 내용이 입력되지 않았습니다."
+    safe_reference = _collapse(reference_no) or f"기안-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    safe_owner = _collapse(owner) or drafter_label or "담당자 미지정"
+    safe_category = _collapse(category) or "행정"
+    safe_due_date = _collapse(due_date) or "-"
+
+    story: List[Any] = []
+    story.append(Paragraph("기 안 서", styles["title"]))
+    story.append(Spacer(1, 3 * mm))
+
+    header = Table(
+        [
+            [Paragraph("문서번호", styles["small"]), Paragraph(_escape(safe_reference), styles["small"]), Paragraph("보고일자", styles["small"]), Paragraph(_escape(report_date), styles["small"])],
+            [Paragraph("기안자", styles["small"]), Paragraph(_escape(drafter_label or "-"), styles["small"]), Paragraph("담당부서", styles["small"]), Paragraph(_escape(safe_owner), styles["small"])],
+            [Paragraph("문서분류", styles["small"]), Paragraph(_escape(safe_category), styles["small"]), Paragraph("기한", styles["small"]), Paragraph(_escape(safe_due_date), styles["small"])],
+        ],
+        colWidths=[24 * mm, 58 * mm, 24 * mm, 58 * mm],
+    )
+    header.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#B9C8C0")),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F0F5F2")),
+                ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#F0F5F2")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    story.append(header)
+    story.append(Spacer(1, 5 * mm))
+
+    approval = Table(
+        [
+            [Paragraph("결재", styles["small"]), Paragraph("담당", styles["small"]), Paragraph("과장", styles["small"]), Paragraph("소장", styles["small"]), Paragraph("회장", styles["small"])],
+            ["", "", "", "", ""],
+        ],
+        colWidths=[20 * mm, 34 * mm, 34 * mm, 34 * mm, 34 * mm],
+    )
+    approval.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#B9C8C0")),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F0F5F2")),
+                ("BACKGROUND", (1, 0), (-1, 0), colors.HexColor("#FAFCFB")),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 1), (-1, 1), 18),
+                ("BOTTOMPADDING", (0, 1), (-1, 1), 18),
+            ]
+        )
+    )
+    story.append(approval)
+    story.append(Spacer(1, 7 * mm))
+
+    story.append(Paragraph("제목", styles["heading"]))
+    story.append(Paragraph(_escape(safe_title), styles["body"]))
+    story.append(Spacer(1, 4 * mm))
+
+    story.append(Paragraph("내용", styles["heading"]))
+    for line in re.split(r"(?:\r\n|\r|\n)+", str(summary or "")):
+        cleaned = _collapse(line)
+        if cleaned:
+            story.append(Paragraph(_escape(cleaned), styles["body"]))
+            story.append(Spacer(1, 1.8 * mm))
+    if not _collapse(summary):
+        story.append(Paragraph(_escape(safe_summary), styles["body"]))
+    story.append(Spacer(1, 5 * mm))
+
+    request_lines = [
+        "위 사항과 같이 기안하오니 검토 후 결재를 요청드립니다.",
+        f"대상 단지: {tenant_label or '-'}",
+    ]
+    story.append(Paragraph("요청사항", styles["heading"]))
+    for line in request_lines:
+        story.append(Paragraph(_escape(line), styles["body"]))
+    story.append(Spacer(1, 12 * mm))
+    story.append(Paragraph(_escape(tenant_label or "관리사무소"), styles["body"]))
 
     doc.build(story)
     return buffer.getvalue()

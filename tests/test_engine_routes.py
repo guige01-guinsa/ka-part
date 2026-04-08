@@ -560,6 +560,35 @@ def test_operations_admin_module_blocks_reader_write_access(app_client) -> None:
     assert allowed_read.status_code == 200
 
 
+def test_operations_admin_document_pdf_generation_and_sample_reference(app_client) -> None:
+    client = app_client
+    _bootstrap_admin_and_tenant(client)
+
+    rendered = client.post(
+        "/api/ops/documents/render_pdf",
+        json={
+            "tenant_id": "ys_thesharp",
+            "title": "승강기 부품 교체의 건",
+            "summary": "상가A동 25호기 승강기 부품 노후로 예방정비 차원의 교체를 진행하고 결재를 요청합니다.",
+            "category": "점검",
+            "owner": "시설과장",
+            "reference_no": "관리-2026-001",
+        },
+    )
+    assert rendered.status_code == 200
+    assert rendered.headers["content-type"].startswith("application/pdf")
+    assert rendered.content.startswith(b"%PDF")
+
+    sample_pdf = client.post(
+        "/api/ops/documents/sample_pdf",
+        data={"tenant_id": "ys_thesharp", "title": "샘플 참조 기안서"},
+        files={"source_file": ("sample.txt", io.BytesIO("제목\n승강기 부품 교체의 건\n내용\n교체 결재 요청".encode("utf-8")), "text/plain")},
+    )
+    assert sample_pdf.status_code == 200
+    assert sample_pdf.headers["content-type"].startswith("application/pdf")
+    assert sample_pdf.content.startswith(b"%PDF")
+
+
 def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_path) -> None:
     import json
     import sqlite3

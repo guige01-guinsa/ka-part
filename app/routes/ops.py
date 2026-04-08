@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 
 from ..db import append_audit_log, get_tenant, log_usage
+from ..document_sample_service import extract_document_sample
 from ..ops_db import (
     create_document,
     create_notice,
@@ -24,6 +27,7 @@ from ..ops_db import (
     update_schedule,
     update_vendor,
 )
+from ..report_pdf import build_ops_draft_pdf, build_reference_document_pdf
 from .core import _require_auth
 
 router = APIRouter()
@@ -48,6 +52,19 @@ def _resolve_ops_context(request: Request, payload: Optional[Dict[str, Any]] = N
 
 def _actor_label(user: Dict[str, Any]) -> str:
     return str(user.get("name") or user.get("login_id") or "operator")
+
+
+def _tenant_label(tenant_id: str) -> str:
+    tenant = get_tenant(tenant_id) or {}
+    tenant_name = str(tenant.get("name") or "").strip()
+    if tenant_name and tenant_id:
+        return f"{tenant_name} 관리사무소"
+    return tenant_name or tenant_id or "관리사무소"
+
+
+def _ascii_download_name(value: str, default: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(value or "").strip()).strip("-")
+    return (cleaned or default)[:80]
 
 
 def _can_edit_ops(user: Dict[str, Any]) -> bool:
@@ -172,6 +189,72 @@ def ops_documents_delete(request: Request, document_id: int, payload: Dict[str, 
     log_usage(tenant_id, "ops.documents.delete")
     append_audit_log(tenant_id, "delete_document", _actor_label(user), {"document_id": int(document_id)})
     return {"ok": True, "item": item}
+
+
+@router.post("/ops/documents/render_pdf")
+def ops_documents_render_pdf(request: Request, payload: Dict[str, Any] = Body(...)) -> StreamingResponse:
+    user, tenant_id = _require_ops_editor(request, payload)
+    title = str(payload.get("title") or "").strip()
+    summary = str(payload.get("summary") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="문서 제목을 입력하세요.")
+    if not summary:
+        raise HTTPException(status_code=400, detail="문서 내용을 입력하세요.")
+    pdf_bytes = build_ops_draft_pdf(
+        tenant_label=_tenant_label(tenant_id),
+        title=title,
+        summary=summary,
+        drafter_label=_actor_label(user),
+        reference_no=str(payload.get("reference_no") or "").strip(),
+        category=str(payload.get("category") or "").strip(),
+        owner=str(payload.get("owner") or "").strip(),
+        due_date=str(payload.get("due_date") or "").strip(),
+    )
+    log_usage(tenant_id, "ops.documents.render_pdf")
+    append_audit_log(tenant_id, "render_document_pdf", _actor_label(user), {"title": title})
+    safe_name = _ascii_download_name(title, "document")
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name[:80]}.pdf"'}
+    return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers=headers)
+
+
+@router.post("/ops/documents/sample_pdf")
+async def ops_documents_sample_pdf(
+    request: Request,
+    tenant_id: str = Form(default=""),
+    title: str = Form(default=""),
+    source_file: UploadFile = File(...),
+) -> StreamingResponse:
+    user, resolved_tenant_id = _require_ops_editor(request, {"tenant_id": tenant_id})
+    raw_name = str(source_file.filename or "").strip() or "sample"
+    file_bytes = await source_file.read()
+    try:
+        extracted = extract_document_sample(raw_name, file_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        try:
+            await source_file.close()
+        except Exception:
+            pass
+
+    final_title = str(title or "").strip() or str(extracted.get("title") or "").strip() or "기안서 샘플 PDF"
+    body_lines = [str(line or "").rstrip() for line in extracted.get("lines") or [] if str(line or "").strip()]
+    pdf_bytes = build_reference_document_pdf(
+        title=final_title,
+        source_name=str(extracted.get("source_name") or raw_name),
+        body_lines=body_lines,
+        preview_image_bytes=bytes(extracted.get("preview_image_bytes") or b""),
+    )
+    log_usage(resolved_tenant_id, "ops.documents.sample_pdf")
+    append_audit_log(
+        resolved_tenant_id,
+        "ops_document_sample_pdf",
+        _actor_label(user),
+        {"source_name": raw_name, "title": final_title},
+    )
+    safe_name = _ascii_download_name(final_title, "document-sample")
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name[:80]}.pdf"'}
+    return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers=headers)
 
 
 @router.get("/ops/vendors")

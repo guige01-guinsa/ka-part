@@ -416,13 +416,20 @@
               <span>요약 / 메모</span>
               <textarea id="documentSummary" rows="4" placeholder="문서 목적과 진행 메모를 입력하세요."></textarea>
             </label>
+            <label class="field field-span">
+              <span>샘플 문서 참조 파일</span>
+              <input id="documentSampleFile" type="file" accept=".hwp,.txt,.md" />
+            </label>
           </div>
           <div class="cta-row">
             <button id="btnCreateDocument" data-ops-write="1" class="action-btn" type="button">문서 등록</button>
             <button id="btnUpdateDocument" data-ops-write="1" class="ghost-btn" type="button">선택 수정</button>
             <button id="btnDeleteDocument" data-ops-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnRenderDocumentPdf" data-ops-write="1" class="ghost-btn" type="button">기안서 PDF 생성</button>
+            <button id="btnSampleDocumentPdf" data-ops-write="1" class="ghost-btn" type="button">샘플 PDF 생성</button>
             <button id="btnClearDocument" class="ghost-btn" type="button">입력 초기화</button>
           </div>
+          <div class="inline-note">제목과 요약/메모만 입력해도 기안서 PDF를 바로 생성할 수 있습니다. 샘플 파일은 참조용 PDF 생성에만 사용됩니다.</div>
           <div id="opsDocumentMsg" class="inline-message" aria-live="polite"></div>
           <div class="table-wrap">
             <table class="data-table">

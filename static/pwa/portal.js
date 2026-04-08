@@ -165,6 +165,10 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  function selectedSingleFile(inputSelector) {
+    return $(inputSelector)?.files?.[0] || null;
+  }
+
   function complaintPayloadFromForm() {
     return {
       tenant_id: currentTenantId(),
@@ -351,6 +355,7 @@
     $("#documentDueDate").value = "";
     $("#documentRefNo").value = "";
     $("#documentSummary").value = "";
+    if ($("#documentSampleFile")) $("#documentSampleFile").value = "";
     $("#opsDocumentDetail").textContent = "문서를 선택하거나 새로 등록하세요.";
   }
 
@@ -615,6 +620,34 @@
       due_date: String($("#documentDueDate").value || "").trim(),
       reference_no: String($("#documentRefNo").value || "").trim(),
     };
+  }
+
+  async function renderDocumentPdf() {
+    const payload = documentPayloadFromForm();
+    if (!payload.title) throw new Error("문서 제목을 입력하세요.");
+    if (!payload.summary) throw new Error("문서 내용을 입력하세요.");
+    const response = await authFetchBlob("/api/ops/documents/render_pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    downloadBlob(response.blob, response.filename || "document.pdf");
+    setMessage("#opsDocumentMsg", "기안서 PDF를 생성했습니다.");
+  }
+
+  async function renderSampleDocumentPdf() {
+    const sampleFile = selectedSingleFile("#documentSampleFile");
+    if (!sampleFile) throw new Error("샘플 문서를 선택하세요.");
+    const fd = new FormData();
+    fd.append("tenant_id", currentTenantId());
+    fd.append("title", String($("#documentTitle").value || "").trim());
+    fd.append("source_file", sampleFile, sampleFile.name || "sample");
+    const response = await authFetchBlob("/api/ops/documents/sample_pdf", {
+      method: "POST",
+      body: fd,
+    });
+    downloadBlob(response.blob, response.filename || "sample-document.pdf");
+    setMessage("#opsDocumentMsg", "샘플 참조 PDF를 생성했습니다.");
   }
 
   function schedulePayloadFromForm() {
@@ -1260,6 +1293,8 @@
     $("#btnCreateDocument")?.addEventListener("click", () => createDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnUpdateDocument")?.addEventListener("click", () => updateDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnDeleteDocument")?.addEventListener("click", () => deleteDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnRenderDocumentPdf")?.addEventListener("click", () => renderDocumentPdf().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnSampleDocumentPdf")?.addEventListener("click", () => renderSampleDocumentPdf().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnClearDocument")?.addEventListener("click", () => clearDocumentForm());
     $("#btnCreateVendor")?.addEventListener("click", () => createVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
     $("#btnUpdateVendor")?.addEventListener("click", () => updateVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
