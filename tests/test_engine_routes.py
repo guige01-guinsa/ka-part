@@ -189,6 +189,27 @@ def test_kakao_digest_supports_images_with_filename_fallback(app_client) -> None
     assert item["total"] >= 2
     assert any(row["type"] == "승강기" for row in item["excel_rows"])
     assert "🖼 첨부 이미지 요약" in item["report_text"]
+    assert "파일명 기반" in str(item["analysis_notice"])
+
+
+def test_kakao_digest_explains_when_image_has_no_detected_issue(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    digest = client.post(
+        "/api/ai/kakao_digest/images",
+        headers=headers,
+        data={"text": ""},
+        files=[
+            ("files", ("kakao-paste-plain.png", io.BytesIO(b"fake-image-1"), "image/png")),
+        ],
+    )
+    assert digest.status_code == 200
+    item = digest.json()["item"]
+    assert item["total"] == 0
+    assert item["image_analysis_model"] == "filename-fallback"
+    assert "이미지 본문을 읽지 못해 파일명 기준으로만 확인했습니다." in str(item["analysis_notice"])
 
 
 def test_kakao_digest_accepts_up_to_thirty_images(app_client) -> None:

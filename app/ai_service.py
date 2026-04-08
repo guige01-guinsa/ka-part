@@ -309,6 +309,27 @@ def _digest_image_lines(text: str, image_inputs: List[Dict[str, Any]]) -> Tuple[
     return _fallback_image_digest(trimmed)
 
 
+def _build_digest_analysis_notice(
+    *,
+    total: int,
+    input_image_count: int,
+    image_model: str,
+    source_text: str,
+) -> str:
+    normalized_text = _collapse_space(source_text)
+    if input_image_count and image_model == "filename-fallback":
+        if total > 0:
+            return "이미지 본문 OCR 대신 파일명 기반 보조 분석으로 정리했습니다."
+        return "이미지 본문을 읽지 못해 파일명 기준으로만 확인했습니다. 실제 카톡 캡처는 선명한 원본 PNG/JPG로 다시 넣어 보세요."
+    if input_image_count and image_model and total == 0:
+        return "이미지는 읽었지만 민원성 문장이 확인되지 않았습니다."
+    if input_image_count and image_model:
+        return f"이미지 OCR 분석을 사용했습니다. ({image_model})"
+    if normalized_text and total == 0:
+        return "텍스트를 분석했지만 민원으로 분류할 문장이 확인되지 않았습니다."
+    return ""
+
+
 def analyze_chat_digest(text: str, image_inputs: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
     image_inputs = list(image_inputs or [])
     normalized = _collapse_space(text)
@@ -414,6 +435,13 @@ def analyze_chat_digest(text: str, image_inputs: List[Dict[str, Any]] | None = N
             )
         )
 
+    analysis_notice = _build_digest_analysis_notice(
+        total=total,
+        input_image_count=len(image_inputs),
+        image_model=image_model,
+        source_text=normalized,
+    )
+
     return {
         "total": total,
         "done": done,
@@ -427,5 +455,6 @@ def analyze_chat_digest(text: str, image_inputs: List[Dict[str, Any]] | None = N
         "image_notes": image_notes,
         "input_image_count": len(image_inputs),
         "image_analysis_model": image_model,
+        "analysis_notice": analysis_notice,
         "report_text": "\n".join(lines),
     }
