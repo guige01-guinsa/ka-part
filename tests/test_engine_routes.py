@@ -23,26 +23,32 @@ def app_client(tmp_path, monkeypatch):
         "app.main",
         "app.db",
         "app.engine_db",
+        "app.legacy_import",
+        "app.ops_db",
         "app.voice_db",
         "app.voice_service",
         "app.ai_service",
         "app.routes.core",
         "app.routes.engine",
+        "app.routes.ops",
         "app.routes.voice",
     ):
         sys.modules.pop(name, None)
 
     db = importlib.import_module("app.db")
     engine_db = importlib.import_module("app.engine_db")
+    ops_db = importlib.import_module("app.ops_db")
     voice_db = importlib.import_module("app.voice_db")
 
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "engine_test.db")
     monkeypatch.setattr(engine_db, "DB_PATH", tmp_path / "engine_test.db")
+    monkeypatch.setattr(ops_db, "DB_PATH", tmp_path / "engine_test.db")
     monkeypatch.setattr(voice_db, "DB_PATH", tmp_path / "engine_test.db")
 
     main = importlib.import_module("app.main")
     db.init_db()
     engine_db.init_engine_db()
+    ops_db.init_ops_db()
 
     with TestClient(main.app) as client:
         yield client
@@ -107,7 +113,7 @@ def test_session_admin_can_run_new_mvp_engine_and_legacy_api_is_gone(app_client)
 
     contracts = client.get("/api/modules/contracts")
     assert contracts.status_code == 200
-    assert contracts.json()["allowed_modules"] == ["complaint_engine"]
+    assert contracts.json()["allowed_modules"] == ["complaint_engine", "operations_admin"]
 
     assert client.get("/api/v1/complaints").status_code == 404
 
@@ -359,6 +365,265 @@ def test_public_register_flow_creates_inactive_user_pending_approval(app_client)
     approved = client.post("/api/auth/login", json={"login_id": "request01", "password": "password123"})
     assert approved.status_code == 200
     assert approved.json()["user"]["login_id"] == "request01"
+
+
+def test_operations_admin_module_supports_crud_and_dashboard(app_client) -> None:
+    client = app_client
+    _bootstrap_admin_and_tenant(client)
+
+    vendor = client.post(
+        "/api/ops/vendors",
+        json={
+            "tenant_id": "ys_thesharp",
+            "company_name": "태성전기",
+            "service_type": "전기 유지보수",
+            "contact_name": "박기사",
+            "phone": "051-111-2222",
+            "status": "활성",
+            "note": "야간 긴급 출동 가능",
+        },
+    )
+    assert vendor.status_code == 200
+    vendor_id = int(vendor.json()["item"]["id"])
+
+    notice = client.post(
+        "/api/ops/notices",
+        json={
+            "tenant_id": "ys_thesharp",
+            "title": "4월 정기 소독 안내",
+            "body": "4월 15일 오전 10시에 정기 소독이 진행됩니다.",
+            "category": "안내",
+            "status": "published",
+            "pinned": True,
+        },
+    )
+    assert notice.status_code == 200
+    assert notice.json()["item"]["pinned"] == 1
+
+    document = client.post(
+        "/api/ops/documents",
+        json={
+            "tenant_id": "ys_thesharp",
+            "title": "소방 점검 보고서",
+            "summary": "소방 점검 결과 보고서 작성 필요",
+            "category": "보고",
+            "status": "검토중",
+            "owner": "김과장",
+            "due_date": "2026-04-09",
+            "reference_no": "RPT-2026-041",
+        },
+    )
+    assert document.status_code == 200
+    document_id = int(document.json()["item"]["id"])
+
+    schedule = client.post(
+        "/api/ops/schedules",
+        json={
+            "tenant_id": "ys_thesharp",
+            "title": "지하 기계실 정기 점검",
+            "schedule_type": "점검",
+            "status": "예정",
+            "due_date": "2026-04-10",
+            "owner": "시설팀",
+            "note": "점검 전 입주민 공지 필요",
+            "vendor_id": vendor_id,
+        },
+    )
+    assert schedule.status_code == 200
+    schedule_id = int(schedule.json()["item"]["id"])
+    assert schedule.json()["item"]["vendor_name"] == "태성전기"
+
+    dashboard = client.get("/api/ops/dashboard?tenant_id=ys_thesharp")
+    assert dashboard.status_code == 200
+    item = dashboard.json()["item"]
+    assert item["published_notices"] == 1
+    assert item["open_documents"] == 1
+    assert item["open_schedules"] == 1
+    assert item["active_vendors"] == 1
+
+    notices = client.get("/api/ops/notices?tenant_id=ys_thesharp")
+    assert notices.status_code == 200
+    assert notices.json()["items"][0]["title"] == "4월 정기 소독 안내"
+
+    updated_document = client.patch(
+        f"/api/ops/documents/{document_id}",
+        json={"tenant_id": "ys_thesharp", "status": "완료"},
+    )
+    assert updated_document.status_code == 200
+    assert updated_document.json()["item"]["status"] == "완료"
+
+    updated_schedule = client.patch(
+        f"/api/ops/schedules/{schedule_id}",
+        json={"tenant_id": "ys_thesharp", "status": "진행중", "owner": "시설주임"},
+    )
+    assert updated_schedule.status_code == 200
+    assert updated_schedule.json()["item"]["status"] == "진행중"
+
+    deleted_notice = client.request(
+        "DELETE",
+        f"/api/ops/notices/{int(notice.json()['item']['id'])}",
+        json={"tenant_id": "ys_thesharp"},
+    )
+    assert deleted_notice.status_code == 200
+
+    deleted_vendor = client.request(
+        "DELETE",
+        f"/api/ops/vendors/{vendor_id}",
+        json={"tenant_id": "ys_thesharp"},
+    )
+    assert deleted_vendor.status_code == 200
+
+
+def test_operations_admin_module_blocks_reader_write_access(app_client) -> None:
+    client = app_client
+    _bootstrap_admin_and_tenant(client)
+
+    created_user = client.post(
+        "/api/users",
+        json={
+            "tenant_id": "ys_thesharp",
+            "login_id": "reader01",
+            "name": "열람전용",
+            "password": "password123",
+            "role": "reader",
+        },
+    )
+    assert created_user.status_code == 200
+
+    client.post("/api/auth/logout")
+    login = client.post("/api/auth/login", json={"login_id": "reader01", "password": "password123"})
+    assert login.status_code == 200
+
+    blocked = client.post(
+        "/api/ops/notices",
+        json={
+            "title": "읽기전용 차단 테스트",
+            "body": "본문",
+            "category": "공지",
+            "status": "published",
+        },
+    )
+    assert blocked.status_code == 403
+
+    allowed_read = client.get("/api/ops/notices")
+    assert allowed_read.status_code == 200
+
+
+def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_path) -> None:
+    import json
+    import sqlite3
+
+    import app.legacy_import as legacy_import
+
+    _bootstrap_admin_and_tenant(app_client)
+
+    bundle_path = tmp_path / "legacy_bundle.json"
+    bundle_path.write_text(
+        json.dumps(
+            {
+                "tenant": {"id": "ys_thesharp", "name": "연산더샵", "site_code": "APT00001", "site_name": "연산더샵"},
+                "users": [
+                    {
+                        "login_id": "legacyops",
+                        "name": "레거시행정",
+                        "role": "manager",
+                        "phone": "010-1000-2000",
+                        "is_site_admin": True,
+                        "is_active": True,
+                    }
+                ],
+                "complaints": [
+                    {
+                        "building": "101",
+                        "unit": "901",
+                        "content": "지하주차장 조명이 나갔습니다.",
+                        "channel": "방문",
+                        "type": "전기",
+                        "urgency": "당일",
+                        "status": "처리중",
+                        "created_at": "2026-04-07 09:00:00",
+                    }
+                ],
+                "notices": [{"title": "정기 단수 안내", "body": "4월 20일 단수 예정", "category": "안내", "status": "published"}],
+                "documents": [{"title": "월간 운영보고", "category": "보고", "status": "완료", "reference_no": "OPS-1"}],
+                "vendors": [{"company_name": "한빛설비", "service_type": "설비 유지보수", "status": "활성"}],
+                "schedules": [{"title": "옥상 방수 점검", "schedule_type": "점검", "status": "예정", "vendor_name": "한빛설비", "vendor_service_type": "설비 유지보수"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    summary = legacy_import.import_legacy_source(
+        source_path=bundle_path,
+        tenant_id="ys_thesharp",
+        tenant_name="연산더샵",
+        default_user_password="TempPass123!",
+    )
+    assert summary["users"]["created"] == 1
+    assert summary["complaints"]["created"] == 1
+    assert summary["notices"]["created"] == 1
+    assert summary["documents"]["created"] == 1
+    assert summary["vendors"]["created"] == 1
+    assert summary["schedules"]["created"] == 1
+
+    legacy_sqlite = tmp_path / "legacy.sqlite"
+    con = sqlite3.connect(str(legacy_sqlite))
+    try:
+        con.execute(
+            """
+            CREATE TABLE legacy_users (
+              username TEXT,
+              full_name TEXT,
+              user_role TEXT,
+              mobile TEXT,
+              enabled INTEGER
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE legacy_notices (
+              title TEXT,
+              description TEXT,
+              category TEXT,
+              status TEXT
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO legacy_users(username, full_name, user_role, mobile, enabled)
+            VALUES('csvuser01', 'SQLite사용자', 'desk', '010-2222-3333', 1)
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO legacy_notices(title, description, category, status)
+            VALUES('소방훈련 안내', '4월 30일 소방훈련 예정', '공지', 'published')
+            """
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    second = legacy_import.import_legacy_source(
+        source_path=legacy_sqlite,
+        tenant_id="ys_thesharp",
+        tenant_name="연산더샵",
+    )
+    assert second["users"]["created"] == 1
+    assert second["notices"]["created"] == 1
+
+    users = app_client.get("/api/users?active_only=false&tenant_id=ys_thesharp")
+    assert users.status_code == 200
+    assert any(item["login_id"] == "legacyops" for item in users.json()["items"])
+    assert any(item["login_id"] == "csvuser01" for item in users.json()["items"])
+
+    notices = app_client.get("/api/ops/notices?tenant_id=ys_thesharp")
+    assert notices.status_code == 200
+    assert any(item["title"] == "정기 단수 안내" for item in notices.json()["items"])
+    assert any(item["title"] == "소방훈련 안내" for item in notices.json()["items"])
 
 
 def test_voice_twilio_flow_creates_complaint_and_tracks_session(app_client) -> None:

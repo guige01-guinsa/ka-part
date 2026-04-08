@@ -55,6 +55,11 @@ bash ./scripts/dev-test.sh
 - `POST /api/ai/kakao_digest`
 - `GET /api/dashboard/summary`
 - `GET /api/report/daily`
+- `GET /api/ops/dashboard`
+- `GET/POST/PATCH/DELETE /api/ops/notices`
+- `GET/POST/PATCH/DELETE /api/ops/documents`
+- `GET/POST/PATCH/DELETE /api/ops/vendors`
+- `GET/POST/PATCH/DELETE /api/ops/schedules`
 - `GET /api/admin/tenants`
 - `POST /api/admin/tenants`
 - `POST /api/admin/tenants/{tenant_id}/rotate_key`
@@ -76,6 +81,41 @@ bash ./scripts/dev-test.sh
 - 첨부 전체선택, 선택삭제, 전체삭제
 - Render 영속 스토리지용 `KA_STORAGE_ROOT` 지원
 - 전화 AI 자동응답 웹훅과 통화기록 저장
+
+## Operations Admin
+
+- 공지 관리
+- 행정문서 관리
+- 협력업체 관리
+- 일정/점검 관리
+- 행정업무 대시보드
+
+## Legacy Migration
+
+기존 시설운영시스템을 폐쇄하고 데이터를 이관할 때는 아래 스크립트를 사용합니다.
+
+```bash
+python scripts/migrate_legacy_data.py \
+  --source scripts/migration/sample_bundle.json \
+  --tenant-id ys_thesharp \
+  --tenant-name 연산더샵 \
+  --default-user-password ChangeMe123!
+```
+
+지원 입력 형식:
+
+- JSON 번들 파일
+- `users.csv`, `complaints.csv`, `notices.csv`, `documents.csv`, `vendors.csv`, `schedules.csv`를 담은 폴더
+- SQLite 파일
+
+샘플 형식은 [sample_bundle.json](c:/ka-part/scripts/migration/sample_bundle.json) 기준입니다.
+실행 스크립트는 [migrate_legacy_data.py](c:/ka-part/scripts/migrate_legacy_data.py)입니다.
+
+주의:
+
+- 레거시 비밀번호 해시는 호환이 불확실하므로 기본 초기 비밀번호를 다시 부여합니다.
+- 같은 테넌트에 같은 키 조합이 있으면 업데이트하고, 없으면 신규 생성합니다.
+- 실제 레거시 원본 파일이 아직 없으면 구조만 먼저 준비하고, 파일을 받는 즉시 이관을 실행하면 됩니다.
 
 ## Voice AI
 

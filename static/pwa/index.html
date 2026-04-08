@@ -248,6 +248,328 @@
       <div id="chatDigestBox" class="detail-block">카톡 분석 결과가 여기에 표시됩니다.</div>
     </section>
 
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Operations</p>
+          <h2>행정업무 대시보드</h2>
+          <p class="panel-copy">공지, 문서, 일정, 업체 현황을 민원 시스템 안에서 함께 관리합니다.</p>
+        </div>
+        <button id="btnLoadOpsDashboard" class="ghost-btn" type="button">행정업무 새로고침</button>
+      </div>
+      <div class="ops-metrics">
+        <article class="metric-card">
+          <span>게시 공지</span>
+          <strong id="opsMetricNotices">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>진행 문서</span>
+          <strong id="opsMetricDocuments">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>열린 일정</span>
+          <strong id="opsMetricSchedules">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>활성 업체</span>
+          <strong id="opsMetricVendors">0</strong>
+        </article>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">최근 공지</div>
+          <div id="opsRecentNotices" class="timeline"></div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">기한 임박/지연 문서</div>
+          <div id="opsOverdueDocuments" class="timeline"></div>
+        </div>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">다가오는 일정</div>
+          <div id="opsUpcomingSchedules" class="timeline"></div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">운영 안내</div>
+          <div id="opsReadOnlyHint" class="detail-block">행정업무 권한을 확인하는 중입니다.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Operations Admin</p>
+          <h2>행정업무 관리</h2>
+        </div>
+      </div>
+
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">공지 관리</div>
+          <div id="opsNoticeDetail" class="detail-block">공지를 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>제목</span>
+              <input id="noticeTitle" type="text" maxlength="160" placeholder="예: 4월 정기 소독 안내" />
+            </label>
+            <label class="field">
+              <span>분류</span>
+              <select id="noticeCategory">
+                <option value="공지">공지</option>
+                <option value="안내">안내</option>
+                <option value="긴급">긴급</option>
+                <option value="행정">행정</option>
+                <option value="기타">기타</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="noticeStatus">
+                <option value="published">게시중</option>
+                <option value="draft">임시저장</option>
+                <option value="archived">보관</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>상단 고정</span>
+              <label class="check-all">
+                <input id="noticePinned" type="checkbox" />
+                <span>고정 공지</span>
+              </label>
+            </label>
+            <label class="field field-span">
+              <span>본문</span>
+              <textarea id="noticeBody" rows="5" placeholder="공지 본문을 입력하세요."></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateNotice" data-ops-write="1" class="action-btn" type="button">공지 등록</button>
+            <button id="btnUpdateNotice" data-ops-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteNotice" data-ops-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearNotice" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="opsNoticeMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>제목</th>
+                  <th>분류</th>
+                  <th>상태</th>
+                  <th>고정</th>
+                  <th>수정일</th>
+                </tr>
+              </thead>
+              <tbody id="opsNoticesTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="detail-stack">
+          <div class="subhead">행정문서 관리</div>
+          <div id="opsDocumentDetail" class="detail-block">문서를 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>문서 제목</span>
+              <input id="documentTitle" type="text" maxlength="160" placeholder="예: 소방 점검 보고서" />
+            </label>
+            <label class="field">
+              <span>문서 분류</span>
+              <select id="documentCategory">
+                <option value="계약">계약</option>
+                <option value="공문">공문</option>
+                <option value="보고">보고</option>
+                <option value="예산">예산</option>
+                <option value="입주">입주</option>
+                <option value="점검">점검</option>
+                <option value="기타">기타</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="documentStatus">
+                <option value="작성중">작성중</option>
+                <option value="검토중">검토중</option>
+                <option value="완료">완료</option>
+                <option value="보관">보관</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>담당자</span>
+              <input id="documentOwner" type="text" maxlength="80" placeholder="예: 김과장" />
+            </label>
+            <label class="field">
+              <span>기한</span>
+              <input id="documentDueDate" type="date" />
+            </label>
+            <label class="field">
+              <span>문서번호</span>
+              <input id="documentRefNo" type="text" maxlength="80" placeholder="예: RPT-2026-041" />
+            </label>
+            <label class="field field-span">
+              <span>요약 / 메모</span>
+              <textarea id="documentSummary" rows="4" placeholder="문서 목적과 진행 메모를 입력하세요."></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateDocument" data-ops-write="1" class="action-btn" type="button">문서 등록</button>
+            <button id="btnUpdateDocument" data-ops-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteDocument" data-ops-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearDocument" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="opsDocumentMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>제목</th>
+                  <th>분류</th>
+                  <th>상태</th>
+                  <th>담당</th>
+                  <th>기한</th>
+                </tr>
+              </thead>
+              <tbody id="opsDocumentsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">일정 / 점검 관리</div>
+          <div id="opsScheduleDetail" class="detail-block">일정을 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>일정 제목</span>
+              <input id="scheduleTitle" type="text" maxlength="160" placeholder="예: 지하 기계실 정기 점검" />
+            </label>
+            <label class="field">
+              <span>일정 분류</span>
+              <select id="scheduleType">
+                <option value="행정">행정</option>
+                <option value="점검">점검</option>
+                <option value="회의">회의</option>
+                <option value="계약">계약</option>
+                <option value="민원">민원</option>
+                <option value="기타">기타</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="scheduleStatus">
+                <option value="예정">예정</option>
+                <option value="진행중">진행중</option>
+                <option value="완료">완료</option>
+                <option value="보류">보류</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>담당자</span>
+              <input id="scheduleOwner" type="text" maxlength="80" placeholder="예: 시설팀장" />
+            </label>
+            <label class="field">
+              <span>예정일</span>
+              <input id="scheduleDueDate" type="date" />
+            </label>
+            <label class="field">
+              <span>협력업체</span>
+              <select id="scheduleVendorId">
+                <option value="">업체 미지정</option>
+              </select>
+            </label>
+            <label class="field field-span">
+              <span>메모</span>
+              <textarea id="scheduleNote" rows="4" placeholder="점검 준비사항 또는 회의 메모"></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateSchedule" data-ops-write="1" class="action-btn" type="button">일정 등록</button>
+            <button id="btnUpdateSchedule" data-ops-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteSchedule" data-ops-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearSchedule" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="opsScheduleMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>제목</th>
+                  <th>분류</th>
+                  <th>상태</th>
+                  <th>예정일</th>
+                  <th>업체</th>
+                </tr>
+              </thead>
+              <tbody id="opsSchedulesTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="detail-stack">
+          <div class="subhead">업체 관리</div>
+          <div id="opsVendorDetail" class="detail-block">협력업체를 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>업체명</span>
+              <input id="vendorCompanyName" type="text" maxlength="160" placeholder="예: 태성전기" />
+            </label>
+            <label class="field">
+              <span>업무 분야</span>
+              <input id="vendorServiceType" type="text" maxlength="80" placeholder="예: 전기 유지보수" />
+            </label>
+            <label class="field">
+              <span>담당자</span>
+              <input id="vendorContactName" type="text" maxlength="80" placeholder="예: 박기사" />
+            </label>
+            <label class="field">
+              <span>전화번호</span>
+              <input id="vendorPhone" type="text" maxlength="40" placeholder="예: 051-111-2222" />
+            </label>
+            <label class="field">
+              <span>이메일</span>
+              <input id="vendorEmail" type="email" maxlength="120" placeholder="예: vendor@example.com" />
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="vendorStatus">
+                <option value="활성">활성</option>
+                <option value="중지">중지</option>
+                <option value="종료">종료</option>
+              </select>
+            </label>
+            <label class="field field-span">
+              <span>메모</span>
+              <textarea id="vendorNote" rows="4" placeholder="계약 메모, 응답 SLA, 비상연락망 등"></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateVendor" data-ops-write="1" class="action-btn" type="button">업체 등록</button>
+            <button id="btnUpdateVendor" data-ops-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteVendor" data-ops-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearVendor" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="opsVendorMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>업체명</th>
+                  <th>분야</th>
+                  <th>담당자</th>
+                  <th>전화</th>
+                  <th>상태</th>
+                </tr>
+              </thead>
+              <tbody id="opsVendorsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="userPanel" class="panel reveal hidden">
       <div class="panel-head">
         <div>

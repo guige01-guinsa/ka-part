@@ -196,6 +196,13 @@ body {
   gap: 12px;
 }
 
+.ops-metrics {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .metric-card {
   display: grid;
   gap: 6px;
@@ -217,6 +224,18 @@ body {
   font-size: 34px;
   line-height: 1;
   letter-spacing: -0.05em;
+}
+
+.ops-metrics .metric-card {
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(23, 38, 37, 0.08);
+  color: var(--ink);
+  backdrop-filter: none;
+  box-shadow: 0 12px 24px rgba(29, 42, 40, 0.06);
+}
+
+.ops-metrics .metric-card span {
+  color: var(--muted);
 }
 
 .layout {
@@ -611,6 +630,7 @@ body {
 
 @media (max-width: 1100px) {
   .hero,
+  .ops-metrics,
   .feed-grid,
   .stage-grid {
     grid-template-columns: 1fr;

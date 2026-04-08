@@ -3,6 +3,11 @@
 
   const $ = (sel) => document.querySelector(sel);
   const STATUS_VALUES = ["접수", "처리중", "완료", "이월"];
+  const NOTICE_STATUS_LABELS = {
+    draft: "임시저장",
+    published: "게시중",
+    archived: "보관",
+  };
   const USER_ROLE_OPTIONS = [
     { value: "desk", label: "민원접수" },
     { value: "manager", label: "운영담당" },
@@ -20,6 +25,14 @@
   let users = [];
   let selectedUserId = 0;
   let selectedUser = null;
+  let opsNotices = [];
+  let opsDocuments = [];
+  let opsSchedules = [];
+  let opsVendors = [];
+  let selectedNoticeId = 0;
+  let selectedDocumentId = 0;
+  let selectedScheduleId = 0;
+  let selectedVendorId = 0;
 
   function setMessage(selector, message, isError = false) {
     const el = $(selector);
@@ -45,12 +58,26 @@
     return dt.toLocaleString("ko-KR", { hour12: false });
   }
 
+  function formatDate(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "-";
+    const dt = new Date(`${raw}T00:00:00`);
+    if (Number.isNaN(dt.getTime())) return raw;
+    return dt.toLocaleDateString("ko-KR");
+  }
+
   function isAdmin() {
     return !!(me && me.user && me.user.is_admin);
   }
 
   function canManageUsers() {
     return !!(me && me.user && (me.user.is_admin || me.user.is_site_admin));
+  }
+
+  function canEditOps() {
+    if (!me || !me.user) return false;
+    if (me.user.is_admin || me.user.is_site_admin) return true;
+    return ["manager", "desk", "staff"].includes(String(me.user.role || ""));
   }
 
   function currentTenantId() {
@@ -175,7 +202,7 @@
     renderTenantBadge();
     const role = isAdmin() ? "최고관리자" : (me?.user?.is_site_admin ? "현장관리자" : (me?.user?.role || "staff"));
     const tenantLabel = me?.tenant?.name || me?.user?.tenant_id || "선택 필요";
-    $("#heroLine").textContent = `${role} 계정으로 접속 중입니다. 현재 작업 테넌트는 ${tenantLabel}입니다. 전화, 카톡, 방문 민원과 카톡 이미지 캡처까지 한 화면에서 정리할 수 있습니다.`;
+    $("#heroLine").textContent = `${role} 계정으로 접속 중입니다. 현재 작업 테넌트는 ${tenantLabel}입니다. 민원 접수와 함께 공지, 문서, 일정, 업체 관리까지 한 화면에서 운영할 수 있습니다.`;
   }
 
   function renderAiSuggestion(result) {
@@ -240,6 +267,446 @@
         await loadTenants();
       });
     });
+  }
+
+  function syncOpsWriteState() {
+    const editable = canEditOps();
+    document.querySelectorAll("[data-ops-write='1']").forEach((el) => {
+      el.disabled = !editable;
+    });
+    const hint = $("#opsReadOnlyHint");
+    if (!hint) return;
+    hint.textContent = editable
+      ? "행정업무 편집 권한이 있습니다. 공지, 문서, 일정, 업체를 여기서 직접 관리할 수 있습니다."
+      : "현재 계정은 행정업무 조회만 가능합니다. 수정이 필요하면 현장관리자 이상 권한으로 로그인하세요.";
+  }
+
+  function renderOpsVendorOptions(selected = "") {
+    const el = $("#scheduleVendorId");
+    if (!el) return;
+    const current = String(selected || "");
+    el.innerHTML = [
+      '<option value="">업체 미지정</option>',
+      ...opsVendors.map((item) => `<option value="${Number(item.id || 0)}"${String(item.id) === current ? " selected" : ""}>${escapeHtml(item.company_name || "-")} / ${escapeHtml(item.service_type || "-")}</option>`),
+    ].join("");
+  }
+
+  function clearNoticeForm() {
+    selectedNoticeId = 0;
+    $("#noticeTitle").value = "";
+    $("#noticeCategory").value = "공지";
+    $("#noticeStatus").value = "published";
+    $("#noticePinned").checked = false;
+    $("#noticeBody").value = "";
+    $("#opsNoticeDetail").textContent = "공지를 선택하거나 새로 등록하세요.";
+  }
+
+  function clearDocumentForm() {
+    selectedDocumentId = 0;
+    $("#documentTitle").value = "";
+    $("#documentCategory").value = "계약";
+    $("#documentStatus").value = "작성중";
+    $("#documentOwner").value = "";
+    $("#documentDueDate").value = "";
+    $("#documentRefNo").value = "";
+    $("#documentSummary").value = "";
+    $("#opsDocumentDetail").textContent = "문서를 선택하거나 새로 등록하세요.";
+  }
+
+  function clearScheduleForm() {
+    selectedScheduleId = 0;
+    $("#scheduleTitle").value = "";
+    $("#scheduleType").value = "행정";
+    $("#scheduleStatus").value = "예정";
+    $("#scheduleOwner").value = "";
+    $("#scheduleDueDate").value = "";
+    $("#scheduleNote").value = "";
+    renderOpsVendorOptions("");
+    $("#opsScheduleDetail").textContent = "일정을 선택하거나 새로 등록하세요.";
+  }
+
+  function clearVendorForm() {
+    selectedVendorId = 0;
+    $("#vendorCompanyName").value = "";
+    $("#vendorServiceType").value = "";
+    $("#vendorContactName").value = "";
+    $("#vendorPhone").value = "";
+    $("#vendorEmail").value = "";
+    $("#vendorStatus").value = "활성";
+    $("#vendorNote").value = "";
+    $("#opsVendorDetail").textContent = "협력업체를 선택하거나 새로 등록하세요.";
+  }
+
+  function renderNoticeDetail(item) {
+    selectedNoticeId = Number(item.id || 0);
+    $("#noticeTitle").value = String(item.title || "");
+    $("#noticeCategory").value = String(item.category || "공지");
+    $("#noticeStatus").value = String(item.status || "published");
+    $("#noticePinned").checked = !!item.pinned;
+    $("#noticeBody").value = String(item.body || "");
+    $("#opsNoticeDetail").innerHTML = [
+      `<strong>${escapeHtml(item.title || "-")}</strong>`,
+      `분류: ${escapeHtml(item.category || "-")}`,
+      `상태: ${escapeHtml(NOTICE_STATUS_LABELS[item.status] || item.status || "-")}`,
+      `고정: ${item.pinned ? "예" : "아니오"}`,
+      `수정일: ${escapeHtml(formatDateTime(item.updated_at))}`,
+      `작성자: ${escapeHtml(item.created_by_label || "-")}`,
+    ].join("<br>");
+  }
+
+  function renderDocumentDetail(item) {
+    selectedDocumentId = Number(item.id || 0);
+    $("#documentTitle").value = String(item.title || "");
+    $("#documentCategory").value = String(item.category || "기타");
+    $("#documentStatus").value = String(item.status || "작성중");
+    $("#documentOwner").value = String(item.owner || "");
+    $("#documentDueDate").value = String(item.due_date || "");
+    $("#documentRefNo").value = String(item.reference_no || "");
+    $("#documentSummary").value = String(item.summary || "");
+    $("#opsDocumentDetail").innerHTML = [
+      `<strong>${escapeHtml(item.title || "-")}</strong>`,
+      `분류: ${escapeHtml(item.category || "-")}`,
+      `상태: ${escapeHtml(item.status || "-")}`,
+      `담당: ${escapeHtml(item.owner || "-")}`,
+      `기한: ${escapeHtml(formatDate(item.due_date))}`,
+      `문서번호: ${escapeHtml(item.reference_no || "-")}`,
+    ].join("<br>");
+  }
+
+  function renderScheduleDetail(item) {
+    selectedScheduleId = Number(item.id || 0);
+    $("#scheduleTitle").value = String(item.title || "");
+    $("#scheduleType").value = String(item.schedule_type || "행정");
+    $("#scheduleStatus").value = String(item.status || "예정");
+    $("#scheduleOwner").value = String(item.owner || "");
+    $("#scheduleDueDate").value = String(item.due_date || "");
+    $("#scheduleNote").value = String(item.note || "");
+    renderOpsVendorOptions(String(item.vendor_id || ""));
+    $("#opsScheduleDetail").innerHTML = [
+      `<strong>${escapeHtml(item.title || "-")}</strong>`,
+      `분류: ${escapeHtml(item.schedule_type || "-")}`,
+      `상태: ${escapeHtml(item.status || "-")}`,
+      `예정일: ${escapeHtml(formatDate(item.due_date))}`,
+      `담당: ${escapeHtml(item.owner || "-")}`,
+      `업체: ${escapeHtml(item.vendor_name || "-")}`,
+    ].join("<br>");
+  }
+
+  function renderVendorDetail(item) {
+    selectedVendorId = Number(item.id || 0);
+    $("#vendorCompanyName").value = String(item.company_name || "");
+    $("#vendorServiceType").value = String(item.service_type || "");
+    $("#vendorContactName").value = String(item.contact_name || "");
+    $("#vendorPhone").value = String(item.phone || "");
+    $("#vendorEmail").value = String(item.email || "");
+    $("#vendorStatus").value = String(item.status || "활성");
+    $("#vendorNote").value = String(item.note || "");
+    $("#opsVendorDetail").innerHTML = [
+      `<strong>${escapeHtml(item.company_name || "-")}</strong>`,
+      `분야: ${escapeHtml(item.service_type || "-")}`,
+      `담당자: ${escapeHtml(item.contact_name || "-")}`,
+      `전화: ${escapeHtml(item.phone || "-")}`,
+      `이메일: ${escapeHtml(item.email || "-")}`,
+      `상태: ${escapeHtml(item.status || "-")}`,
+    ].join("<br>");
+  }
+
+  async function loadOpsDashboard() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return;
+    const data = await api(`/api/ops/dashboard?tenant_id=${encodeURIComponent(tenantId)}`);
+    const item = data.item || {};
+    $("#opsMetricNotices").textContent = String(item.published_notices || 0);
+    $("#opsMetricDocuments").textContent = String(item.open_documents || 0);
+    $("#opsMetricSchedules").textContent = String(item.open_schedules || 0);
+    $("#opsMetricVendors").textContent = String(item.active_vendors || 0);
+    $("#opsRecentNotices").innerHTML = (item.recent_notices || []).length
+      ? item.recent_notices.map((row) => `<article class="timeline-item"><strong>${escapeHtml(row.title || "-")}</strong><p>${escapeHtml(row.category || "-")} / ${escapeHtml(NOTICE_STATUS_LABELS[row.status] || row.status || "-")} / ${escapeHtml(formatDateTime(row.updated_at))}</p></article>`).join("")
+      : '<div class="empty-state">등록된 공지가 없습니다.</div>';
+    $("#opsOverdueDocuments").innerHTML = (item.overdue_documents || []).length
+      ? item.overdue_documents.map((row) => `<article class="timeline-item"><strong>${escapeHtml(row.title || "-")}</strong><p>${escapeHtml(row.category || "-")} / ${escapeHtml(row.status || "-")} / 기한 ${escapeHtml(formatDate(row.due_date))}</p></article>`).join("")
+      : '<div class="empty-state">기한 지연 문서가 없습니다.</div>';
+    $("#opsUpcomingSchedules").innerHTML = (item.upcoming_schedules || []).length
+      ? item.upcoming_schedules.map((row) => `<article class="timeline-item"><strong>${escapeHtml(row.title || "-")}</strong><p>${escapeHtml(row.schedule_type || "-")} / ${escapeHtml(row.status || "-")} / ${escapeHtml(formatDate(row.due_date))} / ${escapeHtml(row.vendor_name || "내부")}</p></article>`).join("")
+      : '<div class="empty-state">등록된 일정이 없습니다.</div>';
+  }
+
+  async function loadOpsNotices() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/ops/notices?tenant_id=${encodeURIComponent(tenantId)}`);
+    opsNotices = Array.isArray(data.items) ? data.items : [];
+    const body = $("#opsNoticesTableBody");
+    body.innerHTML = opsNotices.length
+      ? opsNotices.map((item) => `
+        <tr class="ops-notice-row" data-id="${Number(item.id || 0)}">
+          <td>${escapeHtml(item.title || "-")}</td>
+          <td>${escapeHtml(item.category || "-")}</td>
+          <td>${escapeHtml(NOTICE_STATUS_LABELS[item.status] || item.status || "-")}</td>
+          <td>${item.pinned ? "예" : "-"}</td>
+          <td>${escapeHtml(formatDateTime(item.updated_at))}</td>
+        </tr>
+      `).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 공지가 없습니다.</td></tr>';
+    body.querySelectorAll(".ops-notice-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = opsNotices.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderNoticeDetail(item);
+      });
+    });
+    if (selectedNoticeId) {
+      const found = opsNotices.find((item) => Number(item.id || 0) === selectedNoticeId);
+      if (found) renderNoticeDetail(found); else clearNoticeForm();
+    }
+    return opsNotices;
+  }
+
+  async function loadOpsDocuments() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/ops/documents?tenant_id=${encodeURIComponent(tenantId)}`);
+    opsDocuments = Array.isArray(data.items) ? data.items : [];
+    const body = $("#opsDocumentsTableBody");
+    body.innerHTML = opsDocuments.length
+      ? opsDocuments.map((item) => `
+        <tr class="ops-document-row" data-id="${Number(item.id || 0)}">
+          <td>${escapeHtml(item.title || "-")}</td>
+          <td>${escapeHtml(item.category || "-")}</td>
+          <td>${escapeHtml(item.status || "-")}</td>
+          <td>${escapeHtml(item.owner || "-")}</td>
+          <td>${escapeHtml(formatDate(item.due_date))}</td>
+        </tr>
+      `).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 문서가 없습니다.</td></tr>';
+    body.querySelectorAll(".ops-document-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = opsDocuments.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderDocumentDetail(item);
+      });
+    });
+    if (selectedDocumentId) {
+      const found = opsDocuments.find((item) => Number(item.id || 0) === selectedDocumentId);
+      if (found) renderDocumentDetail(found); else clearDocumentForm();
+    }
+    return opsDocuments;
+  }
+
+  async function loadOpsVendors() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/ops/vendors?tenant_id=${encodeURIComponent(tenantId)}`);
+    opsVendors = Array.isArray(data.items) ? data.items : [];
+    renderOpsVendorOptions($("#scheduleVendorId")?.value || "");
+    const body = $("#opsVendorsTableBody");
+    body.innerHTML = opsVendors.length
+      ? opsVendors.map((item) => `
+        <tr class="ops-vendor-row" data-id="${Number(item.id || 0)}">
+          <td>${escapeHtml(item.company_name || "-")}</td>
+          <td>${escapeHtml(item.service_type || "-")}</td>
+          <td>${escapeHtml(item.contact_name || "-")}</td>
+          <td>${escapeHtml(item.phone || "-")}</td>
+          <td>${escapeHtml(item.status || "-")}</td>
+        </tr>
+      `).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 업체가 없습니다.</td></tr>';
+    body.querySelectorAll(".ops-vendor-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = opsVendors.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderVendorDetail(item);
+      });
+    });
+    if (selectedVendorId) {
+      const found = opsVendors.find((item) => Number(item.id || 0) === selectedVendorId);
+      if (found) renderVendorDetail(found); else clearVendorForm();
+    }
+    return opsVendors;
+  }
+
+  async function loadOpsSchedules() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/ops/schedules?tenant_id=${encodeURIComponent(tenantId)}`);
+    opsSchedules = Array.isArray(data.items) ? data.items : [];
+    const body = $("#opsSchedulesTableBody");
+    body.innerHTML = opsSchedules.length
+      ? opsSchedules.map((item) => `
+        <tr class="ops-schedule-row" data-id="${Number(item.id || 0)}">
+          <td>${escapeHtml(item.title || "-")}</td>
+          <td>${escapeHtml(item.schedule_type || "-")}</td>
+          <td>${escapeHtml(item.status || "-")}</td>
+          <td>${escapeHtml(formatDate(item.due_date))}</td>
+          <td>${escapeHtml(item.vendor_name || "-")}</td>
+        </tr>
+      `).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 일정이 없습니다.</td></tr>';
+    body.querySelectorAll(".ops-schedule-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = opsSchedules.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderScheduleDetail(item);
+      });
+    });
+    if (selectedScheduleId) {
+      const found = opsSchedules.find((item) => Number(item.id || 0) === selectedScheduleId);
+      if (found) renderScheduleDetail(found); else clearScheduleForm();
+    }
+    return opsSchedules;
+  }
+
+  function noticePayloadFromForm() {
+    return {
+      tenant_id: currentTenantId(),
+      title: String($("#noticeTitle").value || "").trim(),
+      body: String($("#noticeBody").value || "").trim(),
+      category: String($("#noticeCategory").value || "공지").trim(),
+      status: String($("#noticeStatus").value || "published").trim(),
+      pinned: !!$("#noticePinned").checked,
+    };
+  }
+
+  function documentPayloadFromForm() {
+    return {
+      tenant_id: currentTenantId(),
+      title: String($("#documentTitle").value || "").trim(),
+      summary: String($("#documentSummary").value || "").trim(),
+      category: String($("#documentCategory").value || "기타").trim(),
+      status: String($("#documentStatus").value || "작성중").trim(),
+      owner: String($("#documentOwner").value || "").trim(),
+      due_date: String($("#documentDueDate").value || "").trim(),
+      reference_no: String($("#documentRefNo").value || "").trim(),
+    };
+  }
+
+  function schedulePayloadFromForm() {
+    return {
+      tenant_id: currentTenantId(),
+      title: String($("#scheduleTitle").value || "").trim(),
+      schedule_type: String($("#scheduleType").value || "행정").trim(),
+      status: String($("#scheduleStatus").value || "예정").trim(),
+      due_date: String($("#scheduleDueDate").value || "").trim(),
+      owner: String($("#scheduleOwner").value || "").trim(),
+      note: String($("#scheduleNote").value || "").trim(),
+      vendor_id: String($("#scheduleVendorId").value || "").trim(),
+    };
+  }
+
+  function vendorPayloadFromForm() {
+    return {
+      tenant_id: currentTenantId(),
+      company_name: String($("#vendorCompanyName").value || "").trim(),
+      service_type: String($("#vendorServiceType").value || "").trim(),
+      contact_name: String($("#vendorContactName").value || "").trim(),
+      phone: String($("#vendorPhone").value || "").trim(),
+      email: String($("#vendorEmail").value || "").trim(),
+      status: String($("#vendorStatus").value || "활성").trim(),
+      note: String($("#vendorNote").value || "").trim(),
+    };
+  }
+
+  async function createNotice() {
+    const data = await api("/api/ops/notices", { method: "POST", body: JSON.stringify(noticePayloadFromForm()) });
+    renderNoticeDetail(data.item || {});
+    setMessage("#opsNoticeMsg", "공지를 등록했습니다.");
+    await loadOpsNotices();
+    await loadOpsDashboard();
+  }
+
+  async function updateNotice() {
+    if (!selectedNoticeId) throw new Error("수정할 공지를 선택하세요.");
+    const data = await api(`/api/ops/notices/${selectedNoticeId}`, { method: "PATCH", body: JSON.stringify(noticePayloadFromForm()) });
+    renderNoticeDetail(data.item || {});
+    setMessage("#opsNoticeMsg", "공지를 수정했습니다.");
+    await loadOpsNotices();
+    await loadOpsDashboard();
+  }
+
+  async function deleteNotice() {
+    if (!selectedNoticeId) throw new Error("삭제할 공지를 선택하세요.");
+    await api(`/api/ops/notices/${selectedNoticeId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearNoticeForm();
+    setMessage("#opsNoticeMsg", "공지를 삭제했습니다.");
+    await loadOpsNotices();
+    await loadOpsDashboard();
+  }
+
+  async function createDocument() {
+    const data = await api("/api/ops/documents", { method: "POST", body: JSON.stringify(documentPayloadFromForm()) });
+    renderDocumentDetail(data.item || {});
+    setMessage("#opsDocumentMsg", "문서를 등록했습니다.");
+    await loadOpsDocuments();
+    await loadOpsDashboard();
+  }
+
+  async function updateDocument() {
+    if (!selectedDocumentId) throw new Error("수정할 문서를 선택하세요.");
+    const data = await api(`/api/ops/documents/${selectedDocumentId}`, { method: "PATCH", body: JSON.stringify(documentPayloadFromForm()) });
+    renderDocumentDetail(data.item || {});
+    setMessage("#opsDocumentMsg", "문서를 수정했습니다.");
+    await loadOpsDocuments();
+    await loadOpsDashboard();
+  }
+
+  async function deleteDocument() {
+    if (!selectedDocumentId) throw new Error("삭제할 문서를 선택하세요.");
+    await api(`/api/ops/documents/${selectedDocumentId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearDocumentForm();
+    setMessage("#opsDocumentMsg", "문서를 삭제했습니다.");
+    await loadOpsDocuments();
+    await loadOpsDashboard();
+  }
+
+  async function createVendor() {
+    const data = await api("/api/ops/vendors", { method: "POST", body: JSON.stringify(vendorPayloadFromForm()) });
+    renderVendorDetail(data.item || {});
+    setMessage("#opsVendorMsg", "업체를 등록했습니다.");
+    await loadOpsVendors();
+    await loadOpsSchedules();
+    await loadOpsDashboard();
+  }
+
+  async function updateVendor() {
+    if (!selectedVendorId) throw new Error("수정할 업체를 선택하세요.");
+    const data = await api(`/api/ops/vendors/${selectedVendorId}`, { method: "PATCH", body: JSON.stringify(vendorPayloadFromForm()) });
+    renderVendorDetail(data.item || {});
+    setMessage("#opsVendorMsg", "업체 정보를 수정했습니다.");
+    await loadOpsVendors();
+    await loadOpsSchedules();
+    await loadOpsDashboard();
+  }
+
+  async function deleteVendor() {
+    if (!selectedVendorId) throw new Error("삭제할 업체를 선택하세요.");
+    await api(`/api/ops/vendors/${selectedVendorId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearVendorForm();
+    setMessage("#opsVendorMsg", "업체를 삭제했습니다.");
+    await loadOpsVendors();
+    await loadOpsSchedules();
+    await loadOpsDashboard();
+  }
+
+  async function createSchedule() {
+    const data = await api("/api/ops/schedules", { method: "POST", body: JSON.stringify(schedulePayloadFromForm()) });
+    renderScheduleDetail(data.item || {});
+    setMessage("#opsScheduleMsg", "일정을 등록했습니다.");
+    await loadOpsSchedules();
+    await loadOpsDashboard();
+  }
+
+  async function updateSchedule() {
+    if (!selectedScheduleId) throw new Error("수정할 일정을 선택하세요.");
+    const data = await api(`/api/ops/schedules/${selectedScheduleId}`, { method: "PATCH", body: JSON.stringify(schedulePayloadFromForm()) });
+    renderScheduleDetail(data.item || {});
+    setMessage("#opsScheduleMsg", "일정을 수정했습니다.");
+    await loadOpsSchedules();
+    await loadOpsDashboard();
+  }
+
+  async function deleteSchedule() {
+    if (!selectedScheduleId) throw new Error("삭제할 일정을 선택하세요.");
+    await api(`/api/ops/schedules/${selectedScheduleId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearScheduleForm();
+    setMessage("#opsScheduleMsg", "일정을 삭제했습니다.");
+    await loadOpsSchedules();
+    await loadOpsDashboard();
   }
 
   async function classifyCurrentText() {
@@ -694,6 +1161,11 @@
     await loadDashboard();
     await loadComplaints();
     await generateReport();
+    await loadOpsDashboard();
+    await loadOpsNotices();
+    await loadOpsDocuments();
+    await loadOpsVendors();
+    await loadOpsSchedules();
     if (canManageUsers()) {
       await loadUsers();
     }
@@ -718,6 +1190,23 @@
     $("#btnDeleteAllAttachments")?.addEventListener("click", () => deleteAttachments(true).catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnGenerateReport")?.addEventListener("click", () => generateReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDigestChat")?.addEventListener("click", () => digestChat().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
+    $("#btnLoadOpsDashboard")?.addEventListener("click", () => loadOpsDashboard().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
+    $("#btnCreateNotice")?.addEventListener("click", () => createNotice().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
+    $("#btnUpdateNotice")?.addEventListener("click", () => updateNotice().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
+    $("#btnDeleteNotice")?.addEventListener("click", () => deleteNotice().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
+    $("#btnClearNotice")?.addEventListener("click", () => clearNoticeForm());
+    $("#btnCreateDocument")?.addEventListener("click", () => createDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnUpdateDocument")?.addEventListener("click", () => updateDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnDeleteDocument")?.addEventListener("click", () => deleteDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnClearDocument")?.addEventListener("click", () => clearDocumentForm());
+    $("#btnCreateVendor")?.addEventListener("click", () => createVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
+    $("#btnUpdateVendor")?.addEventListener("click", () => updateVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
+    $("#btnDeleteVendor")?.addEventListener("click", () => deleteVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
+    $("#btnClearVendor")?.addEventListener("click", () => clearVendorForm());
+    $("#btnCreateSchedule")?.addEventListener("click", () => createSchedule().catch((error) => setMessage("#opsScheduleMsg", error.message || String(error), true)));
+    $("#btnUpdateSchedule")?.addEventListener("click", () => updateSchedule().catch((error) => setMessage("#opsScheduleMsg", error.message || String(error), true)));
+    $("#btnDeleteSchedule")?.addEventListener("click", () => deleteSchedule().catch((error) => setMessage("#opsScheduleMsg", error.message || String(error), true)));
+    $("#btnClearSchedule")?.addEventListener("click", () => clearScheduleForm());
     $("#btnCreateTenant")?.addEventListener("click", () => createTenant().catch((error) => setMessage("#adminMsg", error.message || String(error), true)));
     $("#btnLoadTenants")?.addEventListener("click", () => loadTenants().catch((error) => setMessage("#adminMsg", error.message || String(error), true)));
     $("#btnLoadUsers")?.addEventListener("click", () => loadUsers().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
@@ -745,6 +1234,11 @@
     $("#btnApproveUser")?.toggleAttribute("disabled", true);
     applyHero();
     syncUserTenantDisplay();
+    syncOpsWriteState();
+    clearNoticeForm();
+    clearDocumentForm();
+    clearScheduleForm();
+    clearVendorForm();
     if (isAdmin()) {
       $("#tenantSelectWrap")?.classList.remove("hidden");
       $("#adminPanel")?.classList.remove("hidden");

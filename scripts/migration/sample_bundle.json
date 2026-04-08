@@ -1,0 +1,77 @@
+{
+  "tenant": {
+    "id": "ys_thesharp",
+    "name": "연산더샵",
+    "site_code": "APT00001",
+    "site_name": "연산더샵"
+  },
+  "users": [
+    {
+      "login_id": "ops01",
+      "name": "행정담당",
+      "role": "manager",
+      "phone": "010-1111-2222",
+      "note": "행정업무 이관 계정",
+      "is_site_admin": true,
+      "is_active": true
+    }
+  ],
+  "complaints": [
+    {
+      "building": "101",
+      "unit": "1203",
+      "complainant_phone": "010-3333-4444",
+      "channel": "전화",
+      "content": "엘리베이터가 멈췄습니다.",
+      "summary": "101동 엘리베이터 정지",
+      "type": "승강기",
+      "urgency": "긴급",
+      "status": "접수",
+      "manager": "김대리",
+      "created_at": "2026-04-08 09:10:00"
+    }
+  ],
+  "notices": [
+    {
+      "title": "4월 정기 소독 안내",
+      "body": "4월 15일 오전 10시에 정기 소독이 진행됩니다.",
+      "category": "안내",
+      "status": "published",
+      "pinned": true
+    }
+  ],
+  "documents": [
+    {
+      "title": "소방 점검 보고서",
+      "summary": "소방 점검 결과 보고서 작성 필요",
+      "category": "보고",
+      "status": "검토중",
+      "owner": "김과장",
+      "due_date": "2026-04-09",
+      "reference_no": "RPT-2026-041"
+    }
+  ],
+  "vendors": [
+    {
+      "company_name": "태성전기",
+      "service_type": "전기 유지보수",
+      "contact_name": "박기사",
+      "phone": "051-111-2222",
+      "email": "vendor@example.com",
+      "status": "활성",
+      "note": "야간 긴급 출동 가능"
+    }
+  ],
+  "schedules": [
+    {
+      "title": "지하 기계실 정기 점검",
+      "schedule_type": "점검",
+      "status": "예정",
+      "due_date": "2026-04-10",
+      "owner": "시설팀",
+      "note": "점검 전 입주민 공지 필요",
+      "vendor_name": "태성전기",
+      "vendor_service_type": "전기 유지보수"
+    }
+  ]
+}

@@ -423,11 +423,18 @@ def modules_contracts(request: Request) -> Dict[str, Any]:
             "ui_path": "/pwa/",
             "api_prefix": "/api",
             "auth_modes": ["session", "api_key"],
-        }
+        },
+        {
+            "module_key": "operations_admin",
+            "module_name": "행정업무 모듈",
+            "ui_path": "/pwa/",
+            "api_prefix": "/api/ops",
+            "auth_modes": ["session"],
+        },
     ]
     return {
         "ok": True,
-        "allowed_modules": ["complaint_engine"],
+        "allowed_modules": ["complaint_engine", "operations_admin"],
         "contracts": contracts,
     }
 
