@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
@@ -9,6 +10,15 @@ from .db import DB_PATH, now_iso
 NOTICE_CATEGORY_VALUES = ("공지", "기안", "구매", "견적및발주", "작업내용", "기타")
 NOTICE_STATUS_VALUES = ("draft", "published", "archived")
 DOCUMENT_CATEGORY_VALUES = ("계약", "공문", "보고", "예산", "입주", "점검", "기타")
+DOCUMENT_CATEGORY_CODES = {
+    "계약": "CTR",
+    "공문": "LTR",
+    "보고": "RPT",
+    "예산": "BDG",
+    "입주": "MOV",
+    "점검": "INS",
+    "기타": "ETC",
+}
 DOCUMENT_STATUS_VALUES = ("작성중", "검토중", "완료", "보관")
 SCHEDULE_TYPE_VALUES = ("행정", "점검", "회의", "계약", "민원", "기타")
 SCHEDULE_STATUS_VALUES = ("예정", "진행중", "완료", "보류")
@@ -345,6 +355,7 @@ def create_document(
     con = _connect()
     try:
         _ensure_schema(con)
+        final_reference = clean_reference or _next_document_reference_no(con, tenant_id=clean_tenant_id, category=clean_category)
         ts = now_iso()
         cur = con.execute(
             """
@@ -361,7 +372,7 @@ def create_document(
                 clean_status,
                 clean_owner or None,
                 clean_due_date or None,
-                clean_reference or None,
+                final_reference,
                 clean_actor,
                 ts,
                 ts,
@@ -427,6 +438,32 @@ def summarize_document_categories(*, tenant_id: str) -> List[Dict[str, Any]]:
             for category in DOCUMENT_CATEGORY_VALUES
             if category in category_map
         ]
+    finally:
+        con.close()
+
+
+def _next_document_reference_no(con: sqlite3.Connection, *, tenant_id: str, category: str) -> str:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    clean_category = _clean_choice(category, DOCUMENT_CATEGORY_VALUES, field="category", default="기타")
+    prefix = f"{DOCUMENT_CATEGORY_CODES.get(clean_category, 'ETC')}-{date.today().strftime('%Y%m%d')}-"
+    rows = con.execute(
+        "SELECT reference_no FROM ops_documents WHERE tenant_id=? AND reference_no LIKE ?",
+        (clean_tenant_id, f"{prefix}%"),
+    ).fetchall()
+    max_seq = 0
+    for row in rows:
+        reference_no = str(row["reference_no"] or "").strip()
+        matched = re.match(rf"^{re.escape(prefix)}(\d{{3,}})$", reference_no)
+        if matched:
+            max_seq = max(max_seq, int(matched.group(1)))
+    return f"{prefix}{max_seq + 1:03d}"
+
+
+def next_document_reference_no(*, tenant_id: str, category: str) -> str:
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        return _next_document_reference_no(con, tenant_id=tenant_id, category=category)
     finally:
         con.close()
 

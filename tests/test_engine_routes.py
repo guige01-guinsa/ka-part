@@ -461,11 +461,11 @@ def test_operations_admin_module_supports_crud_and_dashboard(app_client) -> None
             "status": "검토중",
             "owner": "김과장",
             "due_date": "2026-04-09",
-            "reference_no": "RPT-2026-041",
         },
     )
     assert document.status_code == 200
     document_id = int(document.json()["item"]["id"])
+    assert str(document.json()["item"]["reference_no"]).startswith("RPT-")
 
     archived_document = client.post(
         "/api/ops/documents",
@@ -517,6 +517,21 @@ def test_operations_admin_module_supports_crud_and_dashboard(app_client) -> None
     category_counts = {row["category"]: row for row in documents.json()["category_counts"]}
     assert category_counts["보고"]["total_count"] == 1
     assert category_counts["계약"]["total_count"] == 1
+
+    next_reference = client.get("/api/ops/documents/next_reference?tenant_id=ys_thesharp&category=보고")
+    assert next_reference.status_code == 200
+    assert str(next_reference.json()["item"]["reference_no"]).startswith("RPT-")
+
+    from openpyxl import load_workbook
+
+    export = client.get("/api/ops/documents/export.xlsx?tenant_id=ys_thesharp&category=보고")
+    assert export.status_code == 200
+    assert export.headers["content-type"].startswith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    workbook = load_workbook(io.BytesIO(export.content))
+    sheet = workbook.active
+    assert sheet["A1"].value == "행정문서 관리대장"
+    assert sheet["A3"].value == "분류: 보고"
+    assert sheet["A6"].value == "소방 점검 보고서"
 
     updated_document = client.patch(
         f"/api/ops/documents/{document_id}",

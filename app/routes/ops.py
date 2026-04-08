@@ -21,6 +21,7 @@ from ..ops_db import (
     list_notices,
     list_schedules,
     list_vendors,
+    next_document_reference_no,
     ops_dashboard_summary,
     summarize_document_categories,
     update_document,
@@ -28,6 +29,7 @@ from ..ops_db import (
     update_schedule,
     update_vendor,
 )
+from ..report_excel import build_ops_document_ledger_xlsx
 from ..report_pdf import build_ops_draft_pdf, build_reference_document_pdf
 from .core import _require_auth
 
@@ -174,6 +176,25 @@ def ops_documents_create(request: Request, payload: Dict[str, Any] = Body(...)) 
     return {"ok": True, "item": item}
 
 
+@router.get("/ops/documents/next_reference")
+def ops_documents_next_reference(
+    request: Request,
+    tenant_id: str = Query(default=""),
+    category: str = Query(default=""),
+) -> Dict[str, Any]:
+    user, resolved_tenant_id = _require_ops_editor(request, {"tenant_id": tenant_id})
+    resolved_category = str(category or "").strip() or "기타"
+    reference_no = next_document_reference_no(tenant_id=resolved_tenant_id, category=resolved_category)
+    log_usage(resolved_tenant_id, "ops.documents.next_reference")
+    append_audit_log(
+        resolved_tenant_id,
+        "next_document_reference",
+        _actor_label(user),
+        {"category": resolved_category, "reference_no": reference_no},
+    )
+    return {"ok": True, "item": {"reference_no": reference_no, "category": resolved_category}}
+
+
 @router.patch("/ops/documents/{document_id}")
 def ops_documents_update(request: Request, document_id: int, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     user, tenant_id = _require_ops_editor(request, payload)
@@ -202,6 +223,36 @@ def ops_documents_delete(request: Request, document_id: int, payload: Dict[str, 
     return {"ok": True, "item": item}
 
 
+@router.get("/ops/documents/export.xlsx")
+def ops_documents_export_xlsx(
+    request: Request,
+    tenant_id: str = Query(default=""),
+    status: str = Query(default=""),
+    category: str = Query(default=""),
+) -> StreamingResponse:
+    user, resolved_tenant_id = _resolve_ops_context(request, {"tenant_id": tenant_id})
+    items = list_documents(tenant_id=resolved_tenant_id, status=status, category=category, limit=2000)
+    xlsx_bytes = build_ops_document_ledger_xlsx(
+        tenant_label=_tenant_label(resolved_tenant_id),
+        selected_category=str(category or "").strip(),
+        documents=items,
+    )
+    log_usage(resolved_tenant_id, "ops.documents.export_xlsx")
+    append_audit_log(
+        resolved_tenant_id,
+        "export_document_ledger_xlsx",
+        _actor_label(user),
+        {"category": str(category or "").strip() or "전체", "count": len(items)},
+    )
+    safe_name = _ascii_download_name(f"document-ledger-{str(category or '').strip() or 'all'}", "document-ledger")
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name[:80]}.xlsx"'}
+    return StreamingResponse(
+        iter([xlsx_bytes]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+
+
 @router.post("/ops/documents/render_pdf")
 def ops_documents_render_pdf(request: Request, payload: Dict[str, Any] = Body(...)) -> StreamingResponse:
     user, tenant_id = _require_ops_editor(request, payload)
@@ -211,13 +262,15 @@ def ops_documents_render_pdf(request: Request, payload: Dict[str, Any] = Body(..
         raise HTTPException(status_code=400, detail="문서 제목을 입력하세요.")
     if not summary:
         raise HTTPException(status_code=400, detail="문서 내용을 입력하세요.")
+    category = str(payload.get("category") or "").strip() or "기타"
+    reference_no = str(payload.get("reference_no") or "").strip() or next_document_reference_no(tenant_id=tenant_id, category=category)
     pdf_bytes = build_ops_draft_pdf(
         tenant_label=_tenant_label(tenant_id),
         title=title,
         summary=summary,
         drafter_label=_actor_label(user),
-        reference_no=str(payload.get("reference_no") or "").strip(),
-        category=str(payload.get("category") or "").strip(),
+        reference_no=reference_no,
+        category=category,
         owner=str(payload.get("owner") or "").strip(),
         due_date=str(payload.get("due_date") or "").strip(),
     )

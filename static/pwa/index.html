@@ -426,11 +426,13 @@
             <button id="btnCreateDocument" data-ops-write="1" class="action-btn" type="button">문서 등록</button>
             <button id="btnUpdateDocument" data-ops-write="1" class="ghost-btn" type="button">선택 수정</button>
             <button id="btnDeleteDocument" data-ops-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnAutoDocumentRefNo" data-ops-write="1" class="ghost-btn" type="button">번호 자동채번</button>
             <button id="btnRenderDocumentPdf" data-ops-write="1" class="ghost-btn" type="button">기안서 PDF 생성</button>
             <button id="btnSampleDocumentPdf" data-ops-write="1" class="ghost-btn" type="button">샘플 PDF 생성</button>
+            <button id="btnExportDocumentLedger" class="ghost-btn" type="button">엑셀 다운로드</button>
             <button id="btnClearDocument" class="ghost-btn" type="button">입력 초기화</button>
           </div>
-          <div class="inline-note">제목과 요약/메모만 입력해도 기안서 PDF를 바로 생성할 수 있습니다. 샘플 파일은 참조용 PDF 생성에만 사용됩니다.</div>
+          <div class="inline-note">문서번호를 비워두면 저장 시 자동채번됩니다. 제목과 요약/메모만 입력해도 기안서 PDF를 바로 생성할 수 있고, 샘플 파일은 참조용 PDF 생성에만 사용됩니다.</div>
           <div id="opsDocumentMsg" class="inline-message" aria-live="polite"></div>
           <div class="filter-row">
             <label class="field filter-field">

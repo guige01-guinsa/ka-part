@@ -684,6 +684,27 @@
     };
   }
 
+  async function fillNextDocumentReference() {
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const category = String($("#documentCategory").value || "기타").trim() || "기타";
+    const params = new URLSearchParams({ tenant_id: tenantId, category });
+    const data = await api(`/api/ops/documents/next_reference?${params.toString()}`);
+    $("#documentRefNo").value = String(data.item?.reference_no || "");
+    setMessage("#opsDocumentMsg", "문서번호를 자동채번했습니다.");
+  }
+
+  async function exportDocumentLedgerExcel() {
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const params = new URLSearchParams({ tenant_id: tenantId });
+    const category = selectedDocumentCategoryFilter();
+    if (category) params.set("category", category);
+    const response = await authFetchBlob(`/api/ops/documents/export.xlsx?${params.toString()}`);
+    downloadBlob(response.blob, response.filename || `document-ledger-${tenantId || "all"}.xlsx`);
+    setMessage("#opsDocumentMsg", `${category || "전체"} 문서관리대장을 엑셀로 내려받았습니다.`);
+  }
+
   async function renderDocumentPdf() {
     const payload = documentPayloadFromForm();
     if (!payload.title) throw new Error("문서 제목을 입력하세요.");
@@ -1355,8 +1376,10 @@
     $("#btnCreateDocument")?.addEventListener("click", () => createDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnUpdateDocument")?.addEventListener("click", () => updateDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnDeleteDocument")?.addEventListener("click", () => deleteDocument().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnAutoDocumentRefNo")?.addEventListener("click", () => fillNextDocumentReference().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnRenderDocumentPdf")?.addEventListener("click", () => renderDocumentPdf().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnSampleDocumentPdf")?.addEventListener("click", () => renderSampleDocumentPdf().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#btnExportDocumentLedger")?.addEventListener("click", () => exportDocumentLedgerExcel().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnClearDocument")?.addEventListener("click", () => clearDocumentForm());
     $("#documentCategoryFilter")?.addEventListener("change", () => loadOpsDocuments().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnCreateVendor")?.addEventListener("click", () => createVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));
