@@ -190,6 +190,38 @@ def test_kakao_digest_supports_images_with_filename_fallback(app_client) -> None
     assert "🖼 첨부 이미지 요약" in item["report_text"]
 
 
+def test_kakao_digest_accepts_up_to_thirty_images(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    files = [
+        ("files", (f"{index:02d}-현장사진.jpg", io.BytesIO(f"fake-image-{index}".encode("utf-8")), "image/jpeg"))
+        for index in range(30)
+    ]
+    response = client.post(
+        "/api/ai/kakao_digest/images",
+        headers=headers,
+        data={"text": ""},
+        files=files,
+    )
+    assert response.status_code == 200
+    assert response.json()["item"]["input_image_count"] == 30
+
+    files = [
+        ("files", (f"{index:02d}-현장사진.jpg", io.BytesIO(f"fake-image-{index}".encode("utf-8")), "image/jpeg"))
+        for index in range(31)
+    ]
+    blocked = client.post(
+        "/api/ai/kakao_digest/images",
+        headers=headers,
+        data={"text": ""},
+        files=files,
+    )
+    assert blocked.status_code == 400
+    assert "최대 30장" in blocked.json()["detail"]
+
+
 def test_kakao_digest_pdf_supports_text_and_images(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)

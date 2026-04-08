@@ -3,6 +3,7 @@
 
   const $ = (sel) => document.querySelector(sel);
   const STATUS_VALUES = ["접수", "처리중", "완료", "이월"];
+  const MAX_CHAT_DIGEST_IMAGES = 30;
   const NOTICE_STATUS_LABELS = {
     draft: "임시저장",
     published: "게시중",
@@ -966,7 +967,7 @@
     const text = String($("#chatInput").value || "").trim();
     const files = selectedFiles("#chatImageInput");
     if (!text && !files.length) throw new Error("카톡 대화 또는 이미지를 입력하세요.");
-    if (files.length > 6) throw new Error("카톡 이미지는 최대 6장까지 업로드할 수 있습니다.");
+    if (files.length > MAX_CHAT_DIGEST_IMAGES) throw new Error(`카톡 이미지는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 업로드할 수 있습니다.`);
 
     let data;
     if (files.length) {
@@ -994,7 +995,7 @@
     const text = String($("#chatInput").value || "").trim();
     const files = selectedFiles("#chatImageInput");
     if (!text && !files.length) throw new Error("카톡 대화 또는 이미지를 입력하세요.");
-    if (files.length > 6) throw new Error("카톡 이미지는 최대 6장까지 업로드할 수 있습니다.");
+    if (files.length > MAX_CHAT_DIGEST_IMAGES) throw new Error(`카톡 이미지는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 업로드할 수 있습니다.`);
 
     const fd = new FormData();
     fd.append("tenant_id", tenantId);
@@ -1279,7 +1280,7 @@
     $("#btnDeleteUser")?.addEventListener("click", () => deleteSelectedUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#tenantSelect")?.addEventListener("change", () => reloadAll().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#photoInput")?.addEventListener("change", () => updatePhotoHint("#photoInput", "#photoHint"));
-    $("#chatImageInput")?.addEventListener("change", () => updatePhotoHint("#chatImageInput", "#chatImageHint"));
+    $("#chatImageInput")?.addEventListener("change", () => updatePhotoHint("#chatImageInput", "#chatImageHint", MAX_CHAT_DIGEST_IMAGES));
     $("#attachmentSelectAll")?.addEventListener("change", (event) => {
       const checked = !!event.target.checked;
       document.querySelectorAll(".attachment-check").forEach((el) => {

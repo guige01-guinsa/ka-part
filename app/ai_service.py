@@ -30,7 +30,7 @@ STATUS_KEYWORDS = {
     "처리중": ("처리중", "진행중", "출동", "확인중"),
     "이월": ("이월", "내일", "다음날"),
 }
-MAX_CHAT_DIGEST_IMAGES = 6
+MAX_CHAT_DIGEST_IMAGES = 30
 
 
 def _collapse_space(value: Any) -> str:
