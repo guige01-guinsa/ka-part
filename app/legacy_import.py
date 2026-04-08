@@ -161,6 +161,12 @@ NOTICE_STATUS_MAP = {
     "보관": "archived",
 }
 
+NOTICE_CATEGORY_MAP = {
+    "안내": "공지",
+    "긴급": "작업내용",
+    "행정": "기안",
+}
+
 DOCUMENT_STATUS_MAP = {
     "작성중": "작성중",
     "draft": "작성중",
@@ -863,7 +869,12 @@ def _import_notices(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dict[
         if not title or not body:
             skipped += 1
             continue
-        category = _normalize_choice(_pick(row, "category"), allowed=NOTICE_CATEGORY_VALUES, default="공지")
+        category = _normalize_choice(
+            _pick(row, "category"),
+            allowed=NOTICE_CATEGORY_VALUES,
+            mapping=NOTICE_CATEGORY_MAP,
+            default="공지",
+        )
         status = _normalize_choice(_pick(row, "status"), allowed=NOTICE_STATUS_VALUES, mapping=NOTICE_STATUS_MAP, default="published")
         pinned = _truthy(_pick(row, "pinned"))
         created_at = _normalize_timestamp(_pick(row, "created_at"))

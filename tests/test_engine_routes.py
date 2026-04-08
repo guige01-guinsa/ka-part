@@ -443,7 +443,7 @@ def test_operations_admin_module_supports_crud_and_dashboard(app_client) -> None
             "tenant_id": "ys_thesharp",
             "title": "4월 정기 소독 안내",
             "body": "4월 15일 오전 10시에 정기 소독이 진행됩니다.",
-            "category": "안내",
+            "category": "기안",
             "status": "published",
             "pinned": True,
         },
@@ -624,7 +624,7 @@ def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_p
                         "created_at": "2026-04-07 09:00:00",
                     }
                 ],
-                "notices": [{"title": "정기 단수 안내", "body": "4월 20일 단수 예정", "category": "안내", "status": "published"}],
+                "notices": [{"title": "정기 단수 안내", "body": "4월 20일 단수 예정", "category": "행정", "status": "published"}],
                 "documents": [{"title": "월간 운영보고", "category": "보고", "status": "완료", "reference_no": "OPS-1"}],
                 "vendors": [{"company_name": "한빛설비", "service_type": "설비 유지보수", "status": "활성"}],
                 "schedules": [{"title": "옥상 방수 점검", "schedule_type": "점검", "status": "예정", "vendor_name": "한빛설비", "vendor_service_type": "설비 유지보수"}],
@@ -680,7 +680,7 @@ def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_p
         con.execute(
             """
             INSERT INTO legacy_notices(title, description, category, status)
-            VALUES('소방훈련 안내', '4월 30일 소방훈련 예정', '공지', 'published')
+            VALUES('소방훈련 안내', '4월 30일 소방훈련 예정', '긴급', 'published')
             """
         )
         con.commit()
@@ -702,8 +702,9 @@ def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_p
 
     notices = app_client.get("/api/ops/notices?tenant_id=ys_thesharp")
     assert notices.status_code == 200
-    assert any(item["title"] == "정기 단수 안내" for item in notices.json()["items"])
-    assert any(item["title"] == "소방훈련 안내" for item in notices.json()["items"])
+    notice_map = {item["title"]: item for item in notices.json()["items"]}
+    assert notice_map["정기 단수 안내"]["category"] == "기안"
+    assert notice_map["소방훈련 안내"]["category"] == "작업내용"
 
 
 def test_legacy_import_supports_facility_db_schema(app_client, tmp_path) -> None:

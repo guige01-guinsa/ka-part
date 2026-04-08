@@ -372,7 +372,7 @@ def build_ops_draft_pdf(
     safe_summary = _collapse(summary) or "상세 내용이 입력되지 않았습니다."
     safe_reference = _collapse(reference_no) or f"기안-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     safe_owner = _collapse(owner) or drafter_label or "담당자 미지정"
-    safe_category = _collapse(category) or "행정"
+    safe_category = _collapse(category) or "기안"
     safe_due_date = _collapse(due_date) or "-"
 
     story: List[Any] = []

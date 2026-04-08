@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .db import DB_PATH, now_iso
 
-NOTICE_CATEGORY_VALUES = ("공지", "안내", "긴급", "행정", "기타")
+NOTICE_CATEGORY_VALUES = ("공지", "기안", "구매", "견적및발주", "작업내용", "기타")
 NOTICE_STATUS_VALUES = ("draft", "published", "archived")
 DOCUMENT_CATEGORY_VALUES = ("계약", "공문", "보고", "예산", "입주", "점검", "기타")
 DOCUMENT_STATUS_VALUES = ("작성중", "검토중", "완료", "보관")
