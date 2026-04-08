@@ -211,6 +211,239 @@
     el.textContent = `선택 ${files.length}장 / 최대 ${limit}장: ${files.map((file) => file.name).join(", ")}`;
   }
 
+  function fileSignature(file) {
+    return [file.name || "", file.size || 0, file.lastModified || 0, file.type || ""].join("::");
+  }
+
+  function mergeFilesIntoInput(inputSelector, incomingFiles, limit = MAX_CHAT_DIGEST_IMAGES) {
+    const input = $(inputSelector);
+    if (!input || !incomingFiles || !incomingFiles.length || typeof DataTransfer === "undefined") {
+      return { added: 0, total: selectedFiles(inputSelector).length };
+    }
+    const existingFiles = selectedFiles(inputSelector);
+    const dt = new DataTransfer();
+    const seen = new Set();
+    let added = 0;
+
+    for (const file of [...existingFiles, ...incomingFiles]) {
+      if (!(file instanceof File)) continue;
+      const signature = fileSignature(file);
+      if (seen.has(signature)) continue;
+      if (dt.items.length >= limit) break;
+      seen.add(signature);
+      dt.items.add(file);
+      if (!existingFiles.some((item) => fileSignature(item) === signature)) {
+        added += 1;
+      }
+    }
+    input.files = dt.files;
+    return { added, total: dt.files.length };
+  }
+
+  function textMeasureContext(font) {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("브라우저에서 이미지 생성을 지원하지 않습니다.");
+    ctx.font = font;
+    return ctx;
+  }
+
+  function splitTextToCanvasLines(ctx, text, maxWidth) {
+    const source = String(text || "").replace(/\r\n?/g, "\n");
+    const paragraphs = source.split("\n");
+    const lines = [];
+
+    for (const paragraph of paragraphs) {
+      const raw = String(paragraph || "").trimEnd();
+      if (!raw.trim()) {
+        lines.push("");
+        continue;
+      }
+      let rest = raw;
+      while (rest.length) {
+        let low = 1;
+        let high = rest.length;
+        let best = 1;
+        while (low <= high) {
+          const mid = Math.floor((low + high) / 2);
+          const candidate = rest.slice(0, mid);
+          if (ctx.measureText(candidate).width <= maxWidth) {
+            best = mid;
+            low = mid + 1;
+          } else {
+            high = mid - 1;
+          }
+        }
+        let cut = best;
+        if (cut < rest.length) {
+          const candidate = rest.slice(0, cut);
+          const lastSpace = Math.max(candidate.lastIndexOf(" "), candidate.lastIndexOf("\t"));
+          if (lastSpace >= Math.max(10, cut - 12)) {
+            cut = lastSpace;
+          }
+        }
+        const line = rest.slice(0, cut).trimEnd();
+        lines.push(line || rest.slice(0, best).trimEnd());
+        rest = rest.slice(cut || best).trimStart();
+      }
+    }
+    return lines;
+  }
+
+  function chatTextImagePlan(text, maxImages = MAX_CHAT_DIGEST_IMAGES) {
+    const normalized = String(text || "").trim();
+    if (!normalized) {
+      return { pageCount: 0, pages: [], truncated: false };
+    }
+    const width = 1280;
+    const height = 1760;
+    const paddingX = 88;
+    const paddingTop = 128;
+    const paddingBottom = 104;
+    const bodyTop = 244;
+    const lineHeight = 40;
+    const ctx = textMeasureContext('28px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif');
+    const lines = splitTextToCanvasLines(ctx, normalized, width - (paddingX * 2));
+    const linesPerPage = Math.max(1, Math.floor((height - bodyTop - paddingBottom) / lineHeight));
+    const totalPages = Math.max(1, Math.ceil(lines.length / linesPerPage));
+    const limitedPages = Math.min(totalPages, maxImages);
+    const truncated = totalPages > maxImages;
+    const pages = [];
+    for (let index = 0; index < limitedPages; index += 1) {
+      const start = index * linesPerPage;
+      const end = start + linesPerPage;
+      pages.push(lines.slice(start, end));
+    }
+    if (truncated && pages.length) {
+      const lastPage = pages[pages.length - 1].slice(0, Math.max(0, linesPerPage - 2));
+      lastPage.push("...");
+      lastPage.push("[이후 내용은 자동 저장 한도를 넘어 생략되었습니다.]");
+      pages[pages.length - 1] = lastPage;
+    }
+    return {
+      width,
+      height,
+      paddingX,
+      paddingTop,
+      bodyTop,
+      lineHeight,
+      pageCount: limitedPages,
+      pages,
+      truncated,
+    };
+  }
+
+  async function renderChatTextAsImageFiles(text, maxImages = MAX_CHAT_DIGEST_IMAGES) {
+    const plan = chatTextImagePlan(text, maxImages);
+    if (!plan.pageCount) return [];
+    const createdAt = new Date().toLocaleString("ko-KR", { hour12: false });
+    const output = [];
+
+    for (let index = 0; index < plan.pages.length; index += 1) {
+      const canvas = document.createElement("canvas");
+      canvas.width = plan.width;
+      canvas.height = plan.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("브라우저에서 원문 이미지 생성을 지원하지 않습니다.");
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = "#d8d0c4";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(18, 18, canvas.width - 36, canvas.height - 36);
+
+      ctx.fillStyle = "#143735";
+      ctx.font = '700 36px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+      ctx.fillText("카카오톡 대화 원문 자동저장", plan.paddingX, plan.paddingTop);
+
+      ctx.fillStyle = "#6b736e";
+      ctx.font = '20px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+      ctx.fillText(`${createdAt} · ${index + 1}/${plan.pageCount}`, plan.paddingX, plan.paddingTop + 40);
+
+      ctx.fillStyle = "#1f2a28";
+      ctx.font = '28px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+      let y = plan.bodyTop;
+      for (const line of plan.pages[index]) {
+        ctx.fillText(line || " ", plan.paddingX, y);
+        y += plan.lineHeight;
+      }
+
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob((value) => {
+          if (value) {
+            resolve(value);
+            return;
+          }
+          reject(new Error("카톡 원문 이미지를 생성하지 못했습니다."));
+        }, "image/png");
+      });
+      output.push(new File([blob], `kakao-chat-text-${String(index + 1).padStart(2, "0")}.png`, { type: "image/png", lastModified: Date.now() }));
+    }
+    return output;
+  }
+
+  function updateChatDigestHint() {
+    const text = String($("#chatInput")?.value || "").trim();
+    const files = selectedFiles("#chatImageInput");
+    const imageHint = $("#chatImageHint");
+    const modeHint = $("#chatDigestModeHint");
+    if (imageHint) {
+      if (files.length) {
+        imageHint.textContent = `선택 ${files.length}장 / 최대 ${MAX_CHAT_DIGEST_IMAGES}장: ${files.map((file) => file.name).join(", ")}`;
+      } else if (text) {
+        const plan = chatTextImagePlan(text, MAX_CHAT_DIGEST_IMAGES);
+        imageHint.textContent = `선택된 이미지는 없지만, 분석 시 카톡 원문을 PNG ${Math.max(plan.pageCount, 1)}장으로 자동 저장합니다.`;
+      } else {
+        imageHint.textContent = "선택된 이미지가 없습니다.";
+      }
+    }
+    if (modeHint) {
+      if (files.length) {
+        modeHint.textContent = "현재 선택한 이미지와 입력한 원문을 함께 분석합니다. 이 입력칸에 카톡 캡처 이미지를 Ctrl+V로 추가할 수도 있습니다.";
+      } else {
+        modeHint.textContent = "텍스트만 입력한 경우 원문을 PNG 이미지로 자동 저장해 함께 분석합니다. 이 입력칸에 카톡 캡처 이미지를 Ctrl+V로 붙여 넣어도 됩니다.";
+      }
+    }
+  }
+
+  async function resolveChatDigestFiles(text) {
+    const explicitFiles = selectedFiles("#chatImageInput");
+    if (explicitFiles.length > MAX_CHAT_DIGEST_IMAGES) {
+      throw new Error(`카톡 이미지는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 업로드할 수 있습니다.`);
+    }
+    if (explicitFiles.length) {
+      return { files: explicitFiles, autogenerated: false };
+    }
+    const generated = await renderChatTextAsImageFiles(text, MAX_CHAT_DIGEST_IMAGES);
+    return { files: generated, autogenerated: generated.length > 0 };
+  }
+
+  function extractClipboardImageFiles(event) {
+    const items = Array.from(event?.clipboardData?.items || []);
+    const files = [];
+    for (const item of items) {
+      if (!String(item.type || "").startsWith("image/")) continue;
+      const blob = item.getAsFile();
+      if (!blob) continue;
+      const ext = String(blob.type || "image/png").split("/")[1] || "png";
+      files.push(new File([blob], `kakao-paste-${Date.now()}-${files.length + 1}.${ext}`, { type: blob.type || "image/png", lastModified: Date.now() }));
+    }
+    return files;
+  }
+
+  function handleChatInputPaste(event) {
+    const pastedImages = extractClipboardImageFiles(event);
+    if (!pastedImages.length) return;
+    event.preventDefault();
+    const merged = mergeFilesIntoInput("#chatImageInput", pastedImages, MAX_CHAT_DIGEST_IMAGES);
+    updateChatDigestHint();
+    if (merged.added < pastedImages.length) {
+      setMessage("#intakeMsg", `카톡 캡처 이미지는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 저장됩니다.`, true);
+      return;
+    }
+    setMessage("#intakeMsg", `카톡 캡처 이미지 ${merged.added}장을 붙여 넣었습니다.`);
+  }
+
   function renderRoleOptions(selector, selected = "") {
     const el = $(selector);
     if (!el) return;
@@ -1225,9 +1458,8 @@
   async function digestChat() {
     const tenantId = currentTenantId();
     const text = String($("#chatInput").value || "").trim();
-    const files = selectedFiles("#chatImageInput");
+    const { files, autogenerated } = await resolveChatDigestFiles(text);
     if (!text && !files.length) throw new Error("카톡 대화 또는 이미지를 입력하세요.");
-    if (files.length > MAX_CHAT_DIGEST_IMAGES) throw new Error(`카톡 이미지는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 업로드할 수 있습니다.`);
 
     let data;
     if (files.length) {
@@ -1248,14 +1480,16 @@
       });
     }
     $("#chatDigestBox").textContent = String(data.item?.report_text || "");
+    if (autogenerated && files.length) {
+      setMessage("#intakeMsg", `카톡 원문을 PNG ${files.length}장으로 자동 저장해 함께 분석했습니다.`);
+    }
   }
 
   async function downloadDigestPdf() {
     const tenantId = currentTenantId();
     const text = String($("#chatInput").value || "").trim();
-    const files = selectedFiles("#chatImageInput");
+    const { files, autogenerated } = await resolveChatDigestFiles(text);
     if (!text && !files.length) throw new Error("카톡 대화 또는 이미지를 입력하세요.");
-    if (files.length > MAX_CHAT_DIGEST_IMAGES) throw new Error(`카톡 이미지는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 업로드할 수 있습니다.`);
 
     const fd = new FormData();
     fd.append("tenant_id", tenantId);
@@ -1268,6 +1502,9 @@
       body: fd,
     });
     downloadBlob(response.blob, response.filename || `kakao-digest-${tenantId || "report"}.pdf`);
+    if (autogenerated && files.length) {
+      setMessage("#intakeMsg", `카톡 원문을 PNG ${files.length}장으로 자동 저장한 뒤 PDF를 생성했습니다.`);
+    }
   }
 
   async function createTenant() {
@@ -1555,7 +1792,9 @@
     $("#btnDeleteUser")?.addEventListener("click", () => deleteSelectedUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#tenantSelect")?.addEventListener("change", () => reloadAll().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#photoInput")?.addEventListener("change", () => updatePhotoHint("#photoInput", "#photoHint"));
-    $("#chatImageInput")?.addEventListener("change", () => updatePhotoHint("#chatImageInput", "#chatImageHint", MAX_CHAT_DIGEST_IMAGES));
+    $("#chatImageInput")?.addEventListener("change", () => updateChatDigestHint());
+    $("#chatInput")?.addEventListener("input", () => updateChatDigestHint());
+    $("#chatInput")?.addEventListener("paste", (event) => handleChatInputPaste(event));
     $("#attachmentSelectAll")?.addEventListener("change", (event) => {
       const checked = !!event.target.checked;
       document.querySelectorAll(".attachment-check").forEach((el) => {
@@ -1574,6 +1813,7 @@
     syncOpsWriteState();
     syncComplaintDeleteOption();
     $("#filterStatus").value = "접수";
+    updateChatDigestHint();
     clearNoticeForm();
     clearComplaintDetail();
     clearDocumentForm();
