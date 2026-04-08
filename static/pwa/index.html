@@ -238,6 +238,8 @@
         <div class="cta-row">
           <button id="btnDigestChat" class="action-btn action-secondary" type="button">카톡 분석</button>
           <button id="btnDigestPdf" class="ghost-btn" type="button">PDF 다운로드</button>
+          <button id="btnPreviewDigestSource" class="ghost-btn" type="button">원문 이미지 미리보기</button>
+          <button id="btnDownloadDigestSource" class="ghost-btn" type="button">원문 이미지 다운로드</button>
         </div>
       </div>
       <label class="field">
@@ -251,6 +253,8 @@
       </label>
       <div id="chatImageHint" class="inline-note">선택된 이미지가 없습니다.</div>
       <div class="inline-note">PDF는 현재 입력된 텍스트와 선택되었거나 자동 저장된 이미지를 기준으로 생성됩니다.</div>
+      <div id="chatSourcePreviewMeta" class="inline-note">원문 이미지 미리보기를 열면 자동 저장될 PNG를 여기서 확인할 수 있습니다.</div>
+      <div id="chatSourcePreview" class="chat-source-preview hidden"></div>
       <div id="chatDigestBox" class="detail-block">카톡 분석 결과가 여기에 표시됩니다.</div>
     </section>
 

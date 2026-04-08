@@ -529,6 +529,35 @@ body {
   gap: 10px;
 }
 
+.chat-source-preview {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-top: 14px;
+}
+
+.chat-source-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.chat-source-card strong {
+  font-size: 13px;
+}
+
+.chat-source-card img {
+  width: 100%;
+  display: block;
+  border-radius: 14px;
+  border: 1px solid rgba(23, 38, 37, 0.08);
+  background: #fff;
+  box-shadow: 0 12px 24px rgba(23, 38, 37, 0.08);
+}
+
 .attachment-card {
   display: grid;
   gap: 8px;
