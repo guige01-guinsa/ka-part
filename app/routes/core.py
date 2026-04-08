@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from typing import Any, Dict, Tuple
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..db import (
@@ -33,6 +34,7 @@ from ..db import (
     update_staff_user,
     verify_password,
 )
+from ..legacy_import import import_legacy_source
 
 router = APIRouter()
 
@@ -674,3 +676,66 @@ def admin_usage(request: Request, tenant_id: str = Query(default=""), limit: int
 def admin_audit(request: Request, tenant_id: str = Query(default=""), limit: int = Query(default=100, ge=1, le=500)) -> Dict[str, Any]:
     _user, _token = _require_admin(request)
     return {"ok": True, "items": list_audit_logs(tenant_id=tenant_id, limit=limit)}
+
+
+@router.post("/admin/legacy/import")
+async def admin_legacy_import(
+    request: Request,
+    source_file: UploadFile = File(...),
+    tenant_id: str = Form(...),
+    tenant_name: str = Form(...),
+    site_code: str = Form(default=""),
+    site_name: str = Form(default=""),
+    default_user_password: str = Form(default="ChangeMe123!"),
+    dry_run: bool = Form(default=False),
+) -> Dict[str, Any]:
+    user, _token = _require_admin(request)
+    filename = str(source_file.filename or "").strip()
+    suffix = os.path.splitext(filename)[1].lower()
+    if suffix not in {".db", ".sqlite", ".sqlite3", ".json"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 이관 파일 형식입니다.")
+
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
+            temp_path = handle.name
+            while True:
+                chunk = await source_file.read(1024 * 1024)
+                if not chunk:
+                    break
+                handle.write(chunk)
+
+        item = import_legacy_source(
+            source_path=temp_path,
+            tenant_id=str(tenant_id or "").strip().lower(),
+            tenant_name=str(tenant_name or "").strip(),
+            site_code=str(site_code or "").strip(),
+            site_name=str(site_name or "").strip(),
+            default_user_password=str(default_user_password or "").strip() or "ChangeMe123!",
+            dry_run=bool(dry_run),
+        )
+        append_audit_log(
+            str(item.get("tenant_id") or "").strip().lower() or None,
+            "admin_legacy_import",
+            str(user.get("login_id") or user.get("name") or "admin"),
+            {
+                "source_filename": filename,
+                "dry_run": bool(dry_run),
+                "summary": item,
+            },
+        )
+        return {"ok": True, "item": item}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"legacy import failed: {exc}") from exc
+    finally:
+        try:
+            await source_file.close()
+        except Exception:
+            pass
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass

@@ -626,6 +626,231 @@ def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_p
     assert any(item["title"] == "소방훈련 안내" for item in notices.json()["items"])
 
 
+def test_legacy_import_supports_facility_db_schema(app_client, tmp_path) -> None:
+    import sqlite3
+
+    import app.legacy_import as legacy_import
+
+    _bootstrap_admin_and_tenant(app_client)
+
+    legacy_sqlite = tmp_path / "facility.sqlite"
+    con = sqlite3.connect(str(legacy_sqlite))
+    try:
+        con.executescript(
+            """
+            CREATE TABLE complaint_cases (
+              id INTEGER PRIMARY KEY,
+              case_key TEXT,
+              site TEXT,
+              building TEXT,
+              unit_number TEXT,
+              resident_name TEXT,
+              contact_phone TEXT,
+              complaint_type TEXT,
+              title TEXT,
+              description TEXT,
+              status TEXT,
+              priority TEXT,
+              source_channel TEXT,
+              reported_at TEXT,
+              scheduled_visit_at TEXT,
+              resolved_at TEXT,
+              resident_confirmed_at TEXT,
+              closed_at TEXT,
+              recurrence_flag INTEGER,
+              recurrence_count INTEGER,
+              assignee TEXT,
+              linked_work_order_id INTEGER,
+              import_batch_id TEXT,
+              source_workbook TEXT,
+              source_sheet TEXT,
+              source_row_number INTEGER,
+              source_row_hash TEXT,
+              created_by TEXT,
+              created_at TEXT,
+              updated_at TEXT
+            );
+            CREATE TABLE complaint_events (
+              id INTEGER PRIMARY KEY,
+              complaint_id INTEGER,
+              event_type TEXT,
+              from_status TEXT,
+              to_status TEXT,
+              note TEXT,
+              detail_json TEXT,
+              actor_username TEXT,
+              created_at TEXT
+            );
+            CREATE TABLE admin_audit_logs (
+              id INTEGER PRIMARY KEY,
+              actor_user_id INTEGER,
+              actor_username TEXT,
+              action TEXT,
+              resource_type TEXT,
+              resource_id TEXT,
+              status TEXT,
+              detail_json TEXT,
+              created_at TEXT,
+              prev_hash TEXT,
+              entry_hash TEXT
+            );
+            CREATE TABLE ops_checklist_sets (
+              id INTEGER PRIMARY KEY,
+              set_id TEXT,
+              label TEXT,
+              task_type TEXT,
+              source TEXT,
+              created_at TEXT,
+              updated_at TEXT,
+              version_no INTEGER,
+              lifecycle_state TEXT
+            );
+            CREATE TABLE ops_checklist_set_items (
+              id INTEGER PRIMARY KEY,
+              set_id TEXT,
+              seq INTEGER,
+              item_text TEXT,
+              created_at TEXT,
+              updated_at TEXT
+            );
+            CREATE TABLE sla_policies (
+              id INTEGER PRIMARY KEY,
+              policy_key TEXT,
+              policy_json TEXT,
+              updated_at TEXT
+            );
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO complaint_cases(
+              id, case_key, site, building, unit_number, contact_phone, complaint_type, title, description,
+              status, priority, source_channel, reported_at, assignee, import_batch_id, source_workbook,
+              source_sheet, source_row_number, source_row_hash, created_by, created_at, updated_at
+            )
+            VALUES(
+              10, 'case-10', '연산더샵', '110동', '705호', '010-1234-5678', 'glass_damage', '110동 705호 유리/창문 파손',
+              '거실유리창 교체요', 'assigned', 'medium', 'legacy_excel', '2026-03-21 16:16:08', '현장3', 'paint-1',
+              '추가세대 도색 민원내역.xlsx', '유리', 6, 'hash-1', 'excel-importer', '2026-03-21 16:16:08', '2026-03-22 00:11:16'
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO complaint_events(
+              id, complaint_id, event_type, from_status, to_status, note, detail_json, actor_username, created_at
+            )
+            VALUES(
+              1, 10, 'status_changed', 'received', 'assigned', '민원 정보 수정',
+              '{"changed_fields":["assignee","status"]}', '현장총괄', '2026-03-22 00:11:18'
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO admin_audit_logs(
+              id, actor_user_id, actor_username, action, resource_type, resource_id, status, detail_json, created_at, prev_hash, entry_hash
+            )
+            VALUES(
+              1, NULL, '현장총괄', 'complaints.case.update', 'complaint_case', '10', 'success',
+              '{"changed_fields":["assignee","status"]}', '2026-03-22 00:11:18', 'prev', 'next'
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO ops_checklist_sets(
+              id, set_id, label, task_type, source, created_at, updated_at, version_no, lifecycle_state
+            )
+            VALUES(1, 'electrical_60', '전기직무고시60항목', '전기점검', 'fallback', '2026-03-23 11:22:59', '2026-03-23 11:22:59', 1, 'active')
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO ops_checklist_set_items(
+              id, set_id, seq, item_text, created_at, updated_at
+            )
+            VALUES(1, 'electrical_60', 1, '수변전실 출입통제 상태 확인', '2026-03-23 11:22:59', '2026-03-23 11:22:59')
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO sla_policies(id, policy_key, policy_json, updated_at)
+            VALUES(1, 'default', '{"default_due_hours":{"medium":24}}', '2026-03-02 03:45:19')
+            """
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    summary = legacy_import.import_legacy_source(
+        source_path=legacy_sqlite,
+        tenant_id="ys_thesharp",
+        tenant_name="연산더샵",
+    )
+    assert summary["complaints"]["created"] == 1
+    assert summary["documents"]["created"] == 2
+    assert summary["audit_logs"]["created"] == 1
+
+    complaints = app_client.get("/api/complaints?tenant_id=ys_thesharp")
+    assert complaints.status_code == 200
+    assert len(complaints.json()["items"]) == 1
+    item = complaints.json()["items"][0]
+    assert item["building"] == "110"
+    assert item["unit"] == "705"
+    assert item["type"] == "시설"
+    assert item["status"] == "처리중"
+
+    detail = app_client.get(f"/api/complaints/{item['id']}?tenant_id=ys_thesharp")
+    assert detail.status_code == 200
+    assert len(detail.json()["item"]["history"]) == 1
+    assert detail.json()["item"]["history"][0]["to_status"] == "처리중"
+
+    documents = app_client.get("/api/ops/documents?tenant_id=ys_thesharp")
+    assert documents.status_code == 200
+    assert any(doc["title"] == "[레거시 점검표] 전기직무고시60항목" for doc in documents.json()["items"])
+    assert any(doc["title"] == "[레거시 SLA] default" for doc in documents.json()["items"])
+
+
+def test_admin_legacy_import_upload_endpoint_supports_dry_run(app_client) -> None:
+    import json
+
+    _bootstrap_admin_and_tenant(app_client)
+
+    payload = {
+        "tenant": {"id": "ys_thesharp", "name": "연산더샵"},
+        "complaints": [
+            {
+                "building": "101",
+                "unit": "1201",
+                "content": "공용등이 깜빡입니다.",
+                "type": "전기",
+                "urgency": "일반",
+                "status": "접수",
+            }
+        ],
+    }
+    response = app_client.post(
+        "/api/admin/legacy/import",
+        data={
+            "tenant_id": "ys_thesharp",
+            "tenant_name": "연산더샵",
+            "site_code": "APT00001",
+            "site_name": "연산더샵",
+            "dry_run": "true",
+        },
+        files={"source_file": ("bundle.json", io.BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8")), "application/json")},
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    assert item["dry_run"] is True
+    assert item["complaints"]["created"] == 1
+
+    complaints = app_client.get("/api/complaints?tenant_id=ys_thesharp")
+    assert complaints.status_code == 200
+    assert complaints.json()["items"] == []
+
+
 def test_voice_twilio_flow_creates_complaint_and_tracks_session(app_client) -> None:
     client = app_client
     _bootstrap_admin_and_tenant(client)

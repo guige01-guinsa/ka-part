@@ -24,12 +24,12 @@ from .ops_db import (
 )
 
 LEGACY_TABLE_ALIASES: Dict[str, tuple[str, ...]] = {
-    "users": ("staff_users", "users", "employees", "legacy_users"),
-    "complaints": ("complaints", "complaint_items", "legacy_complaints", "minwon"),
+    "users": ("staff_users", "users", "employees", "legacy_users", "admin_users"),
+    "complaints": ("complaints", "complaint_items", "legacy_complaints", "minwon", "complaint_cases"),
     "notices": ("ops_notices", "notices", "announcements", "legacy_notices"),
-    "documents": ("ops_documents", "documents", "docs", "legacy_documents"),
+    "documents": ("ops_documents", "documents", "docs", "legacy_documents", "official_documents"),
     "vendors": ("ops_vendors", "vendors", "contractors", "legacy_vendors"),
-    "schedules": ("ops_schedules", "schedules", "tasks", "inspections", "legacy_schedules"),
+    "schedules": ("ops_schedules", "schedules", "tasks", "inspections", "legacy_schedules", "work_orders"),
 }
 
 FIELD_ALIASES: Dict[str, tuple[str, ...]] = {
@@ -42,7 +42,7 @@ FIELD_ALIASES: Dict[str, tuple[str, ...]] = {
     "is_site_admin": ("is_site_admin", "site_admin", "manager_flag"),
     "password": ("password", "raw_password", "initial_password", "temp_password"),
     "building": ("building", "dong", "building_no", "building_code"),
-    "unit": ("unit", "ho", "unit_no", "room"),
+    "unit": ("unit", "ho", "unit_no", "room", "unit_number"),
     "complainant_phone": ("complainant_phone", "contact_phone", "phone", "caller_phone"),
     "channel": ("channel", "source_channel", "source"),
     "content": ("content", "body", "description", "text"),
@@ -54,16 +54,16 @@ FIELD_ALIASES: Dict[str, tuple[str, ...]] = {
     "image_url": ("image_url", "photo_url"),
     "source_text": ("source_text", "raw_text"),
     "ai_model": ("ai_model", "model"),
-    "created_at": ("created_at", "created", "created_on", "reg_date"),
+    "created_at": ("created_at", "created", "created_on", "reg_date", "reported_at", "received_at"),
     "updated_at": ("updated_at", "updated", "updated_on", "mod_date"),
-    "closed_at": ("closed_at", "completed_at"),
+    "closed_at": ("closed_at", "completed_at", "resolved_at"),
     "title": ("title", "subject"),
-    "body": ("body", "content", "description", "text"),
-    "category": ("category", "type"),
+    "body": ("body", "content", "description", "text", "summary"),
+    "category": ("category", "type", "document_type"),
     "pinned": ("pinned", "is_pinned", "top_fixed"),
-    "owner": ("owner", "manager", "assignee"),
-    "due_date": ("due_date", "target_date", "scheduled_date"),
-    "reference_no": ("reference_no", "doc_no", "reference"),
+    "owner": ("owner", "manager", "assignee", "required_action"),
+    "due_date": ("due_date", "target_date", "scheduled_date", "due_at", "scheduled_visit_at"),
+    "reference_no": ("reference_no", "doc_no", "reference", "document_number", "registry_number"),
     "company_name": ("company_name", "vendor_name", "company"),
     "service_type": ("service_type", "service", "work_type"),
     "contact_name": ("contact_name", "manager_name", "contact"),
@@ -100,6 +100,15 @@ COMPLAINT_TYPE_MAP = {
     "leak": "누수",
     "시설": "시설",
     "facility": "시설",
+    "glass_damage": "시설",
+    "glass_contamination": "시설",
+    "screen_contamination": "시설",
+    "railing_contamination": "시설",
+    "wall_floor_contamination": "시설",
+    "other_finish_issue": "시설",
+    "louver_issue": "시설",
+    "silicone_issue": "시설",
+    "composite": "시설",
     "미화": "미화",
     "cleaning": "미화",
     "경비": "경비",
@@ -114,10 +123,13 @@ URGENCY_MAP = {
     "긴급": "긴급",
     "urgent": "긴급",
     "high": "긴급",
+    "critical": "긴급",
     "당일": "당일",
     "today": "당일",
     "normal": "일반",
     "일반": "일반",
+    "medium": "일반",
+    "low": "일반",
     "단순문의": "단순문의",
     "inquiry": "단순문의",
 }
@@ -129,9 +141,11 @@ STATUS_MAP = {
     "처리중": "처리중",
     "in_progress": "처리중",
     "processing": "처리중",
+    "assigned": "처리중",
     "완료": "완료",
     "done": "완료",
     "closed": "완료",
+    "resolved": "완료",
     "이월": "이월",
     "carry": "이월",
     "deferred": "이월",
@@ -247,6 +261,266 @@ def _sqlite_rows(path: Path, table_names: tuple[str, ...]) -> List[Dict[str, Any
         con.close()
 
 
+def _sqlite_table_names(con: sqlite3.Connection) -> set[str]:
+    return {
+        str(row[0]).strip()
+        for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+
+
+def _normalize_building(value: Any) -> str:
+    text = _clean_text(value, 20)
+    if not text:
+        return ""
+    text = text.replace(" ", "")
+    if text.endswith("동"):
+        text = text[:-1]
+    return text
+
+
+def _normalize_unit(value: Any) -> str:
+    text = _clean_text(value, 20)
+    if not text:
+        return ""
+    text = text.replace(" ", "")
+    if text.endswith("호"):
+        text = text[:-1]
+    return text
+
+
+def _sqlite_complaint_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
+    names = _sqlite_table_names(con)
+    if "complaint_cases" not in names:
+        return []
+
+    attachment_map: Dict[int, List[Dict[str, Any]]] = {}
+    if "complaint_attachments" in names:
+        for row in con.execute(
+            """
+            SELECT complaint_id, file_name, content_type, file_size, storage_key
+            FROM complaint_attachments
+            ORDER BY complaint_id ASC, id ASC
+            """
+        ).fetchall():
+            complaint_id = int(row["complaint_id"] or 0)
+            if complaint_id <= 0:
+                continue
+            storage_key = _clean_text(row["storage_key"], 500)
+            file_name = _clean_text(row["file_name"], 160)
+            file_url = storage_key or file_name
+            if not file_url:
+                continue
+            attachment_map.setdefault(complaint_id, []).append(
+                {
+                    "file_url": file_url,
+                    "mime_type": _clean_text(row["content_type"], 120),
+                    "size_bytes": int(row["file_size"] or 0) or None,
+                    "created_at": now_iso(),
+                }
+            )
+
+    history_map: Dict[int, List[Dict[str, Any]]] = {}
+    if "complaint_events" in names:
+        for row in con.execute(
+            """
+            SELECT complaint_id, from_status, to_status, note, actor_username, created_at
+            FROM complaint_events
+            ORDER BY complaint_id ASC, id ASC
+            """
+        ).fetchall():
+            complaint_id = int(row["complaint_id"] or 0)
+            if complaint_id <= 0:
+                continue
+            history_map.setdefault(complaint_id, []).append(
+                {
+                    "from_status": row["from_status"],
+                    "to_status": row["to_status"],
+                    "note": row["note"],
+                    "actor_label": row["actor_username"],
+                    "created_at": row["created_at"] or now_iso(),
+                }
+            )
+
+    rows: List[Dict[str, Any]] = []
+    for row in con.execute("SELECT * FROM complaint_cases ORDER BY id ASC").fetchall():
+        item = dict(row)
+        complaint_id = int(item.get("id") or 0)
+        building = _normalize_building(item.get("building"))
+        unit = _normalize_unit(item.get("unit_number"))
+        source_meta = {
+            "legacy_case_id": complaint_id,
+            "case_key": item.get("case_key"),
+            "resident_name": item.get("resident_name"),
+            "site": item.get("site"),
+            "scheduled_visit_at": item.get("scheduled_visit_at"),
+            "resolved_at": item.get("resolved_at"),
+            "resident_confirmed_at": item.get("resident_confirmed_at"),
+            "recurrence_flag": item.get("recurrence_flag"),
+            "recurrence_count": item.get("recurrence_count"),
+            "linked_work_order_id": item.get("linked_work_order_id"),
+            "import_batch_id": item.get("import_batch_id"),
+            "source_workbook": item.get("source_workbook"),
+            "source_sheet": item.get("source_sheet"),
+            "source_row_number": item.get("source_row_number"),
+            "source_row_hash": item.get("source_row_hash"),
+            "created_by": item.get("created_by"),
+        }
+        rows.append(
+            {
+                "building": building,
+                "unit": unit,
+                "complainant_phone": item.get("contact_phone"),
+                "channel": item.get("source_channel"),
+                "content": item.get("description") or item.get("title"),
+                "summary": item.get("title"),
+                "type": item.get("complaint_type"),
+                "urgency": item.get("priority"),
+                "status": item.get("status"),
+                "manager": item.get("assignee"),
+                "source_text": json.dumps(source_meta, ensure_ascii=False),
+                "created_at": item.get("reported_at") or item.get("created_at"),
+                "updated_at": item.get("updated_at") or item.get("reported_at") or item.get("created_at"),
+                "closed_at": item.get("closed_at") or item.get("resolved_at"),
+                "attachments": attachment_map.get(complaint_id, []),
+                "history": history_map.get(complaint_id, []),
+            }
+        )
+    return rows
+
+
+def _sqlite_checklist_document_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
+    names = _sqlite_table_names(con)
+    if "ops_checklist_sets" not in names or "ops_checklist_set_items" not in names:
+        return []
+    item_rows = con.execute(
+        """
+        SELECT set_id, seq, item_text
+        FROM ops_checklist_set_items
+        ORDER BY set_id ASC, seq ASC, id ASC
+        """
+    ).fetchall()
+    item_map: Dict[str, List[str]] = {}
+    for row in item_rows:
+        set_id = str(row["set_id"] or "").strip()
+        text = _clean_text(row["item_text"], 400)
+        if not set_id or not text:
+            continue
+        item_map.setdefault(set_id, []).append(text)
+
+    rows: List[Dict[str, Any]] = []
+    for row in con.execute(
+        """
+        SELECT set_id, label, task_type, source, version_no, lifecycle_state, created_at, updated_at
+        FROM ops_checklist_sets
+        ORDER BY id ASC
+        """
+    ).fetchall():
+        set_id = str(row["set_id"] or "").strip()
+        title = _clean_text(row["label"], 160) or set_id
+        summary_lines = [
+            f"체크리스트 ID: {set_id}",
+            f"작업유형: {_clean_text(row['task_type'], 80) or '-'}",
+            f"버전: {row['version_no'] or '-'}",
+            f"상태: {_clean_text(row['lifecycle_state'], 40) or '-'}",
+            f"원본: {_clean_text(row['source'], 80) or '-'}",
+        ]
+        items = item_map.get(set_id, [])
+        if items:
+            summary_lines.append("항목:")
+            summary_lines.extend(f"{idx + 1}. {text}" for idx, text in enumerate(items))
+        rows.append(
+            {
+                "title": f"[레거시 점검표] {title}",
+                "summary": "\n".join(summary_lines),
+                "category": "점검",
+                "status": "보관",
+                "reference_no": set_id,
+                "created_at": row["created_at"] or now_iso(),
+                "updated_at": row["updated_at"] or row["created_at"] or now_iso(),
+            }
+        )
+    return rows
+
+
+def _sqlite_sla_document_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
+    names = _sqlite_table_names(con)
+    if "sla_policies" not in names:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for row in con.execute("SELECT policy_key, policy_json, updated_at FROM sla_policies ORDER BY id ASC").fetchall():
+        policy_key = _clean_text(row["policy_key"], 80) or "default"
+        policy_json = _clean_text(row["policy_json"], 4000) or "{}"
+        rows.append(
+            {
+                "title": f"[레거시 SLA] {policy_key}",
+                "summary": policy_json,
+                "category": "기타",
+                "status": "보관",
+                "reference_no": f"sla:{policy_key}",
+                "created_at": row["updated_at"] or now_iso(),
+                "updated_at": row["updated_at"] or now_iso(),
+            }
+        )
+    return rows
+
+
+def _sqlite_audit_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
+    names = _sqlite_table_names(con)
+    if "admin_audit_logs" not in names:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for row in con.execute(
+        """
+        SELECT actor_username, action, resource_type, resource_id, status, detail_json, created_at
+        FROM admin_audit_logs
+        ORDER BY id ASC
+        """
+    ).fetchall():
+        rows.append(
+            {
+                "actor": _clean_text(row["actor_username"], 120) or "legacy",
+                "action": _clean_text(row["action"], 160) or "legacy.imported.audit",
+                "data_json": json.dumps(
+                    {
+                        "resource_type": row["resource_type"],
+                        "resource_id": row["resource_id"],
+                        "status": row["status"],
+                        "detail_json": row["detail_json"],
+                    },
+                    ensure_ascii=False,
+                ),
+                "created_at": row["created_at"] or now_iso(),
+            }
+        )
+    return rows
+
+
+def _load_sqlite_bundle(path: Path) -> Dict[str, Any]:
+    con = sqlite3.connect(str(path))
+    con.row_factory = sqlite3.Row
+    try:
+        names = _sqlite_table_names(con)
+        users = _sqlite_rows(path, LEGACY_TABLE_ALIASES["users"])
+        complaints = _sqlite_complaint_rows(con) if "complaint_cases" in names else _sqlite_rows(path, LEGACY_TABLE_ALIASES["complaints"])
+        notices = _sqlite_rows(path, LEGACY_TABLE_ALIASES["notices"])
+        documents = _sqlite_rows(path, LEGACY_TABLE_ALIASES["documents"])
+        documents.extend(_sqlite_checklist_document_rows(con))
+        documents.extend(_sqlite_sla_document_rows(con))
+        schedules = _sqlite_rows(path, LEGACY_TABLE_ALIASES["schedules"])
+        return {
+            "tenant": {},
+            "users": users,
+            "complaints": complaints,
+            "notices": notices,
+            "documents": documents,
+            "vendors": _sqlite_rows(path, LEGACY_TABLE_ALIASES["vendors"]),
+            "schedules": schedules,
+            "audit_logs": _sqlite_audit_rows(con),
+        }
+    finally:
+        con.close()
+
+
 def load_legacy_source(source_path: str | Path) -> Dict[str, Any]:
     path = Path(source_path).resolve()
     if not path.exists():
@@ -280,15 +554,7 @@ def load_legacy_source(source_path: str | Path) -> Dict[str, Any]:
         }
 
     if path.is_file() and path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
-        return {
-            "tenant": {},
-            "users": _sqlite_rows(path, LEGACY_TABLE_ALIASES["users"]),
-            "complaints": _sqlite_rows(path, LEGACY_TABLE_ALIASES["complaints"]),
-            "notices": _sqlite_rows(path, LEGACY_TABLE_ALIASES["notices"]),
-            "documents": _sqlite_rows(path, LEGACY_TABLE_ALIASES["documents"]),
-            "vendors": _sqlite_rows(path, LEGACY_TABLE_ALIASES["vendors"]),
-            "schedules": _sqlite_rows(path, LEGACY_TABLE_ALIASES["schedules"]),
-        }
+        return _load_sqlite_bundle(path)
 
     raise ValueError(f"unsupported legacy source: {path}")
 
@@ -779,6 +1045,41 @@ def _import_schedules(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dic
     return {"created": created, "updated": updated, "skipped": skipped}
 
 
+def _import_audit_logs(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    created = 0
+    skipped = 0
+    for row in rows:
+        action = _clean_text(row.get("action"), 160)
+        created_at = _normalize_timestamp(row.get("created_at"))
+        actor = _clean_text(row.get("actor"), 120) or "legacy"
+        data_json = _clean_text(row.get("data_json"), 12000)
+        if not action:
+            skipped += 1
+            continue
+        existing_id = _find_existing_row_id(
+            con,
+            "audit_logs",
+            {
+                "tenant_id": tenant_id,
+                "action": action,
+                "actor": actor,
+                "created_at": created_at,
+            },
+        )
+        if existing_id:
+            skipped += 1
+            continue
+        con.execute(
+            """
+            INSERT INTO audit_logs(tenant_id, action, actor, data_json, created_at)
+            VALUES(?,?,?,?,?)
+            """,
+            (tenant_id, action, actor, data_json or None, created_at),
+        )
+        created += 1
+    return {"created": created, "skipped": skipped}
+
+
 def import_legacy_source(
     *,
     source_path: str | Path,
@@ -815,6 +1116,7 @@ def import_legacy_source(
             "documents": _import_documents(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("documents") or [])),
             "vendors": _import_vendors(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("vendors") or [])),
             "schedules": _import_schedules(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("schedules") or [])),
+            "audit_logs": _import_audit_logs(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("audit_logs") or [])),
         }
         if dry_run:
             con.rollback()
