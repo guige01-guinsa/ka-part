@@ -1439,7 +1439,30 @@
     $("#attachmentSelectAll").checked = false;
     $("#detailAttachments").innerHTML = '<div class="empty-state">첨부 사진이 없습니다.</div>';
     $("#detailHistory").innerHTML = '<div class="empty-state">이력이 없습니다.</div>';
+    if ($("#btnUpdateComplaint")) {
+      $("#btnUpdateComplaint").textContent = "상태 저장";
+    }
     syncComplaintDeleteOption();
+  }
+
+  function mobileDockSections() {
+    return Array.from(document.querySelectorAll(".mobile-dock-btn"))
+      .map((button) => ({ button, target: document.querySelector(String(button.getAttribute("data-target") || "")) }))
+      .filter((item) => item.target);
+  }
+
+  function syncMobileDockState() {
+    const sections = mobileDockSections();
+    if (!sections.length) return;
+    let activeTarget = sections[0].target;
+    const threshold = window.innerHeight * 0.28;
+    for (const item of sections) {
+      const rect = item.target.getBoundingClientRect();
+      if (rect.top <= threshold) {
+        activeTarget = item.target;
+      }
+    }
+    sections.forEach((item) => item.button.classList.toggle("is-active", item.target === activeTarget));
   }
 
   function numberingConfigFromForm() {
@@ -2165,6 +2188,39 @@
     `;
   }
 
+  function complaintCardHtml(row) {
+    const id = Number(row.id || 0);
+    const location = [row.building ? `${row.building}동` : "", row.unit ? `${row.unit}호` : ""].filter(Boolean).join(" ");
+    const summary = String(row.summary || row.content || "-");
+    const urgencyClass = `urgency-${String(row.urgency || "").trim()}`;
+    return [
+      `<article class="complaint-card${selectedComplaintId === id ? " active" : ""}" data-id="${id}">`,
+      '<div class="complaint-card-top">',
+      `<div><h3 class="complaint-card-title">${escapeHtml(summary)}</h3></div>`,
+      `<div class="complaint-chip status">${escapeHtml(row.status || "-")}</div>`,
+      "</div>",
+      '<div class="complaint-card-chips">',
+      `<span class="complaint-chip ${escapeHtml(urgencyClass)}">${escapeHtml(row.urgency || "-")}</span>`,
+      `<span class="complaint-chip">${escapeHtml(row.type || "-")}</span>`,
+      row.manager ? `<span class="complaint-chip">${escapeHtml(row.manager)}</span>` : "",
+      "</div>",
+      '<div class="complaint-card-meta">',
+      `<span>${escapeHtml(formatDateTime(row.created_at))}</span>`,
+      `<span>${escapeHtml(location || "위치 미입력")}</span>`,
+      "</div>",
+      `<div class="complaint-card-summary">${escapeHtml(summary)}</div>`,
+      "</article>",
+    ].join("");
+  }
+
+  async function selectComplaint(id, { scrollDetail = false } = {}) {
+    selectedComplaintId = Number(id || 0);
+    await loadComplaintDetail();
+    if (scrollDetail) {
+      $("#complaintDetail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
   async function loadComplaints() {
     const tenantId = currentTenantId();
     if (!tenantId) return;
@@ -2176,12 +2232,16 @@
     const data = await api(`/api/complaints?${params.toString()}`);
     const rows = Array.isArray(data.items) ? data.items : [];
     const body = $("#complaintsTableBody");
+    const cards = $("#complaintsCardList");
     body.innerHTML = rows.length ? rows.map(complaintRowHtml).join("") : '<tr><td colspan="7" class="empty-state">조회된 민원이 없습니다.</td></tr>';
+    if (cards) {
+      cards.innerHTML = rows.length ? rows.map(complaintCardHtml).join("") : '<div class="empty-state">조회된 민원이 없습니다.</div>';
+    }
     body.querySelectorAll(".complaint-row").forEach((rowEl) => {
-      rowEl.addEventListener("click", async () => {
-        selectedComplaintId = Number(rowEl.getAttribute("data-id") || 0);
-        await loadComplaintDetail();
-      });
+      rowEl.addEventListener("click", async () => selectComplaint(rowEl.getAttribute("data-id") || 0));
+    });
+    cards?.querySelectorAll(".complaint-card").forEach((cardEl) => {
+      cardEl.addEventListener("click", async () => selectComplaint(cardEl.getAttribute("data-id") || 0, { scrollDetail: true }));
     });
   }
 
@@ -2191,6 +2251,12 @@
     const data = await api(`/api/complaints/${selectedComplaintId}?tenant_id=${encodeURIComponent(tenantId)}`);
     selectedComplaint = data.item || null;
     if (!selectedComplaint) return;
+    document.querySelectorAll(".complaint-card").forEach((el) => {
+      el.classList.toggle("active", Number(el.getAttribute("data-id") || 0) === selectedComplaintId);
+    });
+    document.querySelectorAll(".complaint-row").forEach((el) => {
+      el.classList.toggle("active", Number(el.getAttribute("data-id") || 0) === selectedComplaintId);
+    });
     syncComplaintDeleteOption();
     $("#complaintDetail").innerHTML = [
       `<strong>${escapeHtml(selectedComplaint.summary || "-")}</strong>`,
@@ -2220,6 +2286,10 @@
     $("#detailHistory").innerHTML = (selectedComplaint.history || []).length
       ? selectedComplaint.history.map((row) => `<article class="timeline-item"><strong>${escapeHtml((row.from_status || "초기") + " → " + row.to_status)}</strong><p>${escapeHtml(formatDateTime(row.created_at))} / ${escapeHtml(row.actor_label || "-")}</p>${row.note ? `<p>${escapeHtml(row.note)}</p>` : ""}</article>`).join("")
       : '<div class="empty-state">이력이 없습니다.</div>';
+    const stickySave = $("#btnUpdateComplaint");
+    if (stickySave) {
+      stickySave.textContent = `상태 저장${selectedComplaintId ? ` #${selectedComplaintId}` : ""}`;
+    }
   }
 
   function selectedAttachmentIds() {
@@ -2668,6 +2738,15 @@
   }
 
   function wire() {
+    document.querySelectorAll(".mobile-dock-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = document.querySelector(String(button.getAttribute("data-target") || ""));
+        if (!target) return;
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+    window.addEventListener("scroll", syncMobileDockState, { passive: true });
+    window.addEventListener("resize", syncMobileDockState, { passive: true });
     $("#btnLogout")?.addEventListener("click", () => window.KAAuth.logout());
     $("#btnReloadAll")?.addEventListener("click", () => reloadAll().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnClassify")?.addEventListener("click", () => {
@@ -2832,6 +2911,7 @@
       $("#userPanel")?.classList.remove("hidden");
     }
     await reloadAll();
+    syncMobileDockState();
   }
 
   wire();

@@ -35,6 +35,11 @@ body {
   padding: 28px 20px 60px;
 }
 
+.hero,
+.panel {
+  scroll-margin-top: 16px;
+}
+
 .page-orb {
   position: fixed;
   inset: auto;
@@ -529,6 +534,19 @@ body {
   gap: 10px;
 }
 
+.sticky-action-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin-top: 6px;
+  padding: 10px 0 6px;
+  background: linear-gradient(180deg, rgba(255, 250, 242, 0), rgba(255, 250, 242, 0.92) 34%, rgba(255, 250, 242, 1));
+}
+
+.sticky-action-bar .action-btn {
+  width: 100%;
+}
+
 .paste-zone {
   display: grid;
   place-items: center;
@@ -638,6 +656,108 @@ body {
   background: rgba(255, 255, 255, 0.76);
 }
 
+.complaint-card-list {
+  display: none;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.complaint-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(23, 38, 37, 0.1);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 10px 22px rgba(29, 42, 40, 0.06);
+  cursor: pointer;
+}
+
+.complaint-card.active {
+  border-color: rgba(13, 106, 103, 0.32);
+  box-shadow: 0 0 0 3px rgba(13, 106, 103, 0.08);
+}
+
+.complaint-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.complaint-card-title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.complaint-card-meta,
+.complaint-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.complaint-card-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.complaint-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(13, 106, 103, 0.08);
+  color: var(--accent-strong);
+}
+
+.complaint-chip.status {
+  background: rgba(19, 57, 54, 0.08);
+  color: #133936;
+}
+
+.complaint-chip.urgency-긴급 {
+  background: rgba(182, 70, 66, 0.12);
+  color: var(--danger);
+}
+
+.complaint-chip.urgency-당일 {
+  background: rgba(204, 118, 70, 0.14);
+  color: #a85a31;
+}
+
+.complaint-card-summary {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.mobile-dock {
+  display: none;
+}
+
+.mobile-dock-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 10px 8px;
+  border-radius: 16px;
+  cursor: pointer;
+}
+
+.mobile-dock-btn.is-active {
+  background: rgba(13, 106, 103, 0.12);
+  color: var(--accent-strong);
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -669,6 +789,10 @@ body {
 
 .data-table tbody tr:hover {
   background: rgba(13, 106, 103, 0.04);
+}
+
+.data-table tbody tr.active {
+  background: rgba(13, 106, 103, 0.08);
 }
 
 .category-group-row td {
@@ -734,13 +858,13 @@ body {
 
 @media (max-width: 760px) {
   body {
-    padding: 16px 12px 40px;
+    padding: 12px 12px calc(108px + env(safe-area-inset-bottom));
   }
 
   .hero,
   .panel {
-    padding: 18px;
-    border-radius: 22px;
+    padding: 16px;
+    border-radius: 20px;
   }
 
   .form-grid,
@@ -760,9 +884,75 @@ body {
     font-size: 30px;
   }
 
+  .hero-actions,
+  .cta-row,
+  .panel-head,
+  .filter-row {
+    align-items: stretch;
+  }
+
+  .hero-actions > *,
+  .cta-row > *,
+  .filter-row > * {
+    width: 100%;
+  }
+
+  .field-inline {
+    display: grid;
+    gap: 8px;
+  }
+
   .field input,
   .field select,
   .field textarea {
     font-size: 16px;
+  }
+
+  .complaints-table-wrap {
+    display: none;
+  }
+
+  .complaint-card-list {
+    display: grid;
+  }
+
+  .mobile-dock {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    z-index: 30;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
+    padding: 8px;
+    border-radius: 22px;
+    background: rgba(255, 250, 242, 0.96);
+    border: 1px solid rgba(23, 38, 37, 0.08);
+    box-shadow: 0 18px 34px rgba(29, 42, 40, 0.14);
+    backdrop-filter: blur(16px);
+  }
+
+  .sticky-action-bar {
+    bottom: calc(82px + env(safe-area-inset-bottom));
+    padding-bottom: 10px;
+  }
+
+  .attachment-actions {
+    gap: 8px;
+  }
+
+  .attachment-actions > * {
+    width: 100%;
+  }
+
+  .ops-metrics .metric-card,
+  .metric-card {
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .metric-card strong {
+    font-size: 28px;
   }
 }
