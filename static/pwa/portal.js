@@ -67,6 +67,8 @@
   let selectedFacilityChecklistId = 0;
   let selectedFacilityInspectionId = 0;
   let selectedFacilityWorkOrderId = 0;
+  let pendingFacilityAssetImageFile = null;
+  let facilityAssetPreviewUrl = "";
   let documentNumberingConfig = null;
   let documentCatalog = {
     categories: [...DEFAULT_DOCUMENT_CATEGORY_VALUES],
@@ -1004,6 +1006,87 @@
     ].join("");
   }
 
+  function revokeFacilityAssetPreviewUrl() {
+    if (!facilityAssetPreviewUrl) return;
+    try {
+      URL.revokeObjectURL(facilityAssetPreviewUrl);
+    } catch (_) {
+      // ignore revoke errors for already released object URLs
+    }
+    facilityAssetPreviewUrl = "";
+  }
+
+  function clearFacilityAssetImageInputs() {
+    if ($("#facilityAssetCameraInput")) $("#facilityAssetCameraInput").value = "";
+    if ($("#facilityAssetFileInput")) $("#facilityAssetFileInput").value = "";
+  }
+
+  function selectedFacilityAssetRecord() {
+    if (!selectedFacilityAssetId) return null;
+    return facilityAssets.find((item) => Number(item.id || 0) === selectedFacilityAssetId) || null;
+  }
+
+  function renderFacilityAssetImagePreview(item = null, sourceLabel = "") {
+    const preview = $("#facilityAssetImagePreview");
+    const hint = $("#facilityAssetImageHint");
+    const clearButton = $("#btnFacilityAssetClearImageSelection");
+    const deleteButton = $("#btnFacilityAssetDeleteImage");
+    if (!preview || !hint) return;
+
+    revokeFacilityAssetPreviewUrl();
+    preview.classList.remove("empty-state");
+
+    if (pendingFacilityAssetImageFile instanceof File) {
+      facilityAssetPreviewUrl = URL.createObjectURL(pendingFacilityAssetImageFile);
+      preview.innerHTML = [
+        '<article class="asset-image-card">',
+        `<img src="${escapeHtml(facilityAssetPreviewUrl)}" alt="자산 대표 이미지 미리보기" loading="lazy" />`,
+        `<div class="asset-image-meta">${escapeHtml(pendingFacilityAssetImageFile.name || "selected-image")}</div>`,
+        "</article>",
+      ].join("");
+      hint.textContent = `${sourceLabel || "선택한 이미지"}가 준비되었습니다. 자산 등록 또는 선택 수정 시 저장됩니다.`;
+      if (clearButton) clearButton.classList.remove("hidden");
+      if (deleteButton) deleteButton.classList.add("hidden");
+      return;
+    }
+
+    const imageUrl = String(item?.image_url || "").trim();
+    if (imageUrl) {
+      preview.innerHTML = [
+        '<article class="asset-image-card">',
+        `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item?.asset_name || "자산 대표 이미지")}" loading="lazy" />`,
+        '<div class="asset-image-meta">저장된 대표 이미지입니다. 새 이미지를 선택하면 교체됩니다.</div>',
+        "</article>",
+      ].join("");
+      hint.textContent = "저장된 대표 이미지입니다. 카메라 촬영 또는 파일 이미지 선택으로 교체할 수 있습니다.";
+      if (clearButton) clearButton.classList.add("hidden");
+      if (deleteButton) deleteButton.classList.remove("hidden");
+      return;
+    }
+
+    preview.classList.add("empty-state");
+    preview.textContent = "대표 이미지 미리보기가 여기에 표시됩니다.";
+    hint.textContent = "대표 이미지가 없습니다. 카메라 촬영 또는 파일 이미지를 선택하세요.";
+    if (clearButton) clearButton.classList.add("hidden");
+    if (deleteButton) deleteButton.classList.add("hidden");
+  }
+
+  function clearPendingFacilityAssetImage(item = null) {
+    pendingFacilityAssetImageFile = null;
+    clearFacilityAssetImageInputs();
+    renderFacilityAssetImagePreview(item || selectedFacilityAssetRecord());
+  }
+
+  function queueFacilityAssetImage(file, sourceLabel = "") {
+    if (!(file instanceof File)) return;
+    if (!String(file.type || "").startsWith("image/")) {
+      throw new Error("이미지 파일만 선택할 수 있습니다.");
+    }
+    pendingFacilityAssetImageFile = file;
+    clearFacilityAssetImageInputs();
+    renderFacilityAssetImagePreview(selectedFacilityAssetRecord(), sourceLabel);
+  }
+
   function clearFacilityAssetForm() {
     selectedFacilityAssetId = 0;
     $("#facilityAssetCode").value = "";
@@ -1019,6 +1102,7 @@
     $("#facilityAssetNextDate").value = "";
     $("#facilityAssetNote").value = "";
     $("#facilityAssetDetail").textContent = "자산을 선택하거나 새로 등록하세요.";
+    clearPendingFacilityAssetImage(null);
   }
 
   function clearFacilityChecklistForm() {
@@ -1077,7 +1161,11 @@
     $("#facilityAssetChecklistKey").value = String(item.checklist_key || "");
     $("#facilityAssetNextDate").value = String(item.next_inspection_date || "");
     $("#facilityAssetNote").value = String(item.note || "");
+    pendingFacilityAssetImageFile = null;
+    clearFacilityAssetImageInputs();
+    renderFacilityAssetImagePreview(item);
     $("#facilityAssetDetail").innerHTML = [
+      item.image_url ? `<div class="detail-media"><img class="detail-inline-image" src="${escapeHtml(item.image_url)}" alt="${escapeHtml(item.asset_name || "자산 대표 이미지")}" loading="lazy" /></div>` : "",
       `<strong>${escapeHtml(item.asset_name || "-")}</strong>`,
       `코드: ${escapeHtml(item.asset_code || "-")}`,
       `분류: ${escapeHtml(item.category || "-")}`,
@@ -1088,7 +1176,7 @@
       `상태: ${escapeHtml(item.lifecycle_state || "-")}`,
       `최근 점검결과: ${escapeHtml(item.last_result_status || "-")}`,
       `다음 점검일: ${escapeHtml(formatDate(item.next_inspection_date))}`,
-    ].join("<br>");
+    ].filter(Boolean).join("<br>");
   }
 
   function renderFacilityChecklistDetail(item) {
@@ -1170,6 +1258,34 @@
       next_inspection_date: String($("#facilityAssetNextDate").value || "").trim(),
       note: String($("#facilityAssetNote").value || "").trim(),
     };
+  }
+
+  async function uploadFacilityAssetImage(assetId) {
+    if (!pendingFacilityAssetImageFile) return null;
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const fd = new FormData();
+    fd.append("file", pendingFacilityAssetImageFile, pendingFacilityAssetImageFile.name || "asset-image");
+    const data = await authFetchJson(`/api/facility/assets/${assetId}/image?tenant_id=${encodeURIComponent(tenantId)}`, {
+      method: "POST",
+      body: fd,
+    });
+    pendingFacilityAssetImageFile = null;
+    clearFacilityAssetImageInputs();
+    return data.item || null;
+  }
+
+  async function deleteFacilityAssetImage() {
+    if (!selectedFacilityAssetId) throw new Error("이미지를 삭제할 자산을 선택하세요.");
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const data = await api(`/api/facility/assets/${selectedFacilityAssetId}/image?tenant_id=${encodeURIComponent(tenantId)}`, {
+      method: "DELETE",
+    });
+    renderFacilityAssetDetail(data.item || {});
+    setMessage("#facilityAssetMsg", "저장된 대표 이미지를 삭제했습니다.");
+    await loadFacilityAssets();
+    await loadFacilityDashboard();
   }
 
   function facilityChecklistPayloadFromForm() {
@@ -1333,8 +1449,26 @@
 
   async function createFacilityAsset() {
     const data = await api("/api/facility/assets", { method: "POST", body: JSON.stringify(facilityAssetPayloadFromForm()) });
-    renderFacilityAssetDetail(data.item || {});
-    setMessage("#facilityAssetMsg", "자산을 등록했습니다.");
+    let item = data.item || {};
+    const hadPendingImage = pendingFacilityAssetImageFile instanceof File;
+    if (item.id && hadPendingImage) {
+      try {
+        item = (await uploadFacilityAssetImage(item.id)) || item;
+      } catch (error) {
+        const failedImage = pendingFacilityAssetImageFile;
+        renderFacilityAssetDetail(item);
+        pendingFacilityAssetImageFile = failedImage;
+        renderFacilityAssetImagePreview(item, "선택한 이미지");
+        await loadFacilityAssets();
+        pendingFacilityAssetImageFile = failedImage;
+        renderFacilityAssetImagePreview(selectedFacilityAssetRecord(), "선택한 이미지");
+        await loadFacilityDashboard();
+        setMessage("#facilityAssetMsg", `자산은 등록했지만 대표 이미지 저장은 실패했습니다: ${error.message || String(error)}`, true);
+        return;
+      }
+    }
+    renderFacilityAssetDetail(item);
+    setMessage("#facilityAssetMsg", hadPendingImage ? "자산과 대표 이미지를 등록했습니다." : "자산을 등록했습니다.");
     await loadFacilityAssets();
     await loadFacilityDashboard();
   }
@@ -1342,8 +1476,26 @@
   async function updateFacilityAsset() {
     if (!selectedFacilityAssetId) throw new Error("수정할 자산을 선택하세요.");
     const data = await api(`/api/facility/assets/${selectedFacilityAssetId}`, { method: "PATCH", body: JSON.stringify(facilityAssetPayloadFromForm()) });
-    renderFacilityAssetDetail(data.item || {});
-    setMessage("#facilityAssetMsg", "자산을 수정했습니다.");
+    let item = data.item || {};
+    const hadPendingImage = pendingFacilityAssetImageFile instanceof File;
+    if (item.id && hadPendingImage) {
+      try {
+        item = (await uploadFacilityAssetImage(item.id)) || item;
+      } catch (error) {
+        const failedImage = pendingFacilityAssetImageFile;
+        renderFacilityAssetDetail(item);
+        pendingFacilityAssetImageFile = failedImage;
+        renderFacilityAssetImagePreview(item, "선택한 이미지");
+        await loadFacilityAssets();
+        pendingFacilityAssetImageFile = failedImage;
+        renderFacilityAssetImagePreview(selectedFacilityAssetRecord(), "선택한 이미지");
+        await loadFacilityDashboard();
+        setMessage("#facilityAssetMsg", `자산은 수정했지만 대표 이미지 저장은 실패했습니다: ${error.message || String(error)}`, true);
+        return;
+      }
+    }
+    renderFacilityAssetDetail(item);
+    setMessage("#facilityAssetMsg", hadPendingImage ? "자산과 대표 이미지를 수정했습니다." : "자산을 수정했습니다.");
     await loadFacilityAssets();
     await loadFacilityDashboard();
   }
@@ -3280,6 +3432,10 @@
     $("#btnUpdateFacilityAsset")?.addEventListener("click", () => updateFacilityAsset().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnDeleteFacilityAsset")?.addEventListener("click", () => deleteFacilityAsset().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnClearFacilityAsset")?.addEventListener("click", () => clearFacilityAssetForm());
+    $("#btnFacilityAssetCamera")?.addEventListener("click", () => $("#facilityAssetCameraInput")?.click());
+    $("#btnFacilityAssetFile")?.addEventListener("click", () => $("#facilityAssetFileInput")?.click());
+    $("#btnFacilityAssetClearImageSelection")?.addEventListener("click", () => clearPendingFacilityAssetImage());
+    $("#btnFacilityAssetDeleteImage")?.addEventListener("click", () => deleteFacilityAssetImage().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnCreateFacilityChecklist")?.addEventListener("click", () => createFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
     $("#btnUpdateFacilityChecklist")?.addEventListener("click", () => updateFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
     $("#btnDeleteFacilityChecklist")?.addEventListener("click", () => deleteFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
@@ -3339,6 +3495,24 @@
     $("#photoInput")?.addEventListener("change", () => {
       updatePhotoHint("#photoInput", "#photoHint");
       updateIntakeReview();
+    });
+    $("#facilityAssetCameraInput")?.addEventListener("change", (event) => {
+      const file = event?.target?.files?.[0];
+      if (!file) return;
+      try {
+        queueFacilityAssetImage(file, "촬영한 이미지");
+      } catch (error) {
+        setMessage("#facilityAssetMsg", error.message || String(error), true);
+      }
+    });
+    $("#facilityAssetFileInput")?.addEventListener("change", (event) => {
+      const file = event?.target?.files?.[0];
+      if (!file) return;
+      try {
+        queueFacilityAssetImage(file, "선택한 파일 이미지");
+      } catch (error) {
+        setMessage("#facilityAssetMsg", error.message || String(error), true);
+      }
     });
     ["#buildingInput", "#unitInput", "#channelInput", "#managerInput", "#phoneInput", "#contentInput"].forEach((selector) => {
       const el = $(selector);

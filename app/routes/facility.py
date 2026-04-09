@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import mimetypes
+import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 
-from ..db import append_audit_log, get_tenant, log_usage
+from ..db import STORAGE_ROOT, append_audit_log, get_tenant, log_usage
 from ..engine_db import create_complaint, get_complaint
 from ..facility_db import (
+    clear_asset_image,
     create_asset,
     create_checklist,
     create_inspection,
@@ -18,6 +23,7 @@ from ..facility_db import (
     delete_qr_asset,
     delete_work_order,
     facility_dashboard_summary,
+    get_asset,
     get_inspection,
     get_open_work_order_by_inspection,
     get_work_order,
@@ -26,6 +32,7 @@ from ..facility_db import (
     list_inspections,
     list_qr_assets,
     list_work_orders,
+    set_asset_image,
     update_asset,
     update_checklist,
     update_inspection,
@@ -35,6 +42,8 @@ from ..facility_db import (
 from .core import _require_auth
 
 router = APIRouter()
+UPLOAD_ROOT = (STORAGE_ROOT / "uploads" / "facility-assets").resolve()
+MAX_ASSET_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 def _resolve_facility_context(request: Request, payload: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], str]:
@@ -102,6 +111,21 @@ def _map_priority_to_urgency(priority: str) -> str:
     if value == "높음":
         return "당일"
     return "일반"
+
+
+def _resolve_uploaded_asset_path(file_url: str) -> Path | None:
+    raw = str(file_url or "").strip()
+    prefix = "/api/facility/files/"
+    if not raw.startswith(prefix):
+        return None
+    parts = raw[len(prefix):].split("/", 1)
+    if len(parts) != 2:
+        return None
+    tenant_id, filename = parts
+    target = (UPLOAD_ROOT / str(tenant_id or "").strip().lower() / str(filename or "").strip()).resolve()
+    if not str(target).startswith(str(UPLOAD_ROOT)):
+        return None
+    return target
 
 
 @router.get("/facility/dashboard")
@@ -179,13 +203,112 @@ def facility_assets_update(request: Request, asset_id: int, payload: Dict[str, A
     return {"ok": True, "item": item}
 
 
+@router.post("/facility/assets/{asset_id}/image")
+async def facility_assets_upload_image(
+    request: Request,
+    asset_id: int,
+    file: UploadFile = File(...),
+    tenant_id: str = Query(default=""),
+) -> Dict[str, Any]:
+    user, resolved_tenant_id = _require_facility_editor(request, {"tenant_id": tenant_id})
+    current = get_asset(tenant_id=resolved_tenant_id, asset_id=int(asset_id))
+    content_type = str(file.content_type or "").strip().lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="이미지 파일만 업로드할 수 있습니다.")
+
+    ext = Path(str(file.filename or "asset-image")).suffix.lower()
+    if not ext:
+        ext = str(mimetypes.guess_extension(content_type or "image/jpeg") or ".jpg").lower()
+
+    target_dir = (UPLOAD_ROOT / resolved_tenant_id).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_name = f"{uuid.uuid4().hex}{ext}"
+    target_path = target_dir / target_name
+    total = 0
+
+    try:
+        with target_path.open("wb") as handle:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_ASSET_IMAGE_BYTES:
+                    raise HTTPException(status_code=400, detail="대표 이미지는 최대 10MB까지 업로드할 수 있습니다.")
+                handle.write(chunk)
+    finally:
+        try:
+            await file.close()
+        except Exception:
+            pass
+
+    try:
+        item = set_asset_image(
+            tenant_id=resolved_tenant_id,
+            asset_id=int(asset_id),
+            image_url=f"/api/facility/files/{resolved_tenant_id}/{target_name}",
+            image_mime_type=content_type or "image/jpeg",
+            image_size_bytes=total,
+        )
+    except Exception as exc:
+        if target_path.exists():
+            target_path.unlink(missing_ok=True)
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise
+
+    old_target = _resolve_uploaded_asset_path(str(current.get("image_url") or ""))
+    if old_target and old_target != target_path and old_target.exists() and old_target.is_file():
+        old_target.unlink(missing_ok=True)
+
+    log_usage(resolved_tenant_id, "facility.assets.image.upload")
+    append_audit_log(
+        resolved_tenant_id,
+        "facility_asset_image_upload",
+        _actor_label(user),
+        {"asset_id": int(asset_id)},
+    )
+    return {"ok": True, "item": item}
+
+
+@router.delete("/facility/assets/{asset_id}/image")
+def facility_assets_delete_image(request: Request, asset_id: int, tenant_id: str = Query(default="")) -> Dict[str, Any]:
+    user, resolved_tenant_id = _require_facility_editor(request, {"tenant_id": tenant_id})
+    current = get_asset(tenant_id=resolved_tenant_id, asset_id=int(asset_id))
+    item = clear_asset_image(tenant_id=resolved_tenant_id, asset_id=int(asset_id))
+    target = _resolve_uploaded_asset_path(str(current.get("image_url") or ""))
+    if target and target.exists() and target.is_file():
+        target.unlink(missing_ok=True)
+    log_usage(resolved_tenant_id, "facility.assets.image.delete")
+    append_audit_log(
+        resolved_tenant_id,
+        "facility_asset_image_delete",
+        _actor_label(user),
+        {"asset_id": int(asset_id)},
+    )
+    return {"ok": True, "item": item}
+
+
 @router.delete("/facility/assets/{asset_id}")
 def facility_assets_delete(request: Request, asset_id: int, payload: Dict[str, Any] | None = Body(default=None)) -> Dict[str, Any]:
     user, tenant_id = _require_facility_editor(request, payload or {})
     item = delete_asset(tenant_id=tenant_id, asset_id=int(asset_id))
+    target = _resolve_uploaded_asset_path(str(item.get("image_url") or ""))
+    if target and target.exists() and target.is_file():
+        target.unlink(missing_ok=True)
     log_usage(tenant_id, "facility.assets.delete")
     append_audit_log(tenant_id, "facility_delete_asset", _actor_label(user), {"asset_id": int(asset_id)})
     return {"ok": True, "item": item}
+
+
+@router.get("/facility/files/{tenant_id}/{filename}")
+def facility_uploaded_file(tenant_id: str, filename: str) -> FileResponse:
+    target = (UPLOAD_ROOT / str(tenant_id or "").strip().lower() / str(filename or "").strip()).resolve()
+    if not str(target).startswith(str(UPLOAD_ROOT)):
+        raise HTTPException(status_code=404, detail="file not found")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(target)
 
 
 @router.get("/facility/checklists")

@@ -305,6 +305,9 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
     _ensure_column(con, "facility_assets", "installed_on", "installed_on TEXT")
     _ensure_column(con, "facility_assets", "inspection_cycle_days", "inspection_cycle_days INTEGER NOT NULL DEFAULT 30")
     _ensure_column(con, "facility_assets", "last_result_status", "last_result_status TEXT")
+    _ensure_column(con, "facility_assets", "image_url", "image_url TEXT")
+    _ensure_column(con, "facility_assets", "image_mime_type", "image_mime_type TEXT")
+    _ensure_column(con, "facility_assets", "image_size_bytes", "image_size_bytes INTEGER NOT NULL DEFAULT 0")
     _ensure_column(con, "facility_work_orders", "complaint_id", "complaint_id INTEGER")
     con.execute(
         """
@@ -329,7 +332,9 @@ def _asset_detail(con: sqlite3.Connection, asset_id: int, tenant_id: str) -> Dic
         SELECT
           id, tenant_id, asset_code, asset_name, category, location_name, vendor_name, installed_on,
           inspection_cycle_days, last_result_status, lifecycle_state, source, qr_id,
-          checklist_key, last_inspected_at, next_inspection_date, note, created_by_label, created_at, updated_at
+          checklist_key, last_inspected_at, next_inspection_date, note,
+          image_url, image_mime_type, image_size_bytes,
+          created_by_label, created_at, updated_at
         FROM facility_assets
         WHERE id=? AND tenant_id=?
         LIMIT 1
@@ -339,6 +344,16 @@ def _asset_detail(con: sqlite3.Connection, asset_id: int, tenant_id: str) -> Dic
     if not row:
         raise ValueError("asset not found")
     return dict(row)
+
+
+def get_asset(*, tenant_id: str, asset_id: int) -> Dict[str, Any]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        return _asset_detail(con, int(asset_id), clean_tenant_id)
+    finally:
+        con.close()
 
 
 def _checklist_detail(con: sqlite3.Connection, checklist_id: int, tenant_id: str) -> Dict[str, Any]:
@@ -528,7 +543,9 @@ def list_assets(*, tenant_id: str, category: str = "", lifecycle_state: str = ""
                 SELECT
                   id, tenant_id, asset_code, asset_name, category, location_name, vendor_name, installed_on,
                   inspection_cycle_days, last_result_status, lifecycle_state, source, qr_id,
-                  checklist_key, last_inspected_at, next_inspection_date, note, created_by_label, created_at, updated_at
+                  checklist_key, last_inspected_at, next_inspection_date, note,
+                  image_url, image_mime_type, image_size_bytes,
+                  created_by_label, created_at, updated_at
                 FROM facility_assets
                 WHERE {' AND '.join(clauses)}
                 ORDER BY
@@ -613,6 +630,70 @@ def delete_asset(*, tenant_id: str, asset_id: int) -> Dict[str, Any]:
         con.execute("DELETE FROM facility_assets WHERE id=? AND tenant_id=?", (int(asset_id), clean_tenant_id))
         con.commit()
         return item
+    finally:
+        con.close()
+
+
+def set_asset_image(
+    *,
+    tenant_id: str,
+    asset_id: int,
+    image_url: str,
+    image_mime_type: str = "",
+    image_size_bytes: int = 0,
+) -> Dict[str, Any]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    clean_image_url = _clean_text(image_url, field="image_url", required=True, max_len=500)
+    clean_mime_type = _clean_text(image_mime_type, field="image_mime_type", max_len=120)
+    try:
+        clean_size = max(0, int(image_size_bytes or 0))
+    except Exception as exc:
+        raise ValueError("image_size_bytes must be an integer") from exc
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        _asset_detail(con, int(asset_id), clean_tenant_id)
+        con.execute(
+            """
+            UPDATE facility_assets
+            SET image_url=?, image_mime_type=?, image_size_bytes=?, updated_at=?
+            WHERE id=? AND tenant_id=?
+            """,
+            (
+                clean_image_url,
+                clean_mime_type,
+                clean_size,
+                now_iso(),
+                int(asset_id),
+                clean_tenant_id,
+            ),
+        )
+        con.commit()
+        return _asset_detail(con, int(asset_id), clean_tenant_id)
+    finally:
+        con.close()
+
+
+def clear_asset_image(*, tenant_id: str, asset_id: int) -> Dict[str, Any]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        _asset_detail(con, int(asset_id), clean_tenant_id)
+        con.execute(
+            """
+            UPDATE facility_assets
+            SET image_url='', image_mime_type='', image_size_bytes=0, updated_at=?
+            WHERE id=? AND tenant_id=?
+            """,
+            (
+                now_iso(),
+                int(asset_id),
+                clean_tenant_id,
+            ),
+        )
+        con.commit()
+        return _asset_detail(con, int(asset_id), clean_tenant_id)
     finally:
         con.close()
 
