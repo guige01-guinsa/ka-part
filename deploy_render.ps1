@@ -14,6 +14,8 @@ param(
   [string]$HookUrl = $env:RENDER_DEPLOY_HOOK_URL,
   [string]$ServiceId = $env:RENDER_SERVICE_ID,
   [string]$ApiKey = $env:RENDER_API_KEY,
+  [string]$ExpectedServiceName = "ka-part",
+  [string]$ExpectedRepo = "https://github.com/guige01-guinsa/ka-part",
   [switch]$Wait,
   [int]$TimeoutSec = 420,
   [int]$PollSec = 10
@@ -28,6 +30,77 @@ function Get-RenderHeaders([string]$Token) {
     "Accept"        = "application/json"
     "Content-Type"  = "application/json"
   }
+}
+
+function Get-RenderService([string]$Svc, [string]$Token) {
+  if (-not $Svc) { return $null }
+  if (-not $Token) { throw "Missing ApiKey. Pass -ApiKey or set RENDER_API_KEY." }
+  $uri = "https://api.render.com/v1/services/$Svc"
+  $headers = Get-RenderHeaders $Token
+  return Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
+}
+
+function Find-RenderService([string]$Token, [string]$Name, [string]$Repo) {
+  if (-not $Token) { throw "Missing ApiKey. Pass -ApiKey or set RENDER_API_KEY." }
+  $uri = "https://api.render.com/v1/services?type=web_service&limit=100"
+  $headers = Get-RenderHeaders $Token
+  $items = @(Invoke-RestMethod -Method Get -Uri $uri -Headers $headers)
+  $services = @($items | ForEach-Object { $_.service } | Where-Object { $_ })
+
+  $exact = @($services | Where-Object {
+    ((-not $Name) -or $_.name -eq $Name) -and
+    ((-not $Repo) -or $_.repo -eq $Repo)
+  })
+  if ($exact.Count -eq 1) { return $exact[0] }
+  if ($exact.Count -gt 1) {
+    throw "Multiple Render web services matched name='$Name' repo='$Repo'. Resolve manually."
+  }
+
+  if ($Name) {
+    $nameOnly = @($services | Where-Object { $_.name -eq $Name })
+    if ($nameOnly.Count -eq 1) { return $nameOnly[0] }
+    if ($nameOnly.Count -gt 1) {
+      throw "Multiple Render web services matched name='$Name'. Resolve manually."
+    }
+  }
+
+  if ($Repo) {
+    $repoOnly = @($services | Where-Object { $_.repo -eq $Repo })
+    if ($repoOnly.Count -eq 1) { return $repoOnly[0] }
+    if ($repoOnly.Count -gt 1) {
+      throw "Multiple Render web services matched repo='$Repo'. Resolve manually."
+    }
+  }
+
+  return $null
+}
+
+function Resolve-ServiceId([string]$Svc, [string]$Token, [string]$Name, [string]$Repo) {
+  if (-not $Token) { return $Svc }
+
+  if ($Svc) {
+    try {
+      $current = Get-RenderService -Svc $Svc -Token $Token
+      $nameMatches = (-not $Name) -or ($current.name -eq $Name)
+      $repoMatches = (-not $Repo) -or ($current.repo -eq $Repo)
+      if ($nameMatches -and $repoMatches) {
+        return [string]$current.id
+      }
+      Write-Warning ("Configured ServiceId '{0}' points to '{1}' ({2}). Resolving target service instead." -f $Svc, $current.name, $current.repo)
+    }
+    catch {
+      Write-Warning ("Could not validate configured ServiceId '{0}': {1}" -f $Svc, $_.Exception.Message)
+    }
+  }
+
+  $matched = Find-RenderService -Token $Token -Name $Name -Repo $Repo
+  if ($matched) {
+    Write-Host ("Using Render service: {0} ({1})" -f $matched.name, $matched.id) -ForegroundColor Cyan
+    return [string]$matched.id
+  }
+
+  if ($Svc) { return $Svc }
+  throw "Could not resolve Render service for name='$Name' repo='$Repo'."
 }
 
 function Trigger-WithHook([string]$Url) {
@@ -107,36 +180,18 @@ function Get-DeployIdFromResponse($Resp) {
 
 $triggerResp = $null
 $deployId = ""
-$usedHook = $false
-$hookErrorText = ""
 
-if ($HookUrl) {
-  $usedHook = $true
-  try {
-    $triggerResp = Trigger-WithHook $HookUrl
-    $deployId = Get-DeployIdFromResponse $triggerResp
-  }
-  catch {
-    $hookErrorText = [string]$_.Exception.Message
-    Write-Warning "Deploy hook trigger failed: $hookErrorText"
-    if ($ServiceId -and $ApiKey) {
-      Write-Warning "Falling back to Render API deploy trigger."
-      $triggerResp = $null
-    }
-    else {
-      throw
-    }
-  }
-}
-
-if (-not $triggerResp) {
-  if (-not $ServiceId) { throw "Missing ServiceId. Pass -ServiceId or set RENDER_SERVICE_ID." }
-  if (-not $ApiKey) { throw "Missing ApiKey. Pass -ApiKey or set RENDER_API_KEY." }
+if ($ApiKey) {
+  $ServiceId = Resolve-ServiceId -Svc $ServiceId -Token $ApiKey -Name $ExpectedServiceName -Repo $ExpectedRepo
   $triggerResp = Trigger-WithApi $ServiceId $ApiKey
-  if ($usedHook -and $hookErrorText) {
-    Write-Host "Hook fallback result: API trigger succeeded." -ForegroundColor Yellow
-  }
   $deployId = Get-DeployIdFromResponse $triggerResp
+}
+elseif ($HookUrl) {
+  $triggerResp = Trigger-WithHook $HookUrl
+  $deployId = Get-DeployIdFromResponse $triggerResp
+}
+else {
+  throw "Missing ApiKey/HookUrl. Pass -ApiKey or -HookUrl, or set RENDER_API_KEY / RENDER_DEPLOY_HOOK_URL."
 }
 
 if ($deployId) { Write-Host "Deploy ID: $deployId" }

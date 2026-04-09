@@ -1,0 +1,54 @@
+services:
+  - type: web
+    name: ka-part
+    runtime: python
+    repo: https://github.com/guige01-guinsa/ka-part
+    branch: main
+    region: singapore
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    domains:
+      - ka-part.com
+    disk:
+      name: ka-part-runtime
+      mountPath: /opt/render/project/src/runtime
+      sizeGB: 1
+    envVars:
+      - key: KA_STORAGE_ROOT
+        value: /opt/render/project/src/runtime
+      - key: KA_PUBLIC_BASE_URL
+        value: https://ka-part.com
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: KA_VOICE_HANDOFF_NUMBER
+        sync: false
+      - key: KA_BOOTSTRAP_ADMIN_LOGIN
+        sync: false
+      - key: KA_BOOTSTRAP_ADMIN_NAME
+        sync: false
+      - key: KA_BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: KA_BOOTSTRAP_TENANT_ID
+        sync: false
+      - key: KA_BOOTSTRAP_TENANT_NAME
+        sync: false
+      - key: KA_BOOTSTRAP_TENANT_SITE_CODE
+        sync: false
+      - key: KA_BOOTSTRAP_TENANT_SITE_NAME
+        sync: false
+      - key: KA_BOOTSTRAP_TENANT_API_KEY
+        sync: false
+      - key: KA_BOOTSTRAP_MANAGER_LOGIN
+        sync: false
+      - key: KA_BOOTSTRAP_MANAGER_NAME
+        sync: false
+      - key: KA_BOOTSTRAP_MANAGER_PASSWORD
+        sync: false
+      - key: KA_BOOTSTRAP_DESK_LOGIN
+        sync: false
+      - key: KA_BOOTSTRAP_DESK_NAME
+        sync: false
+      - key: KA_BOOTSTRAP_DESK_PASSWORD
+        sync: false

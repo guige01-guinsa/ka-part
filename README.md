@@ -156,6 +156,22 @@ python scripts/migrate_legacy_data.py \
 
 앱 시작 시 값이 있으면 같은 ID 기준으로 재시드하며, 비밀번호와 API Key도 지정값으로 맞춰집니다.
 
+## Render
+
+운영 배포는 Render 웹서비스 1개와 영속 디스크 1개만 유지하는 구성이 가장 단순합니다.
+
+- 서비스: `ka-part`
+- 런타임: Python native
+- 빌드: `pip install -r requirements.txt`
+- 시작: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- 헬스체크: `/health`
+- 디스크: `/opt/render/project/src/runtime` 1GB
+- 필수 환경변수: `KA_STORAGE_ROOT=/opt/render/project/src/runtime`
+
+현재 저장소 루트의 `render.yaml`이 위 구성을 코드로 고정합니다. 시크릿 값은 파일에 넣지 않았고, Blueprint 생성 시 또는 Render 대시보드에서 직접 넣어야 합니다.
+
+`deploy_render.ps1`는 API 키가 있을 때 `guige01-guinsa/ka-part` 저장소에 연결된 `ka-part` 서비스를 자동으로 찾아 잘못된 서비스에 배포하지 않도록 되어 있습니다.
+
 ## Test
 
 ```bash
