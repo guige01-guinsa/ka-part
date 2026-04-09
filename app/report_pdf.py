@@ -354,6 +354,15 @@ def build_ops_draft_pdf(
     category: str = "",
     owner: str = "",
     due_date: str = "",
+    amount_total: Any = None,
+    vendor_name: str = "",
+    target_label: str = "",
+    basis_date: str = "",
+    period_start: str = "",
+    period_end: str = "",
+    pdf_heading: str = "",
+    request_text: str = "",
+    amount_policy: str = "",
 ) -> bytes:
     styles = _styles()
     buffer = BytesIO()
@@ -374,9 +383,22 @@ def build_ops_draft_pdf(
     safe_owner = _collapse(owner) or drafter_label or "담당자 미지정"
     safe_category = _collapse(category) or "기안"
     safe_due_date = _collapse(due_date) or "-"
+    safe_vendor_name = _collapse(vendor_name) or "-"
+    safe_target_label = _collapse(target_label) or "-"
+    safe_basis_date = _collapse(basis_date) or "-"
+    safe_period_start = _collapse(period_start) or "-"
+    safe_period_end = _collapse(period_end) or "-"
+    safe_heading = _collapse(pdf_heading) or "행 정 문 서"
+    safe_request_text = _collapse(request_text) or "위 사항을 보고드립니다."
+    safe_amount_policy = _collapse(amount_policy)
+    try:
+        amount_number = float(str(amount_total or "").replace(",", "").strip()) if str(amount_total or "").strip() else None
+    except Exception:
+        amount_number = None
+    safe_amount = f"{amount_number:,.0f}원" if amount_number is not None else "-"
 
     story: List[Any] = []
-    story.append(Paragraph("기 안 서", styles["title"]))
+    story.append(Paragraph(_escape(safe_heading), styles["title"]))
     story.append(Spacer(1, 3 * mm))
 
     header = Table(
@@ -427,6 +449,36 @@ def build_ops_draft_pdf(
     story.append(approval)
     story.append(Spacer(1, 7 * mm))
 
+    meta_rows = []
+    if safe_target_label != "-":
+        meta_rows.append([Paragraph("대상", styles["small"]), Paragraph(_escape(safe_target_label), styles["small"]), Paragraph("업체/상대처", styles["small"]), Paragraph(_escape(safe_vendor_name), styles["small"])])
+    elif safe_vendor_name != "-":
+        meta_rows.append([Paragraph("업체/상대처", styles["small"]), Paragraph(_escape(safe_vendor_name), styles["small"]), Paragraph("", styles["small"]), Paragraph("", styles["small"])])
+    if amount_number is not None or safe_amount_policy:
+        meta_rows.append([Paragraph("금액", styles["small"]), Paragraph(_escape(safe_amount), styles["small"]), Paragraph("금액기준", styles["small"]), Paragraph(_escape(safe_amount_policy or "-"), styles["small"])])
+    if safe_basis_date != "-" or safe_period_start != "-" or safe_period_end != "-":
+        period_label = safe_period_start if safe_period_end == "-" else f"{safe_period_start} ~ {safe_period_end}"
+        meta_rows.append([Paragraph("기준일", styles["small"]), Paragraph(_escape(safe_basis_date), styles["small"]), Paragraph("기간", styles["small"]), Paragraph(_escape(period_label if period_label.strip(" -") else "-"), styles["small"])])
+    if meta_rows:
+        story.append(Paragraph("업무정보", styles["heading"]))
+        meta_table = Table(meta_rows, colWidths=[24 * mm, 58 * mm, 24 * mm, 58 * mm])
+        meta_table.setStyle(
+            TableStyle(
+                [
+                    ("GRID", (0, 0), (-1, -1), 0.6, colors.HexColor("#B9C8C0")),
+                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F0F5F2")),
+                    ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#F0F5F2")),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 6),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ]
+            )
+        )
+        story.append(meta_table)
+        story.append(Spacer(1, 5 * mm))
+
     story.append(Paragraph("제목", styles["heading"]))
     story.append(Paragraph(_escape(safe_title), styles["body"]))
     story.append(Spacer(1, 4 * mm))
@@ -441,10 +493,7 @@ def build_ops_draft_pdf(
         story.append(Paragraph(_escape(safe_summary), styles["body"]))
     story.append(Spacer(1, 5 * mm))
 
-    request_lines = [
-        "위 사항과 같이 기안하오니 검토 후 결재를 요청드립니다.",
-        f"대상 단지: {tenant_label or '-'}",
-    ]
+    request_lines = [safe_request_text, f"대상 단지: {tenant_label or '-'}"]
     story.append(Paragraph("요청사항", styles["heading"]))
     for line in request_lines:
         story.append(Paragraph(_escape(line), styles["body"]))

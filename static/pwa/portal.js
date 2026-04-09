@@ -4,7 +4,27 @@
   const $ = (sel) => document.querySelector(sel);
   const STATUS_VALUES = ["접수", "처리중", "완료", "이월"];
   const MAX_CHAT_DIGEST_IMAGES = 30;
-  const DOCUMENT_CATEGORY_VALUES = ["계약", "공문", "보고", "예산", "입주", "점검", "기타"];
+  const DEFAULT_DOCUMENT_CATEGORY_VALUES = [
+    "기안지(10만원 이상)",
+    "구매요청서(10만원 이하)",
+    "견적서와 발주서",
+    "월업무보고(작업 보고서)",
+    "계약서관리",
+    "배상보험",
+    "주요업무일정관리",
+    "전기수도검침",
+    "전기수도부과",
+    "직무고시",
+    "안전관리대장관리",
+    "법정 정기점검",
+    "수질검사",
+    "소방정기점검",
+    "기계설비유지관리",
+    "기계설비성능점검",
+    "승강기안전점검",
+    "안전점검하자보수완료보고",
+    "기타",
+  ];
   const NOTICE_STATUS_LABELS = {
     draft: "임시저장",
     published: "게시중",
@@ -31,6 +51,10 @@
   let opsDocuments = [];
   let opsSchedules = [];
   let opsVendors = [];
+  let infoBuildings = [];
+  let infoRegistrations = [];
+  let selectedInfoBuildingId = 0;
+  let selectedInfoRegistrationId = 0;
   let facilityAssets = [];
   let facilityChecklists = [];
   let facilityInspections = [];
@@ -44,6 +68,12 @@
   let selectedFacilityInspectionId = 0;
   let selectedFacilityWorkOrderId = 0;
   let documentNumberingConfig = null;
+  let documentCatalog = {
+    categories: [...DEFAULT_DOCUMENT_CATEGORY_VALUES],
+    profiles: [],
+    common_fields: [],
+    preview_examples: {},
+  };
   let chatSourcePreviewUrls = [];
   let chatDigestPreviewUrls = [];
   let lastDigestResult = null;
@@ -136,6 +166,21 @@
       return tenant ? `${tenant.name} (${tenant.id})` : (tenantId || "전체");
     }
     return String(me?.tenant?.name || me?.user?.tenant_id || "-");
+  }
+
+  function documentCategoryValues() {
+    const categories = Array.isArray(documentCatalog?.categories) ? documentCatalog.categories.filter(Boolean) : [];
+    return categories.length ? categories : [...DEFAULT_DOCUMENT_CATEGORY_VALUES];
+  }
+
+  function documentProfileByCategory(category) {
+    const raw = String(category || "").trim();
+    const profiles = Array.isArray(documentCatalog?.profiles) ? documentCatalog.profiles : [];
+    return profiles.find((item) => String(item.category || "") === raw) || null;
+  }
+
+  function defaultDocumentCategory() {
+    return documentCategoryValues()[0] || "기타";
   }
 
   async function api(url, opts = {}) {
@@ -1435,14 +1480,21 @@
   function clearDocumentForm() {
     selectedDocumentId = 0;
     $("#documentTitle").value = "";
-    $("#documentCategory").value = "계약";
+    $("#documentCategory").value = defaultDocumentCategory();
     $("#documentStatus").value = "작성중";
     $("#documentOwner").value = "";
     $("#documentDueDate").value = "";
     $("#documentRefNo").value = "";
+    $("#documentTargetLabel").value = "";
+    $("#documentVendorName").value = "";
+    $("#documentAmountTotal").value = "";
+    $("#documentBasisDate").value = "";
+    $("#documentPeriodStart").value = "";
+    $("#documentPeriodEnd").value = "";
     $("#documentSummary").value = "";
     if ($("#documentSampleFile")) $("#documentSampleFile").value = "";
     $("#opsDocumentDetail").textContent = "문서를 선택하거나 새로 등록하세요.";
+    renderDocumentCategoryGuide($("#documentCategory").value);
   }
 
   function clearComplaintDetail() {
@@ -1552,20 +1604,72 @@
     sections.forEach((item) => item.button.classList.toggle("is-active", item.target === activeTarget));
   }
 
+  function renderDocumentCategoryOptions() {
+    const categories = documentCategoryValues();
+    const select = $("#documentCategory");
+    const filter = $("#documentCategoryFilter");
+    const currentCategory = String(select?.value || "").trim();
+    const currentFilter = String(filter?.value || "").trim();
+    if (select) {
+      select.innerHTML = categories.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`).join("");
+      select.value = categories.includes(currentCategory) ? currentCategory : defaultDocumentCategory();
+    }
+    if (filter) {
+      filter.innerHTML = ['<option value="">전체</option>', ...categories.map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`)].join("");
+      filter.value = currentFilter && categories.includes(currentFilter) ? currentFilter : "";
+    }
+  }
+
+  function renderDocumentCodeInputs() {
+    const container = $("#docCategoryCodeGrid");
+    if (!container) return;
+    container.innerHTML = documentCategoryValues().map((category) => `
+      <label class="field">
+        <span>${escapeHtml(category)}</span>
+        <input type="text" maxlength="8" data-category-code="${escapeHtml(category)}" />
+      </label>
+    `).join("");
+  }
+
+  function renderDocumentCategoryGuide(category) {
+    const box = $("#documentCategoryGuide");
+    if (!box) return;
+    const profile = documentProfileByCategory(category) || {};
+    const focusFields = Array.isArray(profile.focus_fields) ? profile.focus_fields : [];
+    const commonFields = Array.isArray(documentCatalog?.common_fields) ? documentCatalog.common_fields : [];
+    const focusLabels = focusFields
+      .map((key) => commonFields.find((item) => String(item.key || "") === key))
+      .filter(Boolean)
+      .map((item) => String(item.label || "").trim())
+      .filter(Boolean);
+    box.innerHTML = [
+      `<strong>${escapeHtml(profile.category || category || "문서")}</strong>`,
+      escapeHtml(profile.description || "문서 유형 안내가 없습니다."),
+      profile.amount_policy ? `금액 기준: ${escapeHtml(profile.amount_policy)}` : "",
+      `권장 입력: ${escapeHtml((focusLabels.length ? focusLabels : ["제목", "요약/메모"]).join(", "))}`,
+      `PDF 제목: ${escapeHtml(profile.pdf_heading || "행정 문서")}`,
+    ].filter(Boolean).join("<br>");
+
+    if ($("#documentTitle")) {
+      $("#documentTitle").placeholder = String(profile.default_title || "예: 승강기 부품 교체의 건");
+    }
+    if ($("#documentSummary")) {
+      $("#documentSummary").placeholder = String(profile.summary_placeholder || "문서 목적과 진행 메모를 입력하세요.");
+    }
+  }
+
   function numberingConfigFromForm() {
+    const categoryCodes = {};
+    document.querySelectorAll("[data-category-code]").forEach((input) => {
+      const category = String(input.getAttribute("data-category-code") || "").trim();
+      if (!category) return;
+      categoryCodes[category] = String(input.value || "").trim();
+    });
     return {
       separator: String($("#docNumberSeparator")?.value || "").trim(),
       date_mode: String($("#docNumberDateMode")?.value || "yyyymmdd").trim(),
       sequence_digits: Number($("#docNumberDigits")?.value || 3),
-      category_codes: {
-        계약: String($("#docCodeContract")?.value || "").trim(),
-        공문: String($("#docCodeLetter")?.value || "").trim(),
-        보고: String($("#docCodeReport")?.value || "").trim(),
-        예산: String($("#docCodeBudget")?.value || "").trim(),
-        입주: String($("#docCodeMoveIn")?.value || "").trim(),
-        점검: String($("#docCodeInspection")?.value || "").trim(),
-        기타: String($("#docCodeOther")?.value || "").trim(),
-      },
+      category_codes: categoryCodes,
     };
   }
 
@@ -1575,13 +1679,10 @@
     $("#docNumberSeparator").value = String(item.separator || "-");
     $("#docNumberDateMode").value = String(item.date_mode || "yyyymmdd");
     $("#docNumberDigits").value = String(item.sequence_digits || 3);
-    $("#docCodeContract").value = String(codes["계약"] || "");
-    $("#docCodeLetter").value = String(codes["공문"] || "");
-    $("#docCodeReport").value = String(codes["보고"] || "");
-    $("#docCodeBudget").value = String(codes["예산"] || "");
-    $("#docCodeMoveIn").value = String(codes["입주"] || "");
-    $("#docCodeInspection").value = String(codes["점검"] || "");
-    $("#docCodeOther").value = String(codes["기타"] || "");
+    document.querySelectorAll("[data-category-code]").forEach((input) => {
+      const category = String(input.getAttribute("data-category-code") || "").trim();
+      input.value = String(codes[category] || "");
+    });
   }
 
   function renderDocumentNumberingPreview(item) {
@@ -1601,7 +1702,7 @@
       `일련번호 자리수: ${escapeHtml(String(config.sequence_digits || 3))}`,
       ``,
       `<strong>다음 번호 미리보기</strong>`,
-      ...DOCUMENT_CATEGORY_VALUES.map((category) => `${escapeHtml(category)}: ${escapeHtml(previews[category] || "-")}`),
+      ...documentCategoryValues().map((category) => `${escapeHtml(category)}: ${escapeHtml(previews[category] || "-")}`),
     ].join("<br>");
   }
 
@@ -1629,6 +1730,120 @@
     $("#opsVendorDetail").textContent = "협력업체를 선택하거나 새로 등록하세요.";
   }
 
+  function clearInfoBuildingForm() {
+    selectedInfoBuildingId = 0;
+    $("#infoBuildingCode").value = "";
+    $("#infoBuildingName").value = "";
+    $("#infoBuildingUsageType").value = "아파트동";
+    $("#infoBuildingStatus").value = "운영중";
+    $("#infoBuildingFloorsAbove").value = "";
+    $("#infoBuildingFloorsBelow").value = "";
+    $("#infoBuildingHouseholdCount").value = "";
+    $("#infoBuildingNote").value = "";
+    $("#infoBuildingDetail").textContent = "건물정보를 선택하거나 새로 등록하세요.";
+  }
+
+  function clearInfoRegistrationForm() {
+    selectedInfoRegistrationId = 0;
+    $("#infoRegistrationType").value = "사업자등록";
+    $("#infoRegistrationTitle").value = "";
+    $("#infoRegistrationRefNo").value = "";
+    $("#infoRegistrationStatus").value = "유효";
+    $("#infoRegistrationIssuer").value = "";
+    $("#infoRegistrationIssuedOn").value = "";
+    $("#infoRegistrationExpiresOn").value = "";
+    $("#infoRegistrationNote").value = "";
+    $("#infoRegistrationDetail").textContent = "등록정보를 선택하거나 새로 등록하세요.";
+  }
+
+  function renderInfoBuildingDetail(item) {
+    selectedInfoBuildingId = Number(item.id || 0);
+    $("#infoBuildingCode").value = String(item.building_code || "");
+    $("#infoBuildingName").value = String(item.building_name || "");
+    $("#infoBuildingUsageType").value = String(item.usage_type || "아파트동");
+    $("#infoBuildingStatus").value = String(item.status || "운영중");
+    $("#infoBuildingFloorsAbove").value = item.floors_above == null ? "" : String(item.floors_above);
+    $("#infoBuildingFloorsBelow").value = item.floors_below == null ? "" : String(item.floors_below);
+    $("#infoBuildingHouseholdCount").value = item.household_count == null ? "" : String(item.household_count);
+    $("#infoBuildingNote").value = String(item.note || "");
+    $("#infoBuildingDetail").innerHTML = [
+      `<strong>${escapeHtml(item.building_name || "-")}</strong>`,
+      `건물코드: ${escapeHtml(item.building_code || "-")}`,
+      `용도: ${escapeHtml(item.usage_type || "-")}`,
+      `상태: ${escapeHtml(item.status || "-")}`,
+      `층수: 지상 ${escapeHtml(item.floors_above == null ? "-" : String(item.floors_above))} / 지하 ${escapeHtml(item.floors_below == null ? "-" : String(item.floors_below))}`,
+      `세대/호실 수: ${escapeHtml(item.household_count == null ? "-" : String(item.household_count))}`,
+    ].join("<br>");
+  }
+
+  function renderInfoRegistrationDetail(item) {
+    selectedInfoRegistrationId = Number(item.id || 0);
+    $("#infoRegistrationType").value = String(item.record_type || "사업자등록");
+    $("#infoRegistrationTitle").value = String(item.title || "");
+    $("#infoRegistrationRefNo").value = String(item.reference_no || "");
+    $("#infoRegistrationStatus").value = String(item.status || "유효");
+    $("#infoRegistrationIssuer").value = String(item.issuer_name || "");
+    $("#infoRegistrationIssuedOn").value = String(item.issued_on || "");
+    $("#infoRegistrationExpiresOn").value = String(item.expires_on || "");
+    $("#infoRegistrationNote").value = String(item.note || "");
+    $("#infoRegistrationDetail").innerHTML = [
+      `<strong>${escapeHtml(item.title || "-")}</strong>`,
+      `구분: ${escapeHtml(item.record_type || "-")}`,
+      `번호: ${escapeHtml(item.reference_no || "-")}`,
+      `상태: ${escapeHtml(item.status || "-")}`,
+      `발행처: ${escapeHtml(item.issuer_name || "-")}`,
+      `유효기간: ${escapeHtml([formatDate(item.issued_on), formatDate(item.expires_on)].filter((value) => value && value !== "-").join(" ~ ") || "-")}`,
+    ].join("<br>");
+  }
+
+  function infoBuildingPayloadFromForm() {
+    return {
+      tenant_id: currentTenantId(),
+      building_code: String($("#infoBuildingCode").value || "").trim(),
+      building_name: String($("#infoBuildingName").value || "").trim(),
+      usage_type: String($("#infoBuildingUsageType").value || "아파트동").trim(),
+      status: String($("#infoBuildingStatus").value || "운영중").trim(),
+      floors_above: String($("#infoBuildingFloorsAbove").value || "").trim(),
+      floors_below: String($("#infoBuildingFloorsBelow").value || "").trim(),
+      household_count: String($("#infoBuildingHouseholdCount").value || "").trim(),
+      note: String($("#infoBuildingNote").value || "").trim(),
+    };
+  }
+
+  function infoRegistrationPayloadFromForm() {
+    return {
+      tenant_id: currentTenantId(),
+      record_type: String($("#infoRegistrationType").value || "사업자등록").trim(),
+      title: String($("#infoRegistrationTitle").value || "").trim(),
+      reference_no: String($("#infoRegistrationRefNo").value || "").trim(),
+      status: String($("#infoRegistrationStatus").value || "유효").trim(),
+      issuer_name: String($("#infoRegistrationIssuer").value || "").trim(),
+      issued_on: String($("#infoRegistrationIssuedOn").value || "").trim(),
+      expires_on: String($("#infoRegistrationExpiresOn").value || "").trim(),
+      note: String($("#infoRegistrationNote").value || "").trim(),
+    };
+  }
+
+  function renderInfoPreviewList(targetSelector, rows, formatRow) {
+    const el = $(targetSelector);
+    if (!el) return;
+    const items = Array.isArray(rows) ? rows : [];
+    el.innerHTML = items.length
+      ? items.map((row) => formatRow(row)).join("")
+      : '<div class="empty-state">등록된 정보가 없습니다.</div>';
+  }
+
+  function renderInfoDashboard(item) {
+    $("#infoMetricVendors").textContent = String(item.vendor_count || 0);
+    $("#infoMetricStaff").textContent = String(item.staff_count || 0);
+    $("#infoMetricAssets").textContent = String(item.asset_count || 0);
+    $("#infoMetricBuildings").textContent = String(item.building_count || 0);
+    $("#infoMetricRegistrations").textContent = String(item.registration_count || 0);
+    renderInfoPreviewList("#infoVendorList", item.recent_vendors || [], (row) => `<article class="timeline-item"><strong>${escapeHtml(row.company_name || "-")}</strong><p>${escapeHtml(row.service_type || "-")} / ${escapeHtml(row.contact_name || "-")} / ${escapeHtml(row.phone || "-")}</p></article>`);
+    renderInfoPreviewList("#infoStaffList", item.recent_staff || [], (row) => `<article class="timeline-item"><strong>${escapeHtml(row.name || "-")}</strong><p>${escapeHtml(row.role || "-")} / ${escapeHtml(row.login_id || "-")} / ${escapeHtml(row.phone || "-")}</p></article>`);
+    renderInfoPreviewList("#infoAssetList", item.recent_assets || [], (row) => `<article class="timeline-item"><strong>${escapeHtml(row.asset_name || "-")}</strong><p>${escapeHtml(row.category || "-")} / ${escapeHtml(row.location_name || "-")} / ${escapeHtml(row.lifecycle_state || "-")}</p></article>`);
+  }
+
   function renderNoticeDetail(item) {
     selectedNoticeId = Number(item.id || 0);
     $("#noticeTitle").value = String(item.title || "");
@@ -1649,20 +1864,32 @@
   function renderDocumentDetail(item) {
     selectedDocumentId = Number(item.id || 0);
     $("#documentTitle").value = String(item.title || "");
-    $("#documentCategory").value = String(item.category || "기타");
+    $("#documentCategory").value = String(item.category || defaultDocumentCategory());
     $("#documentStatus").value = String(item.status || "작성중");
     $("#documentOwner").value = String(item.owner || "");
     $("#documentDueDate").value = String(item.due_date || "");
     $("#documentRefNo").value = String(item.reference_no || "");
+    $("#documentTargetLabel").value = String(item.target_label || "");
+    $("#documentVendorName").value = String(item.vendor_name || "");
+    $("#documentAmountTotal").value = item.amount_total == null ? "" : String(item.amount_total);
+    $("#documentBasisDate").value = String(item.basis_date || "");
+    $("#documentPeriodStart").value = String(item.period_start || "");
+    $("#documentPeriodEnd").value = String(item.period_end || "");
     $("#documentSummary").value = String(item.summary || "");
     $("#opsDocumentDetail").innerHTML = [
       `<strong>${escapeHtml(item.title || "-")}</strong>`,
+      `문서번호: ${escapeHtml(item.reference_no || "-")}`,
       `분류: ${escapeHtml(item.category || "-")}`,
       `상태: ${escapeHtml(item.status || "-")}`,
       `담당: ${escapeHtml(item.owner || "-")}`,
       `기한: ${escapeHtml(formatDate(item.due_date))}`,
-      `문서번호: ${escapeHtml(item.reference_no || "-")}`,
+      `대상: ${escapeHtml(item.target_label || "-")}`,
+      `업체/상대처: ${escapeHtml(item.vendor_name || "-")}`,
+      `금액: ${escapeHtml(item.amount_total == null ? "-" : `${new Intl.NumberFormat("ko-KR").format(Number(item.amount_total || 0))}원`)}`,
+      `기준일: ${escapeHtml(formatDate(item.basis_date))}`,
+      `기간: ${escapeHtml([formatDate(item.period_start), formatDate(item.period_end)].filter((value) => value && value !== "-").join(" ~ ") || "-")}`,
     ].join("<br>");
+    renderDocumentCategoryGuide(item.category);
   }
 
   function selectedDocumentCategoryFilter() {
@@ -1670,8 +1897,9 @@
   }
 
   function documentCategoryOrder(category) {
-    const index = DOCUMENT_CATEGORY_VALUES.indexOf(String(category || ""));
-    return index === -1 ? DOCUMENT_CATEGORY_VALUES.length : index;
+    const values = documentCategoryValues();
+    const index = values.indexOf(String(category || ""));
+    return index === -1 ? values.length : index;
   }
 
   function renderDocumentCategorySummary(counts, selectedCategory = "") {
@@ -1681,7 +1909,7 @@
     const total = rows.reduce((acc, row) => acc + Number(row.total_count || 0), 0);
     summary.innerHTML = [
       `<button class="summary-chip summary-chip-btn${selectedCategory ? "" : " active"}" type="button" data-category="">전체 ${escapeHtml(String(total))}건</button>`,
-      ...DOCUMENT_CATEGORY_VALUES.map((category) => {
+      ...documentCategoryValues().map((category) => {
         const matched = rows.find((row) => String(row.category || "") === category);
         const totalCount = Number((matched || {}).total_count || 0);
         const openCount = Number((matched || {}).open_count || 0);
@@ -1701,6 +1929,7 @@
     return `
       <tr class="ops-document-row" data-id="${Number(item.id || 0)}">
         <td>${escapeHtml(item.title || "-")}</td>
+        <td class="mono">${escapeHtml(item.reference_no || "-")}</td>
         <td>${escapeHtml(item.category || "-")}</td>
         <td>${escapeHtml(item.status || "-")}</td>
         <td>${escapeHtml(item.owner || "-")}</td>
@@ -1712,7 +1941,7 @@
   function buildDocumentLedgerHtml(items) {
     const rows = Array.isArray(items) ? items : [];
     if (!rows.length) {
-      return '<tr><td colspan="5" class="empty-state">등록된 문서가 없습니다.</td></tr>';
+      return '<tr><td colspan="6" class="empty-state">등록된 문서가 없습니다.</td></tr>';
     }
     const groups = new Map();
     for (const row of rows) {
@@ -1725,7 +1954,7 @@
       .map((category) => {
         const groupedRows = groups.get(category) || [];
         return [
-          `<tr class="category-group-row"><td colspan="5">${escapeHtml(category)} · ${escapeHtml(String(groupedRows.length))}건</td></tr>`,
+          `<tr class="category-group-row"><td colspan="6">${escapeHtml(category)} · ${escapeHtml(String(groupedRows.length))}건</td></tr>`,
           groupedRows.map((item) => documentLedgerRowHtml(item)).join(""),
         ].join("");
       })
@@ -1905,6 +2134,75 @@
     return opsSchedules;
   }
 
+  async function loadInfoDashboard() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return;
+    const data = await api(`/api/info/dashboard?tenant_id=${encodeURIComponent(tenantId)}`);
+    renderInfoDashboard(data.item || {});
+  }
+
+  async function loadInfoBuildings() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/info/buildings?tenant_id=${encodeURIComponent(tenantId)}`);
+    infoBuildings = Array.isArray(data.items) ? data.items : [];
+    const body = $("#infoBuildingsTableBody");
+    if (!body) return infoBuildings;
+    body.innerHTML = infoBuildings.length
+      ? infoBuildings.map((item) => `
+        <tr class="info-building-row" data-id="${Number(item.id || 0)}">
+          <td>${escapeHtml(item.building_code || "-")}</td>
+          <td>${escapeHtml(item.building_name || "-")}</td>
+          <td>${escapeHtml(item.usage_type || "-")}</td>
+          <td>${escapeHtml(item.status || "-")}</td>
+          <td>${escapeHtml(item.household_count == null ? "-" : String(item.household_count))}</td>
+        </tr>
+      `).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 건물정보가 없습니다.</td></tr>';
+    body.querySelectorAll(".info-building-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = infoBuildings.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderInfoBuildingDetail(item);
+      });
+    });
+    if (selectedInfoBuildingId) {
+      const found = infoBuildings.find((item) => Number(item.id || 0) === selectedInfoBuildingId);
+      if (found) renderInfoBuildingDetail(found); else clearInfoBuildingForm();
+    }
+    return infoBuildings;
+  }
+
+  async function loadInfoRegistrations() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/info/registrations?tenant_id=${encodeURIComponent(tenantId)}`);
+    infoRegistrations = Array.isArray(data.items) ? data.items : [];
+    const body = $("#infoRegistrationsTableBody");
+    if (!body) return infoRegistrations;
+    body.innerHTML = infoRegistrations.length
+      ? infoRegistrations.map((item) => `
+        <tr class="info-registration-row" data-id="${Number(item.id || 0)}">
+          <td>${escapeHtml(item.record_type || "-")}</td>
+          <td>${escapeHtml(item.title || "-")}</td>
+          <td>${escapeHtml(item.reference_no || "-")}</td>
+          <td>${escapeHtml(item.status || "-")}</td>
+          <td>${escapeHtml(formatDate(item.expires_on))}</td>
+        </tr>
+      `).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 등록정보가 없습니다.</td></tr>';
+    body.querySelectorAll(".info-registration-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = infoRegistrations.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderInfoRegistrationDetail(item);
+      });
+    });
+    if (selectedInfoRegistrationId) {
+      const found = infoRegistrations.find((item) => Number(item.id || 0) === selectedInfoRegistrationId);
+      if (found) renderInfoRegistrationDetail(found); else clearInfoRegistrationForm();
+    }
+    return infoRegistrations;
+  }
+
   function noticePayloadFromForm() {
     return {
       tenant_id: currentTenantId(),
@@ -1921,12 +2219,39 @@
       tenant_id: currentTenantId(),
       title: String($("#documentTitle").value || "").trim(),
       summary: String($("#documentSummary").value || "").trim(),
-      category: String($("#documentCategory").value || "기타").trim(),
+      category: String($("#documentCategory").value || defaultDocumentCategory()).trim(),
       status: String($("#documentStatus").value || "작성중").trim(),
       owner: String($("#documentOwner").value || "").trim(),
       due_date: String($("#documentDueDate").value || "").trim(),
       reference_no: String($("#documentRefNo").value || "").trim(),
+      target_label: String($("#documentTargetLabel").value || "").trim(),
+      vendor_name: String($("#documentVendorName").value || "").trim(),
+      amount_total: String($("#documentAmountTotal").value || "").trim(),
+      basis_date: String($("#documentBasisDate").value || "").trim(),
+      period_start: String($("#documentPeriodStart").value || "").trim(),
+      period_end: String($("#documentPeriodEnd").value || "").trim(),
     };
+  }
+
+  async function loadDocumentCatalog() {
+    const tenantId = currentTenantId();
+    if (!tenantId) {
+      renderDocumentCategoryOptions();
+      renderDocumentCodeInputs();
+      renderDocumentCategoryGuide(defaultDocumentCategory());
+      return documentCatalog;
+    }
+    const data = await api(`/api/ops/documents/catalog?tenant_id=${encodeURIComponent(tenantId)}`);
+    documentCatalog = {
+      categories: Array.isArray(data.item?.categories) && data.item.categories.length ? data.item.categories : [...DEFAULT_DOCUMENT_CATEGORY_VALUES],
+      profiles: Array.isArray(data.item?.profiles) ? data.item.profiles : [],
+      common_fields: Array.isArray(data.item?.common_fields) ? data.item.common_fields : [],
+      preview_examples: data.item?.preview_examples || {},
+    };
+    renderDocumentCategoryOptions();
+    renderDocumentCodeInputs();
+    renderDocumentCategoryGuide($("#documentCategory")?.value || defaultDocumentCategory());
+    return documentCatalog;
   }
 
   async function loadDocumentNumberingConfig() {
@@ -1996,7 +2321,7 @@
       body: JSON.stringify(payload),
     });
     downloadBlob(response.blob, response.filename || "document.pdf");
-    setMessage("#opsDocumentMsg", "기안서 PDF를 생성했습니다.");
+    setMessage("#opsDocumentMsg", "문서 PDF를 생성했습니다.");
   }
 
   async function renderSampleDocumentPdf() {
@@ -2145,6 +2470,58 @@
     setMessage("#opsScheduleMsg", "일정을 삭제했습니다.");
     await loadOpsSchedules();
     await loadOpsDashboard();
+  }
+
+  async function createInfoBuilding() {
+    const data = await api("/api/info/buildings", { method: "POST", body: JSON.stringify(infoBuildingPayloadFromForm()) });
+    renderInfoBuildingDetail(data.item || {});
+    setMessage("#infoBuildingMsg", "건물정보를 등록했습니다.");
+    await loadInfoBuildings();
+    await loadInfoDashboard();
+  }
+
+  async function updateInfoBuilding() {
+    if (!selectedInfoBuildingId) throw new Error("수정할 건물정보를 선택하세요.");
+    const data = await api(`/api/info/buildings/${selectedInfoBuildingId}`, { method: "PATCH", body: JSON.stringify(infoBuildingPayloadFromForm()) });
+    renderInfoBuildingDetail(data.item || {});
+    setMessage("#infoBuildingMsg", "건물정보를 수정했습니다.");
+    await loadInfoBuildings();
+    await loadInfoDashboard();
+  }
+
+  async function deleteInfoBuilding() {
+    if (!selectedInfoBuildingId) throw new Error("삭제할 건물정보를 선택하세요.");
+    await api(`/api/info/buildings/${selectedInfoBuildingId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearInfoBuildingForm();
+    setMessage("#infoBuildingMsg", "건물정보를 삭제했습니다.");
+    await loadInfoBuildings();
+    await loadInfoDashboard();
+  }
+
+  async function createInfoRegistration() {
+    const data = await api("/api/info/registrations", { method: "POST", body: JSON.stringify(infoRegistrationPayloadFromForm()) });
+    renderInfoRegistrationDetail(data.item || {});
+    setMessage("#infoRegistrationMsg", "등록정보를 등록했습니다.");
+    await loadInfoRegistrations();
+    await loadInfoDashboard();
+  }
+
+  async function updateInfoRegistration() {
+    if (!selectedInfoRegistrationId) throw new Error("수정할 등록정보를 선택하세요.");
+    const data = await api(`/api/info/registrations/${selectedInfoRegistrationId}`, { method: "PATCH", body: JSON.stringify(infoRegistrationPayloadFromForm()) });
+    renderInfoRegistrationDetail(data.item || {});
+    setMessage("#infoRegistrationMsg", "등록정보를 수정했습니다.");
+    await loadInfoRegistrations();
+    await loadInfoDashboard();
+  }
+
+  async function deleteInfoRegistration() {
+    if (!selectedInfoRegistrationId) throw new Error("삭제할 등록정보를 선택하세요.");
+    await api(`/api/info/registrations/${selectedInfoRegistrationId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearInfoRegistrationForm();
+    setMessage("#infoRegistrationMsg", "등록정보를 삭제했습니다.");
+    await loadInfoRegistrations();
+    await loadInfoDashboard();
   }
 
   async function classifyCurrentText() {
@@ -2813,9 +3190,13 @@
   }
 
   async function reloadAll() {
+    await loadDocumentCatalog();
     await loadDashboard();
     await loadComplaints();
     await generateReport();
+    await loadInfoDashboard();
+    await loadInfoBuildings();
+    await loadInfoRegistrations();
     await loadFacilityDashboard();
     await loadFacilityAssets();
     await loadFacilityChecklists();
@@ -2886,6 +3267,15 @@
     $("#btnDownloadDigestSource")?.addEventListener("click", () => downloadChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnPasteDigestImage")?.addEventListener("click", () => importClipboardImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnLoadFacilityDashboard")?.addEventListener("click", () => loadFacilityDashboard().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#btnLoadInfoDashboard")?.addEventListener("click", () => loadInfoDashboard().catch((error) => setMessage("#infoBuildingMsg", error.message || String(error), true)));
+    $("#btnCreateInfoBuilding")?.addEventListener("click", () => createInfoBuilding().catch((error) => setMessage("#infoBuildingMsg", error.message || String(error), true)));
+    $("#btnUpdateInfoBuilding")?.addEventListener("click", () => updateInfoBuilding().catch((error) => setMessage("#infoBuildingMsg", error.message || String(error), true)));
+    $("#btnDeleteInfoBuilding")?.addEventListener("click", () => deleteInfoBuilding().catch((error) => setMessage("#infoBuildingMsg", error.message || String(error), true)));
+    $("#btnClearInfoBuilding")?.addEventListener("click", () => clearInfoBuildingForm());
+    $("#btnCreateInfoRegistration")?.addEventListener("click", () => createInfoRegistration().catch((error) => setMessage("#infoRegistrationMsg", error.message || String(error), true)));
+    $("#btnUpdateInfoRegistration")?.addEventListener("click", () => updateInfoRegistration().catch((error) => setMessage("#infoRegistrationMsg", error.message || String(error), true)));
+    $("#btnDeleteInfoRegistration")?.addEventListener("click", () => deleteInfoRegistration().catch((error) => setMessage("#infoRegistrationMsg", error.message || String(error), true)));
+    $("#btnClearInfoRegistration")?.addEventListener("click", () => clearInfoRegistrationForm());
     $("#btnCreateFacilityAsset")?.addEventListener("click", () => createFacilityAsset().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnUpdateFacilityAsset")?.addEventListener("click", () => updateFacilityAsset().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnDeleteFacilityAsset")?.addEventListener("click", () => deleteFacilityAsset().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
@@ -2921,6 +3311,7 @@
     $("#btnExportDocumentLedger")?.addEventListener("click", () => exportDocumentLedgerExcel().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
     $("#btnClearDocument")?.addEventListener("click", () => clearDocumentForm());
     $("#documentCategoryFilter")?.addEventListener("change", () => loadOpsDocuments().catch((error) => setMessage("#opsDocumentMsg", error.message || String(error), true)));
+    $("#documentCategory")?.addEventListener("change", () => renderDocumentCategoryGuide($("#documentCategory")?.value || defaultDocumentCategory()));
     $("#filterBuilding")?.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
@@ -3004,6 +3395,8 @@
     me = await api("/api/auth/me");
     renderRoleOptions("#newUserRole", "desk");
     renderRoleOptions("#editUserRole", "desk");
+    renderDocumentCategoryOptions();
+    renderDocumentCodeInputs();
     $("#btnApproveUser")?.toggleAttribute("disabled", true);
     applyHero();
     syncUserTenantDisplay();
@@ -3026,6 +3419,8 @@
     clearDocumentForm();
     clearScheduleForm();
     clearVendorForm();
+    clearInfoBuildingForm();
+    clearInfoRegistrationForm();
     if (isAdmin()) {
       $("#tenantSelectWrap")?.classList.remove("hidden");
       $("#adminPanel")?.classList.remove("hidden");

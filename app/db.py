@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .ops_document_catalog import DOCUMENT_CATEGORY_CODES
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 STORAGE_ROOT = Path(os.getenv("KA_STORAGE_ROOT") or BASE_DIR).resolve()
 DATA_DIR = STORAGE_ROOT / "data"
@@ -21,15 +23,7 @@ DB_PATH = DATA_DIR / "ka.db"
 _TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
 _LOGIN_ID_RE = re.compile(r"^[a-z0-9._-]{2,32}$")
 _DOC_NUMBERING_DATE_MODES = {"none", "yyyymm", "yyyymmdd"}
-_DOC_NUMBERING_CATEGORY_DEFAULT_CODES = {
-    "계약": "CTR",
-    "공문": "LTR",
-    "보고": "RPT",
-    "예산": "BDG",
-    "입주": "MOV",
-    "점검": "INS",
-    "기타": "ETC",
-}
+_DOC_NUMBERING_CATEGORY_DEFAULT_CODES = dict(DOCUMENT_CATEGORY_CODES)
 _DOC_NUMBERING_DEFAULTS = {
     "separator": "-",
     "date_mode": "yyyymmdd",

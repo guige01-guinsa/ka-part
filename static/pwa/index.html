@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260409p6" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260409p7" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -409,22 +409,15 @@
         <div class="detail-stack">
           <div class="subhead">행정문서 관리</div>
           <div id="opsDocumentDetail" class="detail-block">문서를 선택하거나 새로 등록하세요.</div>
+          <div id="documentCategoryGuide" class="detail-block">문서 유형을 불러오는 중입니다.</div>
           <div class="form-grid compact-grid">
             <label class="field">
               <span>문서 제목</span>
-              <input id="documentTitle" type="text" maxlength="160" placeholder="예: 소방 점검 보고서" />
+              <input id="documentTitle" type="text" maxlength="160" placeholder="예: 승강기 부품 교체의 건" />
             </label>
             <label class="field">
               <span>문서 분류</span>
-              <select id="documentCategory">
-                <option value="계약">계약</option>
-                <option value="공문">공문</option>
-                <option value="보고">보고</option>
-                <option value="예산">예산</option>
-                <option value="입주">입주</option>
-                <option value="점검">점검</option>
-                <option value="기타">기타</option>
-              </select>
+              <select id="documentCategory"></select>
             </label>
             <label class="field">
               <span>상태</span>
@@ -447,6 +440,30 @@
               <span>문서번호</span>
               <input id="documentRefNo" type="text" maxlength="80" placeholder="예: RPT-2026-041" />
             </label>
+            <label class="field">
+              <span>대상 / 설비 / 문서대상</span>
+              <input id="documentTargetLabel" type="text" maxlength="160" placeholder="예: 상가A동 25호기 승강기" />
+            </label>
+            <label class="field">
+              <span>업체 / 상대처</span>
+              <input id="documentVendorName" type="text" maxlength="160" placeholder="예: 한국미쓰비시엘리베이터(주)" />
+            </label>
+            <label class="field">
+              <span>금액(원)</span>
+              <input id="documentAmountTotal" type="number" min="0" step="1" placeholder="예: 298320" />
+            </label>
+            <label class="field">
+              <span>기준일</span>
+              <input id="documentBasisDate" type="date" />
+            </label>
+            <label class="field">
+              <span>시작일</span>
+              <input id="documentPeriodStart" type="date" />
+            </label>
+            <label class="field">
+              <span>종료일</span>
+              <input id="documentPeriodEnd" type="date" />
+            </label>
             <label class="field field-span">
               <span>요약 / 메모</span>
               <textarea id="documentSummary" rows="4" placeholder="문서 목적과 진행 메모를 입력하세요."></textarea>
@@ -461,26 +478,17 @@
             <button id="btnUpdateDocument" data-ops-write="1" class="ghost-btn" type="button">선택 수정</button>
             <button id="btnDeleteDocument" data-ops-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
             <button id="btnAutoDocumentRefNo" data-ops-write="1" class="ghost-btn" type="button">번호 자동채번</button>
-            <button id="btnRenderDocumentPdf" data-ops-write="1" class="ghost-btn" type="button">기안서 PDF 생성</button>
+            <button id="btnRenderDocumentPdf" data-ops-write="1" class="ghost-btn" type="button">문서 PDF 생성</button>
             <button id="btnSampleDocumentPdf" data-ops-write="1" class="ghost-btn" type="button">샘플 PDF 생성</button>
             <button id="btnExportDocumentLedger" class="ghost-btn" type="button">엑셀 다운로드</button>
             <button id="btnClearDocument" class="ghost-btn" type="button">입력 초기화</button>
           </div>
-          <div class="inline-note">문서번호를 비워두면 저장 시 자동채번됩니다. 제목과 요약/메모만 입력해도 기안서 PDF를 바로 생성할 수 있고, 샘플 파일은 참조용 PDF 생성에만 사용됩니다.</div>
+          <div class="inline-note">문서번호를 비워두면 저장 시 자동채번됩니다. 제목과 요약/메모만 입력해도 PDF를 바로 생성할 수 있고, 금액/업체/기간 같은 공통 항목은 문서 분류에 맞춰 선택 입력하면 됩니다. 샘플 파일은 참조용 PDF 생성에만 사용됩니다.</div>
           <div id="opsDocumentMsg" class="inline-message" aria-live="polite"></div>
           <div class="filter-row">
             <label class="field filter-field">
               <span>문서관리대장 분류</span>
-              <select id="documentCategoryFilter">
-                <option value="">전체</option>
-                <option value="계약">계약</option>
-                <option value="공문">공문</option>
-                <option value="보고">보고</option>
-                <option value="예산">예산</option>
-                <option value="입주">입주</option>
-                <option value="점검">점검</option>
-                <option value="기타">기타</option>
-              </select>
+              <select id="documentCategoryFilter"></select>
             </label>
             <div id="opsDocumentCategorySummary" class="badge-group"></div>
           </div>
@@ -505,15 +513,7 @@
               </label>
               <div class="field field-span">
                 <span>분류코드</span>
-                <div class="code-grid">
-                  <label class="field"><span>계약</span><input id="docCodeContract" type="text" maxlength="8" /></label>
-                  <label class="field"><span>공문</span><input id="docCodeLetter" type="text" maxlength="8" /></label>
-                  <label class="field"><span>보고</span><input id="docCodeReport" type="text" maxlength="8" /></label>
-                  <label class="field"><span>예산</span><input id="docCodeBudget" type="text" maxlength="8" /></label>
-                  <label class="field"><span>입주</span><input id="docCodeMoveIn" type="text" maxlength="8" /></label>
-                  <label class="field"><span>점검</span><input id="docCodeInspection" type="text" maxlength="8" /></label>
-                  <label class="field"><span>기타</span><input id="docCodeOther" type="text" maxlength="8" /></label>
-                </div>
+                <div id="docCategoryCodeGrid" class="code-grid"></div>
               </div>
             </div>
             <div class="cta-row">
@@ -528,6 +528,7 @@
               <thead>
                 <tr>
                   <th>제목</th>
+                  <th>문서번호</th>
                   <th>분류</th>
                   <th>상태</th>
                   <th>담당</th>
@@ -667,6 +668,201 @@
                 </tr>
               </thead>
               <tbody id="opsVendorsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="infoSection" class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Information</p>
+          <h2>정보관리</h2>
+          <p class="panel-copy">업체정보, 직원정보, 시설설비정보, 건물정보, 등록정보를 확장 가능한 구조로 묶어 관리합니다.</p>
+        </div>
+        <button id="btnLoadInfoDashboard" class="ghost-btn" type="button">정보관리 새로고침</button>
+      </div>
+      <div class="ops-metrics">
+        <article class="metric-card">
+          <span>업체정보</span>
+          <strong id="infoMetricVendors">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>직원정보</span>
+          <strong id="infoMetricStaff">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>시설설비정보</span>
+          <strong id="infoMetricAssets">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>건물정보</span>
+          <strong id="infoMetricBuildings">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>등록정보</span>
+          <strong id="infoMetricRegistrations">0</strong>
+        </article>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">업체정보</div>
+          <div id="infoVendorList" class="timeline"></div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">직원정보</div>
+          <div id="infoStaffList" class="timeline"></div>
+        </div>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">시설설비정보</div>
+          <div id="infoAssetList" class="timeline"></div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">확장 메모</div>
+          <div id="infoExpansionGuide" class="detail-block">기존 업체관리, 사용자관리, 시설자산을 정보관리에서 묶어 보고, 건물정보와 등록정보는 별도 CRUD로 확장합니다.</div>
+        </div>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">건물정보</div>
+          <div id="infoBuildingDetail" class="detail-block">건물정보를 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>건물코드</span>
+              <input id="infoBuildingCode" type="text" maxlength="40" placeholder="예: 101" />
+            </label>
+            <label class="field">
+              <span>건물명</span>
+              <input id="infoBuildingName" type="text" maxlength="160" placeholder="예: 101동" />
+            </label>
+            <label class="field">
+              <span>용도</span>
+              <select id="infoBuildingUsageType">
+                <option value="아파트동">아파트동</option>
+                <option value="상가동">상가동</option>
+                <option value="관리동">관리동</option>
+                <option value="부속동">부속동</option>
+                <option value="기타">기타</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="infoBuildingStatus">
+                <option value="운영중">운영중</option>
+                <option value="휴관">휴관</option>
+                <option value="폐쇄">폐쇄</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>지상 층수</span>
+              <input id="infoBuildingFloorsAbove" type="number" min="0" step="1" placeholder="예: 20" />
+            </label>
+            <label class="field">
+              <span>지하 층수</span>
+              <input id="infoBuildingFloorsBelow" type="number" min="0" step="1" placeholder="예: 2" />
+            </label>
+            <label class="field">
+              <span>세대/호실 수</span>
+              <input id="infoBuildingHouseholdCount" type="number" min="0" step="1" placeholder="예: 120" />
+            </label>
+            <label class="field field-span">
+              <span>메모</span>
+              <textarea id="infoBuildingNote" rows="3" placeholder="건물 특징, 관리 메모, 공용시설 현황"></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateInfoBuilding" data-ops-write="1" class="action-btn" type="button">건물 등록</button>
+            <button id="btnUpdateInfoBuilding" data-ops-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteInfoBuilding" data-ops-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearInfoBuilding" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="infoBuildingMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>건물코드</th>
+                  <th>건물명</th>
+                  <th>용도</th>
+                  <th>상태</th>
+                  <th>세대수</th>
+                </tr>
+              </thead>
+              <tbody id="infoBuildingsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">등록정보</div>
+          <div id="infoRegistrationDetail" class="detail-block">등록정보를 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>등록 구분</span>
+              <select id="infoRegistrationType">
+                <option value="사업자등록">사업자등록</option>
+                <option value="보험">보험</option>
+                <option value="면허">면허</option>
+                <option value="법정등록">법정등록</option>
+                <option value="계약등록">계약등록</option>
+                <option value="기타">기타</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>제목</span>
+              <input id="infoRegistrationTitle" type="text" maxlength="160" placeholder="예: 영업배상 책임보험" />
+            </label>
+            <label class="field">
+              <span>번호</span>
+              <input id="infoRegistrationRefNo" type="text" maxlength="80" placeholder="예: POL-2026-001" />
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="infoRegistrationStatus">
+                <option value="유효">유효</option>
+                <option value="만료예정">만료예정</option>
+                <option value="만료">만료</option>
+                <option value="보류">보류</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>발급기관 / 발행처</span>
+              <input id="infoRegistrationIssuer" type="text" maxlength="120" placeholder="예: DB손해보험" />
+            </label>
+            <label class="field">
+              <span>발급일</span>
+              <input id="infoRegistrationIssuedOn" type="date" />
+            </label>
+            <label class="field">
+              <span>만료일</span>
+              <input id="infoRegistrationExpiresOn" type="date" />
+            </label>
+            <label class="field field-span">
+              <span>메모</span>
+              <textarea id="infoRegistrationNote" rows="3" placeholder="등록·보험·허가 관련 특이사항"></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateInfoRegistration" data-ops-write="1" class="action-btn" type="button">등록정보 등록</button>
+            <button id="btnUpdateInfoRegistration" data-ops-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteInfoRegistration" data-ops-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearInfoRegistration" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="infoRegistrationMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>구분</th>
+                  <th>제목</th>
+                  <th>번호</th>
+                  <th>상태</th>
+                  <th>만료일</th>
+                </tr>
+              </thead>
+              <tbody id="infoRegistrationsTableBody"></tbody>
             </table>
           </div>
         </div>
@@ -1236,9 +1432,12 @@
     <button class="mobile-dock-btn" type="button" data-target="#operationsSection">
       <span>행정</span>
     </button>
+    <button class="mobile-dock-btn" type="button" data-target="#infoSection">
+      <span>정보</span>
+    </button>
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260409p6"></script>
+  <script src="/pwa/portal.js?v=20260409p7"></script>
 </body>
 </html>

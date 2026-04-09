@@ -31,7 +31,24 @@ def build_ops_document_ledger_xlsx(
     sheet["A3"] = f"분류: {category_label}"
     sheet["F2"] = f"출력일시: {generated_at}"
 
-    headers = ["제목", "분류", "상태", "담당", "기한", "문서번호", "요약", "등록자", "등록일", "수정일"]
+    headers = [
+        "제목",
+        "분류",
+        "상태",
+        "담당",
+        "기한",
+        "문서번호",
+        "대상/설비",
+        "업체/상대처",
+        "금액(원)",
+        "기준일",
+        "시작일",
+        "종료일",
+        "요약",
+        "등록자",
+        "등록일",
+        "수정일",
+    ]
     sheet.append([])
     sheet.append(headers)
 
@@ -55,6 +72,12 @@ def build_ops_document_ledger_xlsx(
                 _as_text(item.get("owner")),
                 _as_text(item.get("due_date")),
                 _as_text(item.get("reference_no")),
+                _as_text(item.get("target_label")),
+                _as_text(item.get("vendor_name")),
+                _as_text(item.get("amount_total")),
+                _as_text(item.get("basis_date")),
+                _as_text(item.get("period_start")),
+                _as_text(item.get("period_end")),
                 _as_text(item.get("summary")),
                 _as_text(item.get("created_by_label")),
                 _as_text(item.get("created_at")),
@@ -70,10 +93,16 @@ def build_ops_document_ledger_xlsx(
         "D": 14,
         "E": 14,
         "F": 22,
-        "G": 42,
-        "H": 16,
-        "I": 20,
-        "J": 20,
+        "G": 22,
+        "H": 22,
+        "I": 14,
+        "J": 14,
+        "K": 14,
+        "L": 14,
+        "M": 42,
+        "N": 16,
+        "O": 20,
+        "P": 20,
     }
     for column, width in column_widths.items():
         sheet.column_dimensions[column].width = width

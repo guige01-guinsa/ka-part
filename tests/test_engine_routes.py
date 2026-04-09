@@ -25,6 +25,7 @@ def app_client(tmp_path, monkeypatch):
         "app.db",
         "app.engine_db",
         "app.facility_db",
+        "app.info_db",
         "app.legacy_import",
         "app.ops_db",
         "app.voice_db",
@@ -33,6 +34,7 @@ def app_client(tmp_path, monkeypatch):
         "app.routes.core",
         "app.routes.engine",
         "app.routes.facility",
+        "app.routes.info",
         "app.routes.ops",
         "app.routes.voice",
     ):
@@ -41,12 +43,14 @@ def app_client(tmp_path, monkeypatch):
     db = importlib.import_module("app.db")
     engine_db = importlib.import_module("app.engine_db")
     facility_db = importlib.import_module("app.facility_db")
+    info_db = importlib.import_module("app.info_db")
     ops_db = importlib.import_module("app.ops_db")
     voice_db = importlib.import_module("app.voice_db")
 
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "engine_test.db")
     monkeypatch.setattr(engine_db, "DB_PATH", tmp_path / "engine_test.db")
     monkeypatch.setattr(facility_db, "DB_PATH", tmp_path / "engine_test.db")
+    monkeypatch.setattr(info_db, "DB_PATH", tmp_path / "engine_test.db")
     monkeypatch.setattr(ops_db, "DB_PATH", tmp_path / "engine_test.db")
     monkeypatch.setattr(voice_db, "DB_PATH", tmp_path / "engine_test.db")
 
@@ -54,6 +58,7 @@ def app_client(tmp_path, monkeypatch):
     db.init_db()
     engine_db.init_engine_db()
     facility_db.init_facility_db()
+    info_db.init_info_db()
     ops_db.init_ops_db()
 
     with TestClient(main.app) as client:
@@ -638,15 +643,21 @@ def test_operations_admin_module_supports_crud_and_dashboard(app_client) -> None
             "tenant_id": "ys_thesharp",
             "title": "소방 점검 보고서",
             "summary": "소방 점검 결과 보고서 작성 필요",
-            "category": "보고",
+            "category": "월업무보고(작업 보고서)",
             "status": "검토중",
             "owner": "김과장",
             "due_date": "2026-04-09",
+            "target_label": "소방설비 월간 점검",
+            "vendor_name": "태성전기",
+            "amount_total": 298320,
+            "basis_date": "2026-04-09",
         },
     )
     assert document.status_code == 200
     document_id = int(document.json()["item"]["id"])
-    assert str(document.json()["item"]["reference_no"]).startswith("RPT-")
+    assert str(document.json()["item"]["reference_no"]).startswith("MWR-")
+    assert document.json()["item"]["vendor_name"] == "태성전기"
+    assert document.json()["item"]["amount_total"] == 298320.0
 
     archived_document = client.post(
         "/api/ops/documents",
@@ -654,7 +665,7 @@ def test_operations_admin_module_supports_crud_and_dashboard(app_client) -> None
             "tenant_id": "ys_thesharp",
             "title": "외벽 보수 계약서",
             "summary": "외벽 보수 계약 완료본 보관",
-            "category": "계약",
+            "category": "계약서관리",
             "status": "보관",
             "owner": "관리소장",
             "reference_no": "CT-2026-001",
@@ -691,35 +702,42 @@ def test_operations_admin_module_supports_crud_and_dashboard(app_client) -> None
     assert notices.status_code == 200
     assert notices.json()["items"][0]["title"] == "4월 정기 소독 안내"
 
-    documents = client.get("/api/ops/documents?tenant_id=ys_thesharp&category=보고")
+    catalog = client.get("/api/ops/documents/catalog?tenant_id=ys_thesharp")
+    assert catalog.status_code == 200
+    assert "기안지(10만원 이상)" in catalog.json()["item"]["categories"]
+
+    documents = client.get("/api/ops/documents?tenant_id=ys_thesharp&category=월업무보고(작업 보고서)")
     assert documents.status_code == 200
     assert len(documents.json()["items"]) == 1
     assert documents.json()["items"][0]["title"] == "소방 점검 보고서"
     category_counts = {row["category"]: row for row in documents.json()["category_counts"]}
-    assert category_counts["보고"]["total_count"] == 1
-    assert category_counts["계약"]["total_count"] == 1
+    assert category_counts["월업무보고(작업 보고서)"]["total_count"] == 1
+    assert category_counts["계약서관리"]["total_count"] == 1
 
-    next_reference = client.get("/api/ops/documents/next_reference?tenant_id=ys_thesharp&category=보고")
+    next_reference = client.get("/api/ops/documents/next_reference?tenant_id=ys_thesharp&category=월업무보고(작업 보고서)")
     assert next_reference.status_code == 200
-    assert str(next_reference.json()["item"]["reference_no"]).startswith("RPT-")
+    assert str(next_reference.json()["item"]["reference_no"]).startswith("MWR-")
 
     from openpyxl import load_workbook
 
-    export = client.get("/api/ops/documents/export.xlsx?tenant_id=ys_thesharp&category=보고")
+    export = client.get("/api/ops/documents/export.xlsx?tenant_id=ys_thesharp&category=월업무보고(작업 보고서)")
     assert export.status_code == 200
     assert export.headers["content-type"].startswith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     workbook = load_workbook(io.BytesIO(export.content))
     sheet = workbook.active
     assert sheet["A1"].value == "행정문서 관리대장"
-    assert sheet["A3"].value == "분류: 보고"
+    assert sheet["A3"].value == "분류: 월업무보고(작업 보고서)"
     assert sheet["A6"].value == "소방 점검 보고서"
+    assert sheet["G6"].value == "소방설비 월간 점검"
+    assert sheet["H6"].value == "태성전기"
 
     updated_document = client.patch(
         f"/api/ops/documents/{document_id}",
-        json={"tenant_id": "ys_thesharp", "status": "완료"},
+        json={"tenant_id": "ys_thesharp", "status": "완료", "period_start": "2026-04-01", "period_end": "2026-04-30"},
     )
     assert updated_document.status_code == 200
     assert updated_document.json()["item"]["status"] == "완료"
+    assert updated_document.json()["item"]["period_start"] == "2026-04-01"
 
     updated_schedule = client.patch(
         f"/api/ops/schedules/{schedule_id}",
@@ -929,7 +947,7 @@ def test_document_numbering_config_is_tenant_configurable(app_client) -> None:
     default_config = client.get("/api/ops/documents/numbering_config?tenant_id=ys_thesharp")
     assert default_config.status_code == 200
     assert default_config.json()["item"]["config"]["date_mode"] == "yyyymmdd"
-    assert default_config.json()["item"]["config"]["category_codes"]["보고"] == "RPT"
+    assert default_config.json()["item"]["config"]["category_codes"]["월업무보고(작업 보고서)"] == "MWR"
 
     updated = client.patch(
         "/api/ops/documents/numbering_config",
@@ -940,12 +958,24 @@ def test_document_numbering_config_is_tenant_configurable(app_client) -> None:
                 "date_mode": "yyyymm",
                 "sequence_digits": 4,
                 "category_codes": {
-                    "계약": "CONT",
-                    "공문": "LTR",
-                    "보고": "REP",
-                    "예산": "BUD",
-                    "입주": "MOVE",
-                    "점검": "CHK",
+                    "기안지(10만원 이상)": "DRF",
+                    "구매요청서(10만원 이하)": "BUY",
+                    "견적서와 발주서": "ORD",
+                    "월업무보고(작업 보고서)": "REP",
+                    "계약서관리": "CONT",
+                    "배상보험": "LIA",
+                    "주요업무일정관리": "SCH",
+                    "전기수도검침": "MTR",
+                    "전기수도부과": "BIL",
+                    "직무고시": "DUTY",
+                    "안전관리대장관리": "SAFE",
+                    "법정 정기점검": "LCHK",
+                    "수질검사": "WQ",
+                    "소방정기점검": "FIRE",
+                    "기계설비유지관리": "MECH",
+                    "기계설비성능점검": "MPT",
+                    "승강기안전점검": "ELV",
+                    "안전점검하자보수완료보고": "RPR",
                     "기타": "ETC",
                 },
             },
@@ -954,9 +984,9 @@ def test_document_numbering_config_is_tenant_configurable(app_client) -> None:
     assert updated.status_code == 200
     assert updated.json()["item"]["config"]["separator"] == "_"
     assert updated.json()["item"]["config"]["sequence_digits"] == 4
-    assert updated.json()["item"]["preview_examples"]["보고"].startswith("REP_")
+    assert updated.json()["item"]["preview_examples"]["월업무보고(작업 보고서)"].startswith("REP_")
 
-    next_reference = client.get("/api/ops/documents/next_reference?tenant_id=ys_thesharp&category=보고")
+    next_reference = client.get("/api/ops/documents/next_reference?tenant_id=ys_thesharp&category=월업무보고(작업 보고서)")
     assert next_reference.status_code == 200
     generated = str(next_reference.json()["item"]["reference_no"])
     assert re.match(r"^REP_\d{6}_\d{4}$", generated)
@@ -967,7 +997,7 @@ def test_document_numbering_config_is_tenant_configurable(app_client) -> None:
             "tenant_id": "ys_thesharp",
             "title": "커스텀 번호 보고서",
             "summary": "설정 변경 후 자동번호 테스트",
-            "category": "보고",
+            "category": "월업무보고(작업 보고서)",
             "status": "작성중",
         },
     )
@@ -993,9 +1023,13 @@ def test_operations_admin_document_pdf_generation_and_sample_reference(app_clien
             "tenant_id": "ys_thesharp",
             "title": "승강기 부품 교체의 건",
             "summary": "상가A동 25호기 승강기 부품 노후로 예방정비 차원의 교체를 진행하고 결재를 요청합니다.",
-            "category": "점검",
+            "category": "기안지(10만원 이상)",
             "owner": "시설과장",
             "reference_no": "관리-2026-001",
+            "target_label": "상가A동 25호기 승강기",
+            "vendor_name": "한국미쓰비시엘리베이터(주)",
+            "amount_total": 298320,
+            "basis_date": "2026-04-07",
         },
     )
     assert rendered.status_code == 200
@@ -1010,6 +1044,114 @@ def test_operations_admin_document_pdf_generation_and_sample_reference(app_clien
     assert sample_pdf.status_code == 200
     assert sample_pdf.headers["content-type"].startswith("application/pdf")
     assert sample_pdf.content.startswith(b"%PDF")
+
+
+def test_information_management_dashboard_and_crud(app_client) -> None:
+    client = app_client
+    _bootstrap_admin_and_tenant(client)
+
+    vendor = client.post(
+        "/api/ops/vendors",
+        json={
+            "tenant_id": "ys_thesharp",
+            "company_name": "태성전기",
+            "service_type": "전기 유지보수",
+            "contact_name": "박기사",
+            "phone": "051-111-2222",
+            "status": "활성",
+        },
+    )
+    assert vendor.status_code == 200
+
+    staff = client.post(
+        "/api/users",
+        json={
+            "tenant_id": "ys_thesharp",
+            "login_id": "facilitystaff",
+            "name": "시설주임",
+            "role": "staff",
+            "phone": "010-9999-0000",
+            "password": "TempPass123!",
+        },
+    )
+    assert staff.status_code == 200
+
+    asset = client.post(
+        "/api/facility/assets",
+        json={
+            "tenant_id": "ys_thesharp",
+            "asset_code": "ELV-A-25",
+            "asset_name": "상가A동 25호기 승강기",
+            "category": "승강기",
+            "location_name": "상가A동",
+            "vendor_name": "태성전기",
+            "lifecycle_state": "운영중",
+        },
+    )
+    assert asset.status_code == 200
+
+    building = client.post(
+        "/api/info/buildings",
+        json={
+            "tenant_id": "ys_thesharp",
+            "building_code": "101",
+            "building_name": "101동",
+            "usage_type": "아파트동",
+            "status": "운영중",
+            "floors_above": 20,
+            "floors_below": 2,
+            "household_count": 120,
+        },
+    )
+    assert building.status_code == 200
+    building_id = int(building.json()["item"]["id"])
+
+    registration = client.post(
+        "/api/info/registrations",
+        json={
+            "tenant_id": "ys_thesharp",
+            "record_type": "보험",
+            "title": "영업배상 책임보험",
+            "reference_no": "POL-2026-001",
+            "status": "유효",
+            "issuer_name": "DB손해보험",
+            "issued_on": "2026-04-01",
+            "expires_on": "2027-03-31",
+        },
+    )
+    assert registration.status_code == 200
+    registration_id = int(registration.json()["item"]["id"])
+
+    dashboard = client.get("/api/info/dashboard?tenant_id=ys_thesharp")
+    assert dashboard.status_code == 200
+    item = dashboard.json()["item"]
+    assert item["vendor_count"] == 1
+    assert item["staff_count"] >= 1
+    assert item["asset_count"] == 1
+    assert item["building_count"] == 1
+    assert item["registration_count"] == 1
+
+    buildings = client.get("/api/info/buildings?tenant_id=ys_thesharp")
+    assert buildings.status_code == 200
+    assert buildings.json()["items"][0]["building_name"] == "101동"
+
+    registrations = client.get("/api/info/registrations?tenant_id=ys_thesharp")
+    assert registrations.status_code == 200
+    assert registrations.json()["items"][0]["title"] == "영업배상 책임보험"
+
+    updated_building = client.patch(
+        f"/api/info/buildings/{building_id}",
+        json={"tenant_id": "ys_thesharp", "household_count": 122, "note": "관리동 포함"},
+    )
+    assert updated_building.status_code == 200
+    assert updated_building.json()["item"]["household_count"] == 122
+
+    updated_registration = client.patch(
+        f"/api/info/registrations/{registration_id}",
+        json={"tenant_id": "ys_thesharp", "status": "만료예정"},
+    )
+    assert updated_registration.status_code == 200
+    assert updated_registration.json()["item"]["status"] == "만료예정"
 
 
 def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_path) -> None:

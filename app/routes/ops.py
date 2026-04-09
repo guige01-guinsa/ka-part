@@ -37,6 +37,11 @@ from ..ops_db import (
     update_schedule,
     update_vendor,
 )
+from ..ops_document_catalog import (
+    document_category_profiles,
+    document_common_field_definitions,
+    get_document_category_profile,
+)
 from ..report_excel import build_ops_document_ledger_xlsx
 from ..report_pdf import build_ops_draft_pdf, build_reference_document_pdf
 from .core import _require_auth
@@ -101,7 +106,22 @@ def _require_ops_manager(request: Request, payload: Optional[Dict[str, Any]] = N
 def _numbering_preview_map(*, tenant_id: str) -> Dict[str, str]:
     return {
         category: next_document_reference_no(tenant_id=tenant_id, category=category)
-        for category in ("계약", "공문", "보고", "예산", "입주", "점검", "기타")
+        for category in [item["category"] for item in document_category_profiles()]
+    }
+
+
+@router.get("/ops/documents/catalog")
+def ops_documents_catalog(request: Request, tenant_id: str = Query(default="")) -> Dict[str, Any]:
+    _user, resolved_tenant_id = _resolve_ops_context(request, {"tenant_id": tenant_id})
+    profiles = document_category_profiles()
+    return {
+        "ok": True,
+        "item": {
+            "categories": [item["category"] for item in profiles],
+            "profiles": profiles,
+            "common_fields": document_common_field_definitions(),
+            "preview_examples": _numbering_preview_map(tenant_id=resolved_tenant_id),
+        },
     }
 
 
@@ -232,6 +252,13 @@ def ops_documents_create(request: Request, payload: Dict[str, Any] = Body(...)) 
         owner=str(payload.get("owner") or "").strip(),
         due_date=str(payload.get("due_date") or "").strip(),
         reference_no=str(payload.get("reference_no") or "").strip(),
+        amount_total=payload.get("amount_total"),
+        vendor_name=str(payload.get("vendor_name") or "").strip(),
+        target_label=str(payload.get("target_label") or "").strip(),
+        basis_date=str(payload.get("basis_date") or "").strip(),
+        period_start=str(payload.get("period_start") or "").strip(),
+        period_end=str(payload.get("period_end") or "").strip(),
+        document_meta=payload.get("document_meta") if isinstance(payload.get("document_meta"), dict) else {},
         created_by_label=_actor_label(user),
     )
     log_usage(tenant_id, "ops.documents.create")
@@ -271,6 +298,13 @@ def ops_documents_update(request: Request, document_id: int, payload: Dict[str, 
         owner=payload.get("owner"),
         due_date=payload.get("due_date"),
         reference_no=payload.get("reference_no"),
+        amount_total=payload.get("amount_total"),
+        vendor_name=payload.get("vendor_name"),
+        target_label=payload.get("target_label"),
+        basis_date=payload.get("basis_date"),
+        period_start=payload.get("period_start"),
+        period_end=payload.get("period_end"),
+        document_meta=payload.get("document_meta") if isinstance(payload.get("document_meta"), dict) else None,
     )
     log_usage(tenant_id, "ops.documents.update")
     append_audit_log(tenant_id, "update_document", _actor_label(user), {"document_id": int(document_id)})
@@ -325,7 +359,9 @@ def ops_documents_render_pdf(request: Request, payload: Dict[str, Any] = Body(..
         raise HTTPException(status_code=400, detail="문서 제목을 입력하세요.")
     if not summary:
         raise HTTPException(status_code=400, detail="문서 내용을 입력하세요.")
-    category = str(payload.get("category") or "").strip() or "기타"
+    requested_category = str(payload.get("category") or "").strip() or "기타"
+    profile = get_document_category_profile(requested_category)
+    category = str(profile.get("category") or requested_category or "기타").strip()
     reference_no = str(payload.get("reference_no") or "").strip() or next_document_reference_no(tenant_id=tenant_id, category=category)
     pdf_bytes = build_ops_draft_pdf(
         tenant_label=_tenant_label(tenant_id),
@@ -336,6 +372,15 @@ def ops_documents_render_pdf(request: Request, payload: Dict[str, Any] = Body(..
         category=category,
         owner=str(payload.get("owner") or "").strip(),
         due_date=str(payload.get("due_date") or "").strip(),
+        amount_total=payload.get("amount_total"),
+        vendor_name=str(payload.get("vendor_name") or "").strip(),
+        target_label=str(payload.get("target_label") or "").strip(),
+        basis_date=str(payload.get("basis_date") or "").strip(),
+        period_start=str(payload.get("period_start") or "").strip(),
+        period_end=str(payload.get("period_end") or "").strip(),
+        pdf_heading=str(profile.get("pdf_heading") or "").strip(),
+        request_text=str(profile.get("request_text") or "").strip(),
+        amount_policy=str(profile.get("amount_policy") or "").strip(),
     )
     log_usage(tenant_id, "ops.documents.render_pdf")
     append_audit_log(tenant_id, "render_document_pdf", _actor_label(user), {"title": title})

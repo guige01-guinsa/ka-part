@@ -1,24 +1,21 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
-from .db import DB_PATH, normalize_document_numbering_config, now_iso
+from .db import DB_PATH, _ensure_column, normalize_document_numbering_config, now_iso
+from .ops_document_catalog import (
+    DOCUMENT_CATEGORY_CODES,
+    DOCUMENT_CATEGORY_VALUES,
+    document_category_db_values,
+    normalize_document_category,
+)
 
 NOTICE_CATEGORY_VALUES = ("공지", "기안", "구매", "견적및발주", "작업내용", "기타")
 NOTICE_STATUS_VALUES = ("draft", "published", "archived")
-DOCUMENT_CATEGORY_VALUES = ("계약", "공문", "보고", "예산", "입주", "점검", "기타")
-DOCUMENT_CATEGORY_CODES = {
-    "계약": "CTR",
-    "공문": "LTR",
-    "보고": "RPT",
-    "예산": "BDG",
-    "입주": "MOV",
-    "점검": "INS",
-    "기타": "ETC",
-}
 DOCUMENT_STATUS_VALUES = ("작성중", "검토중", "완료", "보관")
 SCHEDULE_TYPE_VALUES = ("행정", "점검", "회의", "계약", "민원", "기타")
 SCHEDULE_STATUS_VALUES = ("예정", "진행중", "완료", "보류")
@@ -62,6 +59,19 @@ def _clean_date(value: Any, *, field: str, required: bool = False) -> str:
         return date.fromisoformat(raw).isoformat()
     except Exception as exc:
         raise ValueError(f"{field} must be YYYY-MM-DD") from exc
+
+
+def _clean_amount(value: Any, *, field: str) -> float | None:
+    raw = str(value or "").strip().replace(",", "")
+    if not raw:
+        return None
+    try:
+        amount = float(raw)
+    except Exception as exc:
+        raise ValueError(f"{field} must be a number") from exc
+    if amount < 0:
+        raise ValueError(f"{field} must be >= 0")
+    return round(amount, 2)
 
 
 def _ensure_schema(con: sqlite3.Connection) -> None:
@@ -135,6 +145,13 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
           ON ops_schedules(tenant_id, status, due_date ASC, id DESC);
         """
     )
+    _ensure_column(con, "ops_documents", "amount_total", "amount_total REAL")
+    _ensure_column(con, "ops_documents", "vendor_name", "vendor_name TEXT")
+    _ensure_column(con, "ops_documents", "target_label", "target_label TEXT")
+    _ensure_column(con, "ops_documents", "basis_date", "basis_date TEXT")
+    _ensure_column(con, "ops_documents", "period_start", "period_start TEXT")
+    _ensure_column(con, "ops_documents", "period_end", "period_end TEXT")
+    _ensure_column(con, "ops_documents", "document_meta_json", "document_meta_json TEXT")
 
 
 def init_ops_db() -> None:
@@ -167,6 +184,7 @@ def _document_detail(con: sqlite3.Connection, document_id: int, tenant_id: str) 
         """
         SELECT
           id, tenant_id, title, summary, category, status, owner, due_date, reference_no,
+          amount_total, vendor_name, target_label, basis_date, period_start, period_end, document_meta_json,
           created_by_label, created_at, updated_at
         FROM ops_documents
         WHERE id=? AND tenant_id=?
@@ -176,7 +194,24 @@ def _document_detail(con: sqlite3.Connection, document_id: int, tenant_id: str) 
     ).fetchone()
     if not row:
         raise ValueError("document not found")
-    return dict(row)
+    return _document_row_payload(row)
+
+
+def _document_row_payload(row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
+    item = dict(row)
+    item["category"] = normalize_document_category(item.get("category"), default="기타")
+    amount_value = item.get("amount_total")
+    item["amount_total"] = float(amount_value) if amount_value not in (None, "") else None
+    raw_meta = item.get("document_meta_json")
+    if isinstance(raw_meta, dict):
+        item["document_meta"] = raw_meta
+    else:
+        try:
+            item["document_meta"] = json.loads(str(raw_meta or "").strip()) if str(raw_meta or "").strip() else {}
+        except Exception:
+            item["document_meta"] = {}
+    item.pop("document_meta_json", None)
+    return item
 
 
 def _vendor_detail(con: sqlite3.Connection, vendor_id: int, tenant_id: str) -> Dict[str, Any]:
@@ -341,16 +376,30 @@ def create_document(
     owner: str = "",
     due_date: str = "",
     reference_no: str = "",
+    amount_total: Any = None,
+    vendor_name: str = "",
+    target_label: str = "",
+    basis_date: str = "",
+    period_start: str = "",
+    period_end: str = "",
+    document_meta: Optional[Dict[str, Any]] = None,
     created_by_label: str = "",
 ) -> Dict[str, Any]:
     clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
     clean_title = _clean_text(title, field="title", required=True, max_len=160)
     clean_summary = _clean_text(summary, field="summary", max_len=4000)
-    clean_category = _clean_choice(category, DOCUMENT_CATEGORY_VALUES, field="category", default="기타")
+    clean_category = normalize_document_category(category, default="기타")
     clean_status = _clean_choice(status, DOCUMENT_STATUS_VALUES, field="status", default="작성중")
     clean_owner = _clean_text(owner, field="owner", max_len=80)
     clean_due_date = _clean_date(due_date, field="due_date")
     clean_reference = _clean_text(reference_no, field="reference_no", max_len=80)
+    clean_amount = _clean_amount(amount_total, field="amount_total")
+    clean_vendor_name = _clean_text(vendor_name, field="vendor_name", max_len=160)
+    clean_target_label = _clean_text(target_label, field="target_label", max_len=160)
+    clean_basis_date = _clean_date(basis_date, field="basis_date")
+    clean_period_start = _clean_date(period_start, field="period_start")
+    clean_period_end = _clean_date(period_end, field="period_end")
+    clean_meta = document_meta if isinstance(document_meta, dict) else {}
     clean_actor = _clean_text(created_by_label, field="created_by_label", max_len=120) or "operator"
     con = _connect()
     try:
@@ -360,9 +409,11 @@ def create_document(
         cur = con.execute(
             """
             INSERT INTO ops_documents(
-              tenant_id, title, summary, category, status, owner, due_date, reference_no, created_by_label, created_at, updated_at
+              tenant_id, title, summary, category, status, owner, due_date, reference_no,
+              amount_total, vendor_name, target_label, basis_date, period_start, period_end, document_meta_json,
+              created_by_label, created_at, updated_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 clean_tenant_id,
@@ -373,6 +424,13 @@ def create_document(
                 clean_owner or None,
                 clean_due_date or None,
                 final_reference,
+                clean_amount,
+                clean_vendor_name or None,
+                clean_target_label or None,
+                clean_basis_date or None,
+                clean_period_start or None,
+                clean_period_end or None,
+                json.dumps(clean_meta, ensure_ascii=False) if clean_meta else None,
                 clean_actor,
                 ts,
                 ts,
@@ -392,6 +450,7 @@ def list_documents(*, tenant_id: str, status: str = "", category: str = "", limi
         sql = """
             SELECT
               id, tenant_id, title, summary, category, status, owner, due_date, reference_no,
+              amount_total, vendor_name, target_label, basis_date, period_start, period_end, document_meta_json,
               created_by_label, created_at, updated_at
             FROM ops_documents
             WHERE tenant_id=?
@@ -401,12 +460,14 @@ def list_documents(*, tenant_id: str, status: str = "", category: str = "", limi
             sql += " AND status=?"
             params.append(_clean_choice(status, DOCUMENT_STATUS_VALUES, field="status"))
         if str(category or "").strip():
-            sql += " AND category=?"
-            params.append(_clean_choice(category, DOCUMENT_CATEGORY_VALUES, field="category"))
+            db_values = document_category_db_values(category)
+            placeholders = ", ".join("?" for _ in db_values)
+            sql += f" AND category IN ({placeholders})"
+            params.extend(db_values)
         sql += " ORDER BY CASE WHEN due_date IS NULL OR due_date='' THEN 1 ELSE 0 END, due_date ASC, updated_at DESC, id DESC LIMIT ?"
         params.append(max(1, min(500, int(limit))))
         rows = con.execute(sql, tuple(params)).fetchall()
-        return [dict(row) for row in rows]
+        return [_document_row_payload(row) for row in rows]
     finally:
         con.close()
 
@@ -428,7 +489,12 @@ def summarize_document_categories(*, tenant_id: str) -> List[Dict[str, Any]]:
             """,
             (clean_tenant_id,),
         ).fetchall()
-        category_map = {str(row["category"]): dict(row) for row in rows}
+        category_map: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            normalized = normalize_document_category(row["category"], default="기타")
+            bucket = category_map.setdefault(normalized, {"total_count": 0, "open_count": 0})
+            bucket["total_count"] += int(row["total_count"] or 0)
+            bucket["open_count"] += int(row["open_count"] or 0)
         return [
             {
                 "category": category,
@@ -444,7 +510,7 @@ def summarize_document_categories(*, tenant_id: str) -> List[Dict[str, Any]]:
 
 def _next_document_reference_no(con: sqlite3.Connection, *, tenant_id: str, category: str) -> str:
     clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
-    clean_category = _clean_choice(category, DOCUMENT_CATEGORY_VALUES, field="category", default="기타")
+    clean_category = normalize_document_category(category, default="기타")
     row = con.execute(
         "SELECT ops_document_numbering_json FROM tenants WHERE id=? LIMIT 1",
         (clean_tenant_id,),
@@ -494,6 +560,13 @@ def update_document(
     owner: Optional[str] = None,
     due_date: Optional[str] = None,
     reference_no: Optional[str] = None,
+    amount_total: Any = None,
+    vendor_name: Optional[str] = None,
+    target_label: Optional[str] = None,
+    basis_date: Optional[str] = None,
+    period_start: Optional[str] = None,
+    period_end: Optional[str] = None,
+    document_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
     con = _connect()
@@ -503,17 +576,25 @@ def update_document(
         con.execute(
             """
             UPDATE ops_documents
-            SET title=?, summary=?, category=?, status=?, owner=?, due_date=?, reference_no=?, updated_at=?
+            SET title=?, summary=?, category=?, status=?, owner=?, due_date=?, reference_no=?,
+                amount_total=?, vendor_name=?, target_label=?, basis_date=?, period_start=?, period_end=?, document_meta_json=?, updated_at=?
             WHERE id=? AND tenant_id=?
             """,
             (
                 _clean_text(title, field="title", required=True, max_len=160) if title is not None else current["title"],
                 _clean_text(summary, field="summary", max_len=4000) if summary is not None else current["summary"],
-                _clean_choice(category, DOCUMENT_CATEGORY_VALUES, field="category") if category is not None else current["category"],
+                normalize_document_category(category, default="기타") if category is not None else current["category"],
                 _clean_choice(status, DOCUMENT_STATUS_VALUES, field="status") if status is not None else current["status"],
                 _clean_text(owner, field="owner", max_len=80) if owner is not None else current["owner"],
                 _clean_date(due_date, field="due_date") if due_date is not None else (current["due_date"] or ""),
                 _clean_text(reference_no, field="reference_no", max_len=80) if reference_no is not None else current["reference_no"],
+                _clean_amount(amount_total, field="amount_total") if amount_total is not None else current.get("amount_total"),
+                _clean_text(vendor_name, field="vendor_name", max_len=160) if vendor_name is not None else current.get("vendor_name"),
+                _clean_text(target_label, field="target_label", max_len=160) if target_label is not None else current.get("target_label"),
+                _clean_date(basis_date, field="basis_date") if basis_date is not None else (current.get("basis_date") or ""),
+                _clean_date(period_start, field="period_start") if period_start is not None else (current.get("period_start") or ""),
+                _clean_date(period_end, field="period_end") if period_end is not None else (current.get("period_end") or ""),
+                json.dumps(document_meta, ensure_ascii=False) if isinstance(document_meta, dict) else json.dumps(current.get("document_meta") or {}, ensure_ascii=False),
                 now_iso(),
                 int(document_id),
                 clean_tenant_id,
@@ -830,10 +911,13 @@ def ops_dashboard_summary(*, tenant_id: str) -> Dict[str, Any]:
             (clean_tenant_id,),
         ).fetchone()
         overdue_documents = [
-            dict(row)
+            _document_row_payload(row)
             for row in con.execute(
                 """
-                SELECT id, title, category, status, owner, due_date, reference_no, updated_at
+                SELECT id, title, category, status, owner, due_date, reference_no,
+                       NULL AS amount_total, NULL AS vendor_name, NULL AS target_label,
+                       NULL AS basis_date, NULL AS period_start, NULL AS period_end, NULL AS document_meta_json,
+                       NULL AS created_by_label, NULL AS created_at, updated_at
                 FROM ops_documents
                 WHERE tenant_id=? AND due_date IS NOT NULL AND due_date<>'' AND due_date<? AND status!='완료' AND status!='보관'
                 ORDER BY due_date ASC, id DESC
