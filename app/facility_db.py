@@ -43,6 +43,19 @@ def _clean_choice(value: Any, allowed: Sequence[str], *, field: str, default: st
     return text
 
 
+def _clean_int(value: Any, *, field: str, default: int, minimum: int = 1, maximum: int = 3650) -> int:
+    raw = str(value or "").strip()
+    if not raw:
+        return int(default)
+    try:
+        parsed = int(raw)
+    except Exception as exc:
+        raise ValueError(f"{field} must be an integer") from exc
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{field} must be between {minimum} and {maximum}")
+    return parsed
+
+
 def _clean_date(value: Any, *, field: str, required: bool = False) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -109,6 +122,71 @@ def _normalize_items(value: Any) -> List[str]:
     return items
 
 
+def _ensure_column(con: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    rows = con.execute(f"PRAGMA table_info({table})").fetchall()
+    names = {str(row["name"]) for row in rows}
+    if column not in names:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
+def _calc_next_inspection_date(inspected_at: str, cycle_days: int) -> str:
+    raw = str(inspected_at or "").strip()
+    if not raw:
+        return ""
+    try:
+        base_day = date.fromisoformat(raw[:10])
+    except Exception:
+        return ""
+    return (base_day + timedelta(days=max(1, int(cycle_days or 30)))).isoformat()
+
+
+def _normalize_complaint_id(value: Any) -> Optional[int]:
+    if value in (None, "", 0, "0"):
+        return None
+    return int(value)
+
+
+def _sync_asset_after_inspection(
+    con: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    asset_id: Optional[int],
+    inspected_at: str,
+    result_status: str,
+    updated_at: str,
+) -> None:
+    if not asset_id:
+        return
+    row = con.execute(
+        """
+        SELECT inspection_cycle_days
+        FROM facility_assets
+        WHERE id=? AND tenant_id=?
+        LIMIT 1
+        """,
+        (int(asset_id), str(tenant_id or "").strip().lower()),
+    ).fetchone()
+    if not row:
+        return
+    cycle_days = _clean_int(row["inspection_cycle_days"], field="inspection_cycle_days", default=30)
+    next_date = _calc_next_inspection_date(inspected_at, cycle_days)
+    con.execute(
+        """
+        UPDATE facility_assets
+        SET last_inspected_at=?, next_inspection_date=?, last_result_status=?, updated_at=?
+        WHERE id=? AND tenant_id=?
+        """,
+        (
+            str(inspected_at or "").strip(),
+            next_date,
+            str(result_status or "").strip() or "정상",
+            str(updated_at or now_iso()),
+            int(asset_id),
+            str(tenant_id or "").strip().lower(),
+        ),
+    )
+
+
 def _ensure_schema(con: sqlite3.Connection) -> None:
     con.executescript(
         """
@@ -119,6 +197,10 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
           asset_name TEXT NOT NULL,
           category TEXT NOT NULL,
           location_name TEXT,
+          vendor_name TEXT,
+          installed_on TEXT,
+          inspection_cycle_days INTEGER NOT NULL DEFAULT 30,
+          last_result_status TEXT,
           lifecycle_state TEXT NOT NULL DEFAULT '운영중',
           source TEXT NOT NULL DEFAULT 'manual',
           qr_id TEXT,
@@ -192,6 +274,7 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
           asset_id INTEGER REFERENCES facility_assets(id) ON DELETE SET NULL,
           qr_asset_id INTEGER REFERENCES facility_qr_assets(id) ON DELETE SET NULL,
           inspection_id INTEGER REFERENCES facility_inspections(id) ON DELETE SET NULL,
+          complaint_id INTEGER REFERENCES complaints(id) ON DELETE SET NULL,
           category TEXT NOT NULL DEFAULT '기타',
           priority TEXT NOT NULL DEFAULT '보통',
           status TEXT NOT NULL DEFAULT '접수',
@@ -218,6 +301,17 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
           ON facility_work_orders(tenant_id, status, priority, due_date ASC, id DESC);
         """
     )
+    _ensure_column(con, "facility_assets", "vendor_name", "vendor_name TEXT")
+    _ensure_column(con, "facility_assets", "installed_on", "installed_on TEXT")
+    _ensure_column(con, "facility_assets", "inspection_cycle_days", "inspection_cycle_days INTEGER NOT NULL DEFAULT 30")
+    _ensure_column(con, "facility_assets", "last_result_status", "last_result_status TEXT")
+    _ensure_column(con, "facility_work_orders", "complaint_id", "complaint_id INTEGER")
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_facility_work_orders_complaint
+          ON facility_work_orders(tenant_id, complaint_id, id DESC)
+        """
+    )
 
 
 def init_facility_db() -> None:
@@ -233,7 +327,8 @@ def _asset_detail(con: sqlite3.Connection, asset_id: int, tenant_id: str) -> Dic
     row = con.execute(
         """
         SELECT
-          id, tenant_id, asset_code, asset_name, category, location_name, lifecycle_state, source, qr_id,
+          id, tenant_id, asset_code, asset_name, category, location_name, vendor_name, installed_on,
+          inspection_cycle_days, last_result_status, lifecycle_state, source, qr_id,
           checklist_key, last_inspected_at, next_inspection_date, note, created_by_label, created_at, updated_at
         FROM facility_assets
         WHERE id=? AND tenant_id=?
@@ -319,12 +414,14 @@ def _work_order_detail(con: sqlite3.Connection, work_order_id: int, tenant_id: s
         """
         SELECT
           w.id, w.tenant_id, w.title, w.description, w.asset_id, w.qr_asset_id, w.inspection_id,
-          w.category, w.priority, w.status, w.assignee, w.reporter, w.due_date, w.completed_at,
+          w.complaint_id, w.category, w.priority, w.status, w.assignee, w.reporter, w.due_date, w.completed_at,
           w.resolution_notes, w.is_escalated, w.created_by_label, w.created_at, w.updated_at,
-          a.asset_code, a.asset_name, a.location_name, q.qr_id
+          a.asset_code, a.asset_name, a.category AS asset_category, a.location_name, q.qr_id,
+          c.summary AS complaint_summary, c.status AS complaint_status
         FROM facility_work_orders w
         LEFT JOIN facility_assets a ON a.id = w.asset_id
         LEFT JOIN facility_qr_assets q ON q.id = w.qr_asset_id
+        LEFT JOIN complaints c ON c.id = w.complaint_id AND c.tenant_id = w.tenant_id
         WHERE w.id=? AND w.tenant_id=?
         LIMIT 1
         """,
@@ -342,6 +439,9 @@ def create_asset(
     asset_name: str,
     category: str,
     location_name: str = "",
+    vendor_name: str = "",
+    installed_on: str = "",
+    inspection_cycle_days: int = 30,
     lifecycle_state: str = "운영중",
     source: str = "manual",
     qr_id: str = "",
@@ -356,6 +456,9 @@ def create_asset(
     clean_asset_name = _clean_text(asset_name, field="asset_name", required=True, max_len=160)
     clean_category = _clean_choice(category, ASSET_CATEGORY_VALUES, field="category", default="기타")
     clean_location = _clean_text(location_name, field="location_name", max_len=160)
+    clean_vendor = _clean_text(vendor_name, field="vendor_name", max_len=120)
+    clean_installed_on = _clean_date(installed_on, field="installed_on") if str(installed_on or "").strip() else ""
+    clean_cycle_days = _clean_int(inspection_cycle_days, field="inspection_cycle_days", default=30)
     clean_lifecycle = _clean_choice(lifecycle_state, ASSET_LIFECYCLE_VALUES, field="lifecycle_state", default="운영중")
     clean_source = _clean_text(source, field="source", max_len=40) or "manual"
     clean_qr_id = _normalize_key(qr_id, field="qr_id", prefix="QR", max_len=80) if str(qr_id or "").strip() else ""
@@ -371,10 +474,11 @@ def create_asset(
         cur = con.execute(
             """
             INSERT INTO facility_assets(
-              tenant_id, asset_code, asset_name, category, location_name, lifecycle_state, source, qr_id,
+              tenant_id, asset_code, asset_name, category, location_name, vendor_name, installed_on, inspection_cycle_days,
+              lifecycle_state, source, qr_id,
               checklist_key, last_inspected_at, next_inspection_date, note, created_by_label, created_at, updated_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 clean_tenant_id,
@@ -382,6 +486,9 @@ def create_asset(
                 clean_asset_name,
                 clean_category,
                 clean_location,
+                clean_vendor,
+                clean_installed_on or None,
+                clean_cycle_days,
                 clean_lifecycle,
                 clean_source,
                 clean_qr_id,
@@ -419,7 +526,8 @@ def list_assets(*, tenant_id: str, category: str = "", lifecycle_state: str = ""
             for row in con.execute(
                 f"""
                 SELECT
-                  id, tenant_id, asset_code, asset_name, category, location_name, lifecycle_state, source, qr_id,
+                  id, tenant_id, asset_code, asset_name, category, location_name, vendor_name, installed_on,
+                  inspection_cycle_days, last_result_status, lifecycle_state, source, qr_id,
                   checklist_key, last_inspected_at, next_inspection_date, note, created_by_label, created_at, updated_at
                 FROM facility_assets
                 WHERE {' AND '.join(clauses)}
@@ -446,6 +554,9 @@ def update_asset(
     asset_name: Any = None,
     category: Any = None,
     location_name: Any = None,
+    vendor_name: Any = None,
+    installed_on: Any = None,
+    inspection_cycle_days: Any = None,
     lifecycle_state: Any = None,
     source: Any = None,
     qr_id: Any = None,
@@ -462,7 +573,8 @@ def update_asset(
         con.execute(
             """
             UPDATE facility_assets
-            SET asset_code=?, asset_name=?, category=?, location_name=?, lifecycle_state=?, source=?, qr_id=?, checklist_key=?,
+            SET asset_code=?, asset_name=?, category=?, location_name=?, vendor_name=?, installed_on=?, inspection_cycle_days=?,
+                lifecycle_state=?, source=?, qr_id=?, checklist_key=?,
                 last_inspected_at=?, next_inspection_date=?, note=?, updated_at=?
             WHERE id=? AND tenant_id=?
             """,
@@ -471,6 +583,9 @@ def update_asset(
                 _clean_text(asset_name, field="asset_name", required=True, max_len=160) if asset_name is not None else current["asset_name"],
                 _clean_choice(category, ASSET_CATEGORY_VALUES, field="category", default="기타") if category is not None else current["category"],
                 _clean_text(location_name, field="location_name", max_len=160) if location_name is not None else current["location_name"],
+                _clean_text(vendor_name, field="vendor_name", max_len=120) if vendor_name is not None else current.get("vendor_name"),
+                (_clean_date(installed_on, field="installed_on") if str(installed_on or "").strip() else "") if installed_on is not None else current.get("installed_on"),
+                _clean_int(inspection_cycle_days, field="inspection_cycle_days", default=30) if inspection_cycle_days is not None else current.get("inspection_cycle_days"),
                 _clean_choice(lifecycle_state, ASSET_LIFECYCLE_VALUES, field="lifecycle_state", default="운영중") if lifecycle_state is not None else current["lifecycle_state"],
                 (_clean_text(source, field="source", max_len=40) or "manual") if source is not None else current["source"],
                 (_normalize_key(qr_id, field="qr_id", prefix="QR", max_len=80) if str(qr_id or "").strip() else "") if qr_id is not None else current["qr_id"],
@@ -859,21 +974,14 @@ def create_inspection(
                 ts,
             ),
         )
-        if asset_id_value:
-            next_date = ""
-            if clean_result_status == "정상":
-                try:
-                    next_date = (date.fromisoformat(clean_inspected_at[:10]) + timedelta(days=30)).isoformat()
-                except Exception:
-                    next_date = ""
-            con.execute(
-                """
-                UPDATE facility_assets
-                SET last_inspected_at=?, next_inspection_date=COALESCE(NULLIF(?, ''), next_inspection_date), updated_at=?
-                WHERE id=? AND tenant_id=?
-                """,
-                (clean_inspected_at, next_date, ts, asset_id_value, clean_tenant_id),
-            )
+        _sync_asset_after_inspection(
+            con,
+            tenant_id=clean_tenant_id,
+            asset_id=asset_id_value,
+            inspected_at=clean_inspected_at,
+            result_status=clean_result_status,
+            updated_at=ts,
+        )
         con.commit()
         return _inspection_detail(con, int(cur.lastrowid), clean_tenant_id)
     finally:
@@ -939,6 +1047,15 @@ def update_inspection(
     try:
         _ensure_schema(con)
         current = _inspection_detail(con, int(inspection_id), clean_tenant_id)
+        next_asset_id = (int(asset_id) if asset_id not in (None, "", 0, "0") else None) if asset_id is not None else current["asset_id"]
+        next_qr_asset_id = (int(qr_asset_id) if qr_asset_id not in (None, "", 0, "0") else None) if qr_asset_id is not None else current["qr_asset_id"]
+        next_checklist_key = (_normalize_key(checklist_key, field="checklist_key", prefix="CHK", max_len=80) if str(checklist_key or "").strip() else "") if checklist_key is not None else current["checklist_key"]
+        next_inspector = _clean_text(inspector, field="inspector", max_len=80) if inspector is not None else current["inspector"]
+        next_inspected_at = _clean_datetime(inspected_at, field="inspected_at", required=True) if inspected_at is not None else current["inspected_at"]
+        next_result_status = _clean_choice(result_status, INSPECTION_STATUS_VALUES, field="result_status", default="정상") if result_status is not None else current["result_status"]
+        next_notes = _clean_text(notes, field="notes", max_len=4000) if notes is not None else current["notes"]
+        next_measurement = _normalize_json_text(measurement, field="measurement") if measurement is not None else current["measurement_json"]
+        ts = now_iso()
         con.execute(
             """
             UPDATE facility_inspections
@@ -947,18 +1064,26 @@ def update_inspection(
             """,
             (
                 _clean_text(title, field="title", required=True, max_len=200) if title is not None else current["title"],
-                (int(asset_id) if asset_id not in (None, "", 0, "0") else None) if asset_id is not None else current["asset_id"],
-                (int(qr_asset_id) if qr_asset_id not in (None, "", 0, "0") else None) if qr_asset_id is not None else current["qr_asset_id"],
-                (_normalize_key(checklist_key, field="checklist_key", prefix="CHK", max_len=80) if str(checklist_key or "").strip() else "") if checklist_key is not None else current["checklist_key"],
-                _clean_text(inspector, field="inspector", max_len=80) if inspector is not None else current["inspector"],
-                _clean_datetime(inspected_at, field="inspected_at", required=True) if inspected_at is not None else current["inspected_at"],
-                _clean_choice(result_status, INSPECTION_STATUS_VALUES, field="result_status", default="정상") if result_status is not None else current["result_status"],
-                _clean_text(notes, field="notes", max_len=4000) if notes is not None else current["notes"],
-                _normalize_json_text(measurement, field="measurement") if measurement is not None else current["measurement_json"],
-                now_iso(),
+                next_asset_id,
+                next_qr_asset_id,
+                next_checklist_key,
+                next_inspector,
+                next_inspected_at,
+                next_result_status,
+                next_notes,
+                next_measurement,
+                ts,
                 int(inspection_id),
                 clean_tenant_id,
             ),
+        )
+        _sync_asset_after_inspection(
+            con,
+            tenant_id=clean_tenant_id,
+            asset_id=next_asset_id,
+            inspected_at=next_inspected_at,
+            result_status=next_result_status,
+            updated_at=ts,
         )
         con.commit()
         return _inspection_detail(con, int(inspection_id), clean_tenant_id)
@@ -987,6 +1112,7 @@ def create_work_order(
     asset_id: Optional[int] = None,
     qr_asset_id: Optional[int] = None,
     inspection_id: Optional[int] = None,
+    complaint_id: Optional[int] = None,
     category: str = "기타",
     priority: str = "보통",
     status: str = "접수",
@@ -1013,6 +1139,7 @@ def create_work_order(
     asset_id_value = int(asset_id) if asset_id not in (None, "", 0, "0") else None
     qr_asset_id_value = int(qr_asset_id) if qr_asset_id not in (None, "", 0, "0") else None
     inspection_id_value = int(inspection_id) if inspection_id not in (None, "", 0, "0") else None
+    complaint_id_value = _normalize_complaint_id(complaint_id)
     con = _connect()
     try:
         _ensure_schema(con)
@@ -1020,10 +1147,10 @@ def create_work_order(
         cur = con.execute(
             """
             INSERT INTO facility_work_orders(
-              tenant_id, title, description, asset_id, qr_asset_id, inspection_id, category, priority, status,
+              tenant_id, title, description, asset_id, qr_asset_id, inspection_id, complaint_id, category, priority, status,
               assignee, reporter, due_date, completed_at, resolution_notes, is_escalated, created_by_label, created_at, updated_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 clean_tenant_id,
@@ -1032,6 +1159,7 @@ def create_work_order(
                 asset_id_value,
                 qr_asset_id_value,
                 inspection_id_value,
+                complaint_id_value,
                 clean_category,
                 clean_priority,
                 clean_status,
@@ -1072,12 +1200,14 @@ def list_work_orders(*, tenant_id: str, status: str = "", priority: str = "", li
                 f"""
                 SELECT
                   w.id, w.tenant_id, w.title, w.description, w.asset_id, w.qr_asset_id, w.inspection_id,
-                  w.category, w.priority, w.status, w.assignee, w.reporter, w.due_date, w.completed_at,
+                  w.complaint_id, w.category, w.priority, w.status, w.assignee, w.reporter, w.due_date, w.completed_at,
                   w.resolution_notes, w.is_escalated, w.created_by_label, w.created_at, w.updated_at,
-                  a.asset_code, a.asset_name, a.location_name, q.qr_id
+                  a.asset_code, a.asset_name, a.category AS asset_category, a.location_name, q.qr_id,
+                  c.summary AS complaint_summary, c.status AS complaint_status
                 FROM facility_work_orders w
                 LEFT JOIN facility_assets a ON a.id = w.asset_id
                 LEFT JOIN facility_qr_assets q ON q.id = w.qr_asset_id
+                LEFT JOIN complaints c ON c.id = w.complaint_id AND c.tenant_id = w.tenant_id
                 WHERE {' AND '.join(clauses)}
                 ORDER BY
                   CASE w.status WHEN '접수' THEN 0 WHEN '진행중' THEN 1 WHEN '보류' THEN 2 ELSE 3 END,
@@ -1103,6 +1233,7 @@ def update_work_order(
     asset_id: Any = None,
     qr_asset_id: Any = None,
     inspection_id: Any = None,
+    complaint_id: Any = None,
     category: Any = None,
     priority: Any = None,
     status: Any = None,
@@ -1121,7 +1252,7 @@ def update_work_order(
         con.execute(
             """
             UPDATE facility_work_orders
-            SET title=?, description=?, asset_id=?, qr_asset_id=?, inspection_id=?, category=?, priority=?, status=?, assignee=?, reporter=?,
+            SET title=?, description=?, asset_id=?, qr_asset_id=?, inspection_id=?, complaint_id=?, category=?, priority=?, status=?, assignee=?, reporter=?,
                 due_date=?, completed_at=?, resolution_notes=?, is_escalated=?, updated_at=?
             WHERE id=? AND tenant_id=?
             """,
@@ -1131,6 +1262,7 @@ def update_work_order(
                 (int(asset_id) if asset_id not in (None, "", 0, "0") else None) if asset_id is not None else current["asset_id"],
                 (int(qr_asset_id) if qr_asset_id not in (None, "", 0, "0") else None) if qr_asset_id is not None else current["qr_asset_id"],
                 (int(inspection_id) if inspection_id not in (None, "", 0, "0") else None) if inspection_id is not None else current["inspection_id"],
+                _normalize_complaint_id(complaint_id) if complaint_id is not None else current.get("complaint_id"),
                 _clean_choice(category, WORK_ORDER_CATEGORY_VALUES, field="category", default="기타") if category is not None else current["category"],
                 _clean_choice(priority, WORK_ORDER_PRIORITY_VALUES, field="priority", default="보통") if priority is not None else current["priority"],
                 _clean_choice(status, WORK_ORDER_STATUS_VALUES, field="status", default="접수") if status is not None else current["status"],
@@ -1160,6 +1292,56 @@ def delete_work_order(*, tenant_id: str, work_order_id: int) -> Dict[str, Any]:
         con.execute("DELETE FROM facility_work_orders WHERE id=? AND tenant_id=?", (int(work_order_id), clean_tenant_id))
         con.commit()
         return item
+    finally:
+        con.close()
+
+
+def get_inspection(*, tenant_id: str, inspection_id: int) -> Optional[Dict[str, Any]]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        try:
+            return _inspection_detail(con, int(inspection_id), clean_tenant_id)
+        except ValueError:
+            return None
+    finally:
+        con.close()
+
+
+def get_work_order(*, tenant_id: str, work_order_id: int) -> Optional[Dict[str, Any]]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        try:
+            return _work_order_detail(con, int(work_order_id), clean_tenant_id)
+        except ValueError:
+            return None
+    finally:
+        con.close()
+
+
+def get_open_work_order_by_inspection(*, tenant_id: str, inspection_id: int) -> Optional[Dict[str, Any]]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        row = con.execute(
+            """
+            SELECT id
+            FROM facility_work_orders
+            WHERE tenant_id=? AND inspection_id=? AND status IN ('접수','진행중','보류')
+            ORDER BY
+              CASE status WHEN '접수' THEN 0 WHEN '진행중' THEN 1 ELSE 2 END,
+              id DESC
+            LIMIT 1
+            """,
+            (clean_tenant_id, int(inspection_id)),
+        ).fetchone()
+        if not row:
+            return None
+        return _work_order_detail(con, int(row["id"]), clean_tenant_id)
     finally:
         con.close()
 

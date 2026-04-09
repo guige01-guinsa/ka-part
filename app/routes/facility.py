@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from ..db import append_audit_log, get_tenant, log_usage
+from ..engine_db import create_complaint, get_complaint
 from ..facility_db import (
     create_asset,
     create_checklist,
@@ -17,6 +18,9 @@ from ..facility_db import (
     delete_qr_asset,
     delete_work_order,
     facility_dashboard_summary,
+    get_inspection,
+    get_open_work_order_by_inspection,
+    get_work_order,
     list_assets,
     list_checklists,
     list_inspections,
@@ -73,6 +77,33 @@ def _payload_items(value: Any) -> Any:
     return str(value or "")
 
 
+def _default_work_order_priority(result_status: str) -> str:
+    mapping = {"조치필요": "긴급", "주의": "높음", "정상": "보통"}
+    return mapping.get(str(result_status or "").strip(), "보통")
+
+
+def _default_work_order_due_date(result_status: str) -> str:
+    from datetime import date, timedelta
+
+    status = str(result_status or "").strip()
+    days = 0 if status == "조치필요" else 3 if status == "주의" else 7
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
+def _map_asset_category_to_complaint_type(category: str) -> str:
+    value = str(category or "").strip()
+    return value if value in {"승강기", "전기"} else "시설"
+
+
+def _map_priority_to_urgency(priority: str) -> str:
+    value = str(priority or "").strip()
+    if value == "긴급":
+        return "긴급"
+    if value == "높음":
+        return "당일"
+    return "일반"
+
+
 @router.get("/facility/dashboard")
 def facility_dashboard(request: Request, tenant_id: str = Query(default="")) -> Dict[str, Any]:
     user, resolved_tenant_id = _resolve_facility_context(request, {"tenant_id": tenant_id})
@@ -105,6 +136,9 @@ def facility_assets_create(request: Request, payload: Dict[str, Any] = Body(...)
         asset_name=str(payload.get("asset_name") or "").strip(),
         category=str(payload.get("category") or "기타").strip(),
         location_name=str(payload.get("location_name") or "").strip(),
+        vendor_name=str(payload.get("vendor_name") or "").strip(),
+        installed_on=str(payload.get("installed_on") or "").strip(),
+        inspection_cycle_days=payload.get("inspection_cycle_days") or 30,
         lifecycle_state=str(payload.get("lifecycle_state") or "운영중").strip(),
         source=str(payload.get("source") or "manual").strip(),
         qr_id=str(payload.get("qr_id") or "").strip(),
@@ -129,6 +163,9 @@ def facility_assets_update(request: Request, asset_id: int, payload: Dict[str, A
         asset_name=payload.get("asset_name"),
         category=payload.get("category"),
         location_name=payload.get("location_name"),
+        vendor_name=payload.get("vendor_name"),
+        installed_on=payload.get("installed_on"),
+        inspection_cycle_days=payload.get("inspection_cycle_days"),
         lifecycle_state=payload.get("lifecycle_state"),
         source=payload.get("source"),
         qr_id=payload.get("qr_id"),
@@ -320,6 +357,43 @@ def facility_inspections_delete(request: Request, inspection_id: int, payload: D
     return {"ok": True, "item": item}
 
 
+@router.post("/facility/inspections/{inspection_id}/issue_work_order")
+def facility_inspections_issue_work_order(request: Request, inspection_id: int, payload: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
+    user, tenant_id = _require_facility_editor(request, payload or {})
+    inspection = get_inspection(tenant_id=tenant_id, inspection_id=int(inspection_id))
+    if not inspection:
+        raise HTTPException(status_code=404, detail="inspection not found")
+    existing = get_open_work_order_by_inspection(tenant_id=tenant_id, inspection_id=int(inspection_id))
+    if existing:
+        return {"ok": True, "created": False, "item": existing}
+
+    priority = str(payload.get("priority") or _default_work_order_priority(inspection.get("result_status"))).strip()
+    item = create_work_order(
+        tenant_id=tenant_id,
+        title=str(payload.get("title") or f"{inspection.get('title') or '점검'} 후속 작업").strip(),
+        description=str(payload.get("description") or inspection.get("notes") or "").strip(),
+        asset_id=payload.get("asset_id") if payload.get("asset_id") is not None else inspection.get("asset_id"),
+        qr_asset_id=payload.get("qr_asset_id") if payload.get("qr_asset_id") is not None else inspection.get("qr_asset_id"),
+        inspection_id=int(inspection_id),
+        category=str(payload.get("category") or "점검후속").strip() or "점검후속",
+        priority=priority,
+        status=str(payload.get("status") or "접수").strip() or "접수",
+        assignee=str(payload.get("assignee") or "").strip(),
+        reporter=str(payload.get("reporter") or inspection.get("inspector") or _actor_label(user)).strip(),
+        due_date=str(payload.get("due_date") or _default_work_order_due_date(inspection.get("result_status"))).strip(),
+        is_escalated=bool(payload.get("is_escalated")) or priority == "긴급",
+        created_by_label=_actor_label(user),
+    )
+    log_usage(tenant_id, "facility.inspections.issue_work_order")
+    append_audit_log(
+        tenant_id,
+        "facility_issue_work_order_from_inspection",
+        _actor_label(user),
+        {"inspection_id": int(inspection_id), "work_order_id": int(item["id"])},
+    )
+    return {"ok": True, "created": True, "item": item}
+
+
 @router.get("/facility/work_orders")
 def facility_work_orders_list(
     request: Request,
@@ -341,6 +415,7 @@ def facility_work_orders_create(request: Request, payload: Dict[str, Any] = Body
         asset_id=payload.get("asset_id"),
         qr_asset_id=payload.get("qr_asset_id"),
         inspection_id=payload.get("inspection_id"),
+        complaint_id=payload.get("complaint_id"),
         category=str(payload.get("category") or "기타").strip(),
         priority=str(payload.get("priority") or "보통").strip(),
         status=str(payload.get("status") or "접수").strip(),
@@ -368,6 +443,7 @@ def facility_work_orders_update(request: Request, work_order_id: int, payload: D
         asset_id=payload.get("asset_id"),
         qr_asset_id=payload.get("qr_asset_id"),
         inspection_id=payload.get("inspection_id"),
+        complaint_id=payload.get("complaint_id"),
         category=payload.get("category"),
         priority=payload.get("priority"),
         status=payload.get("status"),
@@ -390,3 +466,48 @@ def facility_work_orders_delete(request: Request, work_order_id: int, payload: D
     log_usage(tenant_id, "facility.work_orders.delete")
     append_audit_log(tenant_id, "facility_delete_work_order", _actor_label(user), {"work_order_id": int(work_order_id)})
     return {"ok": True, "item": item}
+
+
+@router.post("/facility/work_orders/{work_order_id}/create_complaint")
+def facility_work_orders_create_complaint(request: Request, work_order_id: int, payload: Dict[str, Any] = Body(default={})) -> Dict[str, Any]:
+    user, tenant_id = _require_facility_editor(request, payload or {})
+    work_order = get_work_order(tenant_id=tenant_id, work_order_id=int(work_order_id))
+    if not work_order:
+        raise HTTPException(status_code=404, detail="work order not found")
+    existing_complaint_id = int(work_order.get("complaint_id") or 0)
+    if existing_complaint_id:
+        existing = get_complaint(tenant_id=tenant_id, complaint_id=existing_complaint_id)
+        if existing:
+            return {"ok": True, "created": False, "item": existing, "work_order": work_order}
+
+    summary = str(payload.get("summary") or work_order.get("title") or "").strip()
+    actor = _actor_label(user)
+    complaint = create_complaint(
+        tenant_id=tenant_id,
+        building=str(payload.get("building") or "").strip(),
+        unit=str(payload.get("unit") or "").strip(),
+        complainant_phone=str(payload.get("complainant_phone") or "").strip(),
+        channel=str(payload.get("channel") or "기타").strip() or "기타",
+        content=str(payload.get("content") or work_order.get("description") or summary).strip() or summary,
+        summary=summary,
+        complaint_type=str(payload.get("type") or _map_asset_category_to_complaint_type(work_order.get("asset_category") or "")).strip() or "시설",
+        urgency=str(payload.get("urgency") or _map_priority_to_urgency(work_order.get("priority"))).strip() or "일반",
+        status=str(payload.get("status") or "접수").strip() or "접수",
+        manager=str(payload.get("manager") or work_order.get("assignee") or "").strip(),
+        source_text=str(payload.get("source_text") or f"facility-work-order:{work_order_id}").strip(),
+        ai_model="facility-link",
+        created_by_label=actor,
+    )
+    linked_work_order = update_work_order(
+        int(work_order_id),
+        tenant_id=tenant_id,
+        complaint_id=int(complaint["id"]),
+    )
+    log_usage(tenant_id, "facility.work_orders.create_complaint")
+    append_audit_log(
+        tenant_id,
+        "facility_create_complaint_from_work_order",
+        actor,
+        {"work_order_id": int(work_order_id), "complaint_id": int(complaint["id"])},
+    )
+    return {"ok": True, "created": True, "item": complaint, "work_order": linked_work_order}

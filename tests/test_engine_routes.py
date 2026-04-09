@@ -790,12 +790,17 @@ def test_facility_ops_module_supports_crud_and_dashboard(app_client) -> None:
             "asset_name": "상가A동 25호기 승강기",
             "category": "승강기",
             "location_name": "상가A동 1층",
+            "vendor_name": "오티스",
+            "installed_on": "2024-01-01",
+            "inspection_cycle_days": 30,
             "lifecycle_state": "운영중",
             "next_inspection_date": "2026-04-30",
         },
     )
     assert asset.status_code == 200
     asset_id = int(asset.json()["item"]["id"])
+    assert asset.json()["item"]["inspection_cycle_days"] == 30
+    assert asset.json()["item"]["vendor_name"] == "오티스"
 
     checklist = client.post(
         "/api/facility/checklists",
@@ -843,26 +848,30 @@ def test_facility_ops_module_supports_crud_and_dashboard(app_client) -> None:
     assert inspection.status_code == 200
     inspection_id = int(inspection.json()["item"]["id"])
     assert inspection.json()["item"]["measurement"]["door_speed"] == "slow"
+    assert inspection.json()["item"]["result_status"] == "주의"
+
+    refreshed_asset = client.get("/api/facility/assets?tenant_id=ys_thesharp&category=승강기")
+    assert refreshed_asset.status_code == 200
+    assert refreshed_asset.json()["items"][0]["last_result_status"] == "주의"
+    assert refreshed_asset.json()["items"][0]["next_inspection_date"] == "2026-05-09"
 
     work_order = client.post(
-        "/api/facility/work_orders",
-        json={
-            "tenant_id": "ys_thesharp",
-            "title": "승강기 도어 조정 작업",
-            "description": "월간 점검 후속 조치",
-            "asset_id": asset_id,
-            "qr_asset_id": qr_asset_id,
-            "inspection_id": inspection_id,
-            "category": "점검후속",
-            "priority": "높음",
-            "status": "접수",
-            "assignee": "현장1",
-            "due_date": "2026-04-10",
-            "is_escalated": True,
-        },
+        f"/api/facility/inspections/{inspection_id}/issue_work_order",
+        json={"tenant_id": "ys_thesharp"},
     )
     assert work_order.status_code == 200
     work_order_id = int(work_order.json()["item"]["id"])
+    assert work_order.json()["created"] is True
+    assert work_order.json()["item"]["priority"] == "높음"
+    assert work_order.json()["item"]["category"] == "점검후속"
+
+    duplicate_work_order = client.post(
+        f"/api/facility/inspections/{inspection_id}/issue_work_order",
+        json={"tenant_id": "ys_thesharp"},
+    )
+    assert duplicate_work_order.status_code == 200
+    assert duplicate_work_order.json()["created"] is False
+    assert int(duplicate_work_order.json()["item"]["id"]) == work_order_id
 
     dashboard = client.get("/api/facility/dashboard?tenant_id=ys_thesharp")
     assert dashboard.status_code == 200
@@ -871,7 +880,7 @@ def test_facility_ops_module_supports_crud_and_dashboard(app_client) -> None:
     assert item["active_qr_assets"] == 1
     assert item["open_work_orders"] == 1
     assert item["month_inspections"] == 1
-    assert len(item["urgent_work_orders"]) == 1
+    assert len(item["urgent_work_orders"]) == 0
 
     listed_assets = client.get("/api/facility/assets?tenant_id=ys_thesharp&category=승강기")
     assert listed_assets.status_code == 200
@@ -887,6 +896,23 @@ def test_facility_ops_module_supports_crud_and_dashboard(app_client) -> None:
     )
     assert updated_work_order.status_code == 200
     assert updated_work_order.json()["item"]["status"] == "진행중"
+
+    complaint = client.post(
+        f"/api/facility/work_orders/{work_order_id}/create_complaint",
+        json={"tenant_id": "ys_thesharp"},
+    )
+    assert complaint.status_code == 200
+    assert complaint.json()["created"] is True
+    assert complaint.json()["item"]["type"] == "승강기"
+    assert complaint.json()["work_order"]["complaint_id"] == complaint.json()["item"]["id"]
+
+    existing_complaint = client.post(
+        f"/api/facility/work_orders/{work_order_id}/create_complaint",
+        json={"tenant_id": "ys_thesharp"},
+    )
+    assert existing_complaint.status_code == 200
+    assert existing_complaint.json()["created"] is False
+    assert existing_complaint.json()["item"]["id"] == complaint.json()["item"]["id"]
 
     deleted_qr = client.request(
         "DELETE",

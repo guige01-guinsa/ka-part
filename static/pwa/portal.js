@@ -949,6 +949,9 @@
     $("#facilityAssetCategory").value = "승강기";
     $("#facilityAssetState").value = "운영중";
     $("#facilityAssetLocation").value = "";
+    $("#facilityAssetVendor").value = "";
+    $("#facilityAssetInstalledOn").value = "";
+    $("#facilityAssetCycleDays").value = "30";
     $("#facilityAssetQrId").value = "";
     $("#facilityAssetChecklistKey").value = "";
     $("#facilityAssetNextDate").value = "";
@@ -1005,6 +1008,9 @@
     $("#facilityAssetCategory").value = String(item.category || "기타");
     $("#facilityAssetState").value = String(item.lifecycle_state || "운영중");
     $("#facilityAssetLocation").value = String(item.location_name || "");
+    $("#facilityAssetVendor").value = String(item.vendor_name || "");
+    $("#facilityAssetInstalledOn").value = String(item.installed_on || "");
+    $("#facilityAssetCycleDays").value = String(item.inspection_cycle_days || 30);
     $("#facilityAssetQrId").value = String(item.qr_id || "");
     $("#facilityAssetChecklistKey").value = String(item.checklist_key || "");
     $("#facilityAssetNextDate").value = String(item.next_inspection_date || "");
@@ -1014,7 +1020,11 @@
       `코드: ${escapeHtml(item.asset_code || "-")}`,
       `분류: ${escapeHtml(item.category || "-")}`,
       `위치: ${escapeHtml(item.location_name || "-")}`,
+      `관리업체: ${escapeHtml(item.vendor_name || "-")}`,
+      `설치일: ${escapeHtml(formatDate(item.installed_on))}`,
+      `점검주기: ${escapeHtml(String(item.inspection_cycle_days || 30))}일`,
       `상태: ${escapeHtml(item.lifecycle_state || "-")}`,
+      `최근 점검결과: ${escapeHtml(item.last_result_status || "-")}`,
       `다음 점검일: ${escapeHtml(formatDate(item.next_inspection_date))}`,
     ].join("<br>");
   }
@@ -1053,6 +1063,7 @@
       `결과: ${escapeHtml(item.result_status || "-")}`,
       `점검일시: ${escapeHtml(formatDateTime(item.inspected_at))}`,
       `점검자: ${escapeHtml(item.inspector || "-")}`,
+      item.result_status && item.result_status !== "정상" ? "안내: 후속 작업지시 생성을 권장합니다." : "",
     ].join("<br>");
   }
 
@@ -1077,6 +1088,7 @@
       `상태: ${escapeHtml(item.status || "-")}`,
       `기한: ${escapeHtml(formatDate(item.due_date))}`,
       `담당: ${escapeHtml(item.assignee || "-")}`,
+      `연결 민원: ${item.complaint_id ? `#${escapeHtml(String(item.complaint_id))} / ${escapeHtml(item.complaint_status || "-")} / ${escapeHtml(item.complaint_summary || "-")}` : "-"}`,
     ].join("<br>");
   }
 
@@ -1088,6 +1100,9 @@
       category: String($("#facilityAssetCategory").value || "기타").trim(),
       lifecycle_state: String($("#facilityAssetState").value || "운영중").trim(),
       location_name: String($("#facilityAssetLocation").value || "").trim(),
+      vendor_name: String($("#facilityAssetVendor").value || "").trim(),
+      installed_on: String($("#facilityAssetInstalledOn").value || "").trim(),
+      inspection_cycle_days: Number($("#facilityAssetCycleDays").value || 30),
       qr_id: String($("#facilityAssetQrId").value || "").trim(),
       checklist_key: String($("#facilityAssetChecklistKey").value || "").trim(),
       next_inspection_date: String($("#facilityAssetNextDate").value || "").trim(),
@@ -1309,7 +1324,9 @@
   async function createFacilityInspection() {
     const data = await api("/api/facility/inspections", { method: "POST", body: JSON.stringify(facilityInspectionPayloadFromForm()) });
     renderFacilityInspectionDetail(data.item || {});
-    setMessage("#facilityInspectionMsg", "점검 기록을 등록했습니다.");
+    const inspection = data.item || {};
+    const hint = inspection.result_status && inspection.result_status !== "정상" ? " 후속 작업지시 생성을 검토하세요." : "";
+    setMessage("#facilityInspectionMsg", `점검 기록을 등록했습니다.${hint}`);
     await loadFacilityAssets();
     await loadFacilityInspections();
     await loadFacilityDashboard();
@@ -1342,6 +1359,18 @@
     await loadFacilityDashboard();
   }
 
+  async function issueFacilityWorkOrder() {
+    if (!selectedFacilityInspectionId) throw new Error("후속 작업지시를 만들 점검 기록을 선택하세요.");
+    const data = await api(`/api/facility/inspections/${selectedFacilityInspectionId}/issue_work_order`, {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: currentTenantId() }),
+    });
+    renderFacilityWorkOrderDetail(data.item || {});
+    setMessage("#facilityWorkOrderMsg", data.created ? "점검 후속 작업지시를 생성했습니다." : "이미 연결된 열린 작업지시가 있어 그 항목을 불러왔습니다.");
+    await loadFacilityWorkOrders();
+    await loadFacilityDashboard();
+  }
+
   async function updateFacilityWorkOrder() {
     if (!selectedFacilityWorkOrderId) throw new Error("수정할 작업지시를 선택하세요.");
     const data = await api(`/api/facility/work_orders/${selectedFacilityWorkOrderId}`, { method: "PATCH", body: JSON.stringify(facilityWorkOrderPayloadFromForm()) });
@@ -1358,6 +1387,22 @@
     setMessage("#facilityWorkOrderMsg", "작업지시를 삭제했습니다.");
     await loadFacilityWorkOrders();
     await loadFacilityDashboard();
+  }
+
+  async function createComplaintFromFacilityWorkOrder() {
+    if (!selectedFacilityWorkOrderId) throw new Error("민원으로 전환할 작업지시를 선택하세요.");
+    const data = await api(`/api/facility/work_orders/${selectedFacilityWorkOrderId}/create_complaint`, {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: currentTenantId() }),
+    });
+    renderFacilityWorkOrderDetail(data.work_order || {});
+    selectedComplaintId = Number((data.item || {}).id || 0);
+    setMessage("#intakeMsg", data.created ? `작업지시 기반 민원 #${selectedComplaintId}를 생성했습니다.` : `이미 연결된 민원 #${selectedComplaintId}를 불러왔습니다.`);
+    await loadComplaints();
+    if (selectedComplaintId) {
+      await loadComplaintDetail();
+    }
+    await loadDashboard();
   }
 
   function clearNoticeForm() {
@@ -2657,10 +2702,12 @@
     $("#btnClearFacilityChecklist")?.addEventListener("click", () => clearFacilityChecklistForm());
     $("#btnCreateFacilityInspection")?.addEventListener("click", () => createFacilityInspection().catch((error) => setMessage("#facilityInspectionMsg", error.message || String(error), true)));
     $("#btnUpdateFacilityInspection")?.addEventListener("click", () => updateFacilityInspection().catch((error) => setMessage("#facilityInspectionMsg", error.message || String(error), true)));
+    $("#btnIssueFacilityWorkOrder")?.addEventListener("click", () => issueFacilityWorkOrder().catch((error) => setMessage("#facilityInspectionMsg", error.message || String(error), true)));
     $("#btnDeleteFacilityInspection")?.addEventListener("click", () => deleteFacilityInspection().catch((error) => setMessage("#facilityInspectionMsg", error.message || String(error), true)));
     $("#btnClearFacilityInspection")?.addEventListener("click", () => clearFacilityInspectionForm());
     $("#btnCreateFacilityWorkOrder")?.addEventListener("click", () => createFacilityWorkOrder().catch((error) => setMessage("#facilityWorkOrderMsg", error.message || String(error), true)));
     $("#btnUpdateFacilityWorkOrder")?.addEventListener("click", () => updateFacilityWorkOrder().catch((error) => setMessage("#facilityWorkOrderMsg", error.message || String(error), true)));
+    $("#btnCreateComplaintFromWorkOrder")?.addEventListener("click", () => createComplaintFromFacilityWorkOrder().catch((error) => setMessage("#facilityWorkOrderMsg", error.message || String(error), true)));
     $("#btnDeleteFacilityWorkOrder")?.addEventListener("click", () => deleteFacilityWorkOrder().catch((error) => setMessage("#facilityWorkOrderMsg", error.message || String(error), true)));
     $("#btnClearFacilityWorkOrder")?.addEventListener("click", () => clearFacilityWorkOrderForm());
     $("#btnLoadOpsDashboard")?.addEventListener("click", () => loadOpsDashboard().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));

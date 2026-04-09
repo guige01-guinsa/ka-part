@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260409p3" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260409p4" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -752,6 +752,18 @@
               <input id="facilityAssetLocation" type="text" maxlength="160" placeholder="예: 상가A동 1층" />
             </label>
             <label class="field">
+              <span>관리업체</span>
+              <input id="facilityAssetVendor" type="text" maxlength="120" placeholder="예: 오티스" />
+            </label>
+            <label class="field">
+              <span>설치일</span>
+              <input id="facilityAssetInstalledOn" type="date" />
+            </label>
+            <label class="field">
+              <span>점검주기(일)</span>
+              <input id="facilityAssetCycleDays" type="number" min="1" max="3650" step="1" value="30" />
+            </label>
+            <label class="field">
               <span>QR ID</span>
               <input id="facilityAssetQrId" type="text" maxlength="80" placeholder="예: QR-ELV-A-25" />
             </label>
@@ -899,6 +911,7 @@
           <div class="cta-row">
             <button id="btnCreateFacilityInspection" data-facility-write="1" class="action-btn" type="button">점검 등록</button>
             <button id="btnUpdateFacilityInspection" data-facility-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnIssueFacilityWorkOrder" data-facility-write="1" class="ghost-btn" type="button">후속 작업지시 생성</button>
             <button id="btnDeleteFacilityInspection" data-facility-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
             <button id="btnClearFacilityInspection" class="ghost-btn" type="button">입력 초기화</button>
           </div>
@@ -998,6 +1011,7 @@
           <div class="cta-row">
             <button id="btnCreateFacilityWorkOrder" data-facility-write="1" class="action-btn" type="button">작업지시 등록</button>
             <button id="btnUpdateFacilityWorkOrder" data-facility-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnCreateComplaintFromWorkOrder" data-facility-write="1" class="ghost-btn" type="button">민원 생성</button>
             <button id="btnDeleteFacilityWorkOrder" data-facility-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
             <button id="btnClearFacilityWorkOrder" class="ghost-btn" type="button">입력 초기화</button>
           </div>
@@ -1188,6 +1202,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260409p3"></script>
+  <script src="/pwa/portal.js?v=20260409p4"></script>
 </body>
 </html>
