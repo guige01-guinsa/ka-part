@@ -29,7 +29,7 @@ LEGACY_TABLE_ALIASES: Dict[str, tuple[str, ...]] = {
     "notices": ("ops_notices", "notices", "announcements", "legacy_notices"),
     "documents": ("ops_documents", "documents", "docs", "legacy_documents", "official_documents"),
     "vendors": ("ops_vendors", "vendors", "contractors", "legacy_vendors"),
-    "schedules": ("ops_schedules", "schedules", "tasks", "inspections", "legacy_schedules", "work_orders"),
+    "schedules": ("ops_schedules", "schedules", "tasks", "legacy_schedules"),
 }
 
 FIELD_ALIASES: Dict[str, tuple[str, ...]] = {
@@ -470,6 +470,171 @@ def _sqlite_sla_document_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
     return rows
 
 
+def _sqlite_facility_asset_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
+    names = _sqlite_table_names(con)
+    if "ops_equipment_assets" not in names:
+        return []
+    return [
+        {
+            "asset_code": _clean_text(row["equipment_key"], 80),
+            "asset_name": _clean_text(row["equipment_name"], 160),
+            "category": "기계",
+            "location_name": _clean_text(row["location_name"], 160),
+            "lifecycle_state": "운영중" if str(row["lifecycle_state"] or "").strip().lower() == "active" else "중지",
+            "source": _clean_text(row["source"], 40) or "catalog",
+            "created_at": row["created_at"] or now_iso(),
+            "updated_at": row["updated_at"] or row["created_at"] or now_iso(),
+        }
+        for row in con.execute(
+            """
+            SELECT equipment_key, equipment_name, location_name, source, created_at, updated_at, lifecycle_state
+            FROM ops_equipment_assets
+            ORDER BY id ASC
+            """
+        ).fetchall()
+    ]
+
+
+def _sqlite_facility_qr_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
+    names = _sqlite_table_names(con)
+    if "ops_qr_assets" not in names:
+        return []
+    return [
+        {
+            "qr_id": _clean_text(row["qr_id"], 80),
+            "asset_code_snapshot": "",
+            "asset_name_snapshot": _clean_text(row["equipment_snapshot"], 160),
+            "location_snapshot": _clean_text(row["equipment_location_snapshot"], 160),
+            "default_item": _clean_text(row["default_item"], 200),
+            "checklist_key": _clean_text(row["checklist_set_id"], 80),
+            "source": _clean_text(row["source"], 40) or "catalog",
+            "lifecycle_state": "운영중" if str(row["lifecycle_state"] or "").strip().lower() == "active" else "중지",
+            "created_at": row["created_at"] or now_iso(),
+            "updated_at": row["updated_at"] or row["created_at"] or now_iso(),
+        }
+        for row in con.execute(
+            """
+            SELECT qr_id, equipment_snapshot, equipment_location_snapshot, default_item, checklist_set_id, source, created_at, updated_at, lifecycle_state
+            FROM ops_qr_assets
+            ORDER BY id ASC
+            """
+        ).fetchall()
+    ]
+
+
+def _sqlite_facility_checklist_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
+    names = _sqlite_table_names(con)
+    if "ops_checklist_sets" not in names:
+        return []
+    item_map: Dict[str, List[str]] = {}
+    if "ops_checklist_set_items" in names:
+        for row in con.execute(
+            """
+            SELECT set_id, seq, item_text
+            FROM ops_checklist_set_items
+            ORDER BY set_id ASC, seq ASC, id ASC
+            """
+        ).fetchall():
+            set_id = str(row["set_id"] or "").strip()
+            item_text = _clean_text(row["item_text"], 200)
+            if not set_id or not item_text:
+                continue
+            item_map.setdefault(set_id, []).append(item_text)
+    rows: List[Dict[str, Any]] = []
+    for row in con.execute(
+        """
+        SELECT set_id, label, task_type, source, version_no, lifecycle_state, created_at, updated_at
+        FROM ops_checklist_sets
+        ORDER BY id ASC
+        """
+    ).fetchall():
+        rows.append(
+            {
+                "checklist_key": _clean_text(row["set_id"], 80),
+                "title": _clean_text(row["label"], 160) or _clean_text(row["set_id"], 80),
+                "task_type": _clean_text(row["task_type"], 80),
+                "version_no": str(row["version_no"] or "").strip(),
+                "lifecycle_state": "운영중" if str(row["lifecycle_state"] or "").strip().lower() == "active" else "중지",
+                "source": _clean_text(row["source"], 40) or "catalog",
+                "items": item_map.get(str(row["set_id"] or "").strip(), []),
+                "created_at": row["created_at"] or now_iso(),
+                "updated_at": row["updated_at"] or row["created_at"] or now_iso(),
+            }
+        )
+    return rows
+
+
+def _sqlite_facility_inspection_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
+    names = _sqlite_table_names(con)
+    if "inspections" not in names:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for row in con.execute("SELECT * FROM inspections ORDER BY id ASC").fetchall():
+        measurement = {
+            "cycle": row["cycle"],
+            "transformer_kva": row["transformer_kva"],
+            "voltage_r": row["voltage_r"],
+            "voltage_s": row["voltage_s"],
+            "voltage_t": row["voltage_t"],
+            "current_r": row["current_r"],
+            "current_s": row["current_s"],
+            "current_t": row["current_t"],
+            "winding_temp_c": row["winding_temp_c"],
+            "grounding_ohm": row["grounding_ohm"],
+            "insulation_mohm": row["insulation_mohm"],
+            "risk_flags": row["risk_flags"],
+            "site": row["site"],
+            "location": row["location"],
+            "equipment_snapshot": row["equipment_snapshot"],
+            "equipment_location_snapshot": row["equipment_location_snapshot"],
+        }
+        rows.append(
+            {
+                "title": _clean_text(row["equipment_snapshot"], 200) or _clean_text(row["location"], 120) or "레거시 점검",
+                "checklist_key": _clean_text(row["checklist_set_id"], 80),
+                "inspector": _clean_text(row["inspector"], 80),
+                "inspected_at": row["inspected_at"] or row["created_at"] or now_iso(),
+                "result_status": "조치필요" if str(row["risk_level"] or "").strip() in {"high", "critical"} else ("주의" if str(row["risk_level"] or "").strip() else "정상"),
+                "notes": _clean_text(row["notes"], 4000),
+                "measurement": measurement,
+                "qr_id": _clean_text(row["qr_id"], 80),
+            }
+        )
+    return rows
+
+
+def _sqlite_facility_work_order_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
+    names = _sqlite_table_names(con)
+    if "work_orders" not in names:
+        return []
+    priority_map = {"low": "낮음", "medium": "보통", "high": "높음", "critical": "긴급"}
+    status_map = {"open": "접수", "acknowledged": "진행중", "in_progress": "진행중", "done": "완료", "closed": "완료", "hold": "보류"}
+    rows: List[Dict[str, Any]] = []
+    for row in con.execute("SELECT * FROM work_orders ORDER BY id ASC").fetchall():
+        rows.append(
+            {
+                "title": _clean_text(row["title"], 200),
+                "description": _clean_text(row["description"], 8000),
+                "category": "점검후속" if row["inspection_id"] else "고장수리",
+                "priority": priority_map.get(str(row["priority"] or "").strip().lower(), "보통"),
+                "status": status_map.get(str(row["status"] or "").strip().lower(), "접수"),
+                "assignee": _clean_text(row["assignee"], 80),
+                "reporter": _clean_text(row["reporter"], 80),
+                "due_date": _clean_text(row["due_at"], 20),
+                "completed_at": row["completed_at"] or "",
+                "resolution_notes": _clean_text(row["resolution_notes"], 4000),
+                "is_escalated": bool(row["is_escalated"]),
+                "inspection_legacy_id": row["inspection_id"],
+                "qr_id": _clean_text(row["qr_id"], 80),
+                "asset_name_snapshot": _clean_text(row["equipment_snapshot"], 160),
+                "location_snapshot": _clean_text(row["equipment_location_snapshot"], 160),
+                "created_at": row["created_at"] or now_iso(),
+                "updated_at": row["updated_at"] or row["created_at"] or now_iso(),
+            }
+        )
+    return rows
+
+
 def _sqlite_audit_rows(con: sqlite3.Connection) -> List[Dict[str, Any]]:
     names = _sqlite_table_names(con)
     if "admin_audit_logs" not in names:
@@ -521,6 +686,11 @@ def _load_sqlite_bundle(path: Path) -> Dict[str, Any]:
             "documents": documents,
             "vendors": _sqlite_rows(path, LEGACY_TABLE_ALIASES["vendors"]),
             "schedules": schedules,
+            "facility_assets": _sqlite_facility_asset_rows(con),
+            "facility_qr_assets": _sqlite_facility_qr_rows(con),
+            "facility_checklists": _sqlite_facility_checklist_rows(con),
+            "facility_inspections": _sqlite_facility_inspection_rows(con),
+            "facility_work_orders": _sqlite_facility_work_order_rows(con),
             "audit_logs": _sqlite_audit_rows(con),
         }
     finally:
@@ -542,6 +712,12 @@ def load_legacy_source(source_path: str | Path) -> Dict[str, Any]:
             "documents": list(data.get("documents") or []),
             "vendors": list(data.get("vendors") or []),
             "schedules": list(data.get("schedules") or []),
+            "facility_assets": list(data.get("facility_assets") or []),
+            "facility_qr_assets": list(data.get("facility_qr_assets") or []),
+            "facility_checklists": list(data.get("facility_checklists") or []),
+            "facility_inspections": list(data.get("facility_inspections") or []),
+            "facility_work_orders": list(data.get("facility_work_orders") or []),
+            "audit_logs": list(data.get("audit_logs") or []),
         }
 
     if path.is_dir():
@@ -557,6 +733,12 @@ def load_legacy_source(source_path: str | Path) -> Dict[str, Any]:
             "documents": rows("documents"),
             "vendors": rows("vendors"),
             "schedules": rows("schedules"),
+            "facility_assets": rows("facility_assets"),
+            "facility_qr_assets": rows("facility_qr_assets"),
+            "facility_checklists": rows("facility_checklists"),
+            "facility_inspections": rows("facility_inspections"),
+            "facility_work_orders": rows("facility_work_orders"),
+            "audit_logs": rows("audit_logs"),
         }
 
     if path.is_file() and path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
@@ -1056,6 +1238,351 @@ def _import_schedules(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dic
     return {"created": created, "updated": updated, "skipped": skipped}
 
 
+def _normalize_facility_lifecycle(value: Any, *, qr: bool = False) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"active", "운영중", "running"}:
+        return "운영중"
+    if not qr and raw in {"inspection", "점검중"}:
+        return "점검중"
+    if raw in {"inactive", "중지", "paused", "hold"}:
+        return "중지"
+    if raw in {"retired", "폐기", "deleted"}:
+        return "폐기"
+    return "운영중"
+
+
+def _normalize_asset_category(value: Any) -> str:
+    raw = str(value or "").strip()
+    if raw in {"승강기", "전기", "기계", "소방", "건축", "미화", "보안", "공용부", "기타"}:
+        return raw
+    lowered = raw.lower()
+    if "elevator" in lowered or "승강기" in raw:
+        return "승강기"
+    if "전기" in raw or "electric" in lowered:
+        return "전기"
+    if "소방" in raw or "fire" in lowered:
+        return "소방"
+    if "건축" in raw or "building" in lowered:
+        return "건축"
+    if "보안" in raw or "security" in lowered:
+        return "보안"
+    if "미화" in raw or "clean" in lowered:
+        return "미화"
+    if "공용" in raw or "common" in lowered:
+        return "공용부"
+    return "기계"
+
+
+def _normalize_inspection_result(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"정상", "normal", "ok", "low"}:
+        return "정상"
+    if raw in {"주의", "medium", "warning"}:
+        return "주의"
+    if raw in {"조치필요", "high", "critical", "urgent"}:
+        return "조치필요"
+    return "정상"
+
+
+def _normalize_work_order_priority(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    mapping = {"low": "낮음", "medium": "보통", "normal": "보통", "high": "높음", "critical": "긴급", "urgent": "긴급"}
+    return mapping.get(raw, str(value or "").strip() or "보통") if str(value or "").strip() in {"낮음", "보통", "높음", "긴급"} else mapping.get(raw, "보통")
+
+
+def _normalize_work_order_status(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    mapping = {"open": "접수", "received": "접수", "in_progress": "진행중", "processing": "진행중", "acknowledged": "진행중", "done": "완료", "closed": "완료", "hold": "보류"}
+    return mapping.get(raw, str(value or "").strip() or "접수") if str(value or "").strip() in {"접수", "진행중", "완료", "보류"} else mapping.get(raw, "접수")
+
+
+def _resolve_facility_asset_id(con: sqlite3.Connection, *, tenant_id: str, row: Dict[str, Any]) -> Optional[int]:
+    asset_code = _clean_text(row.get("asset_code") or row.get("equipment_key") or row.get("asset_code_snapshot"), 80)
+    if asset_code:
+        found = _find_existing_row_id(con, "facility_assets", {"tenant_id": tenant_id, "asset_code": asset_code})
+        if found:
+            return found
+    asset_name = _clean_text(row.get("asset_name") or row.get("equipment_name") or row.get("asset_name_snapshot"), 160)
+    location_name = _clean_text(row.get("location_name") or row.get("location_snapshot"), 160)
+    if asset_name:
+        return _find_existing_row_id(con, "facility_assets", {"tenant_id": tenant_id, "asset_name": asset_name, "location_name": location_name or None}) or _find_existing_row_id(
+            con,
+            "facility_assets",
+            {"tenant_id": tenant_id, "asset_name": asset_name},
+        )
+    return None
+
+
+def _resolve_qr_asset_id(con: sqlite3.Connection, *, tenant_id: str, row: Dict[str, Any]) -> Optional[int]:
+    qr_id = _clean_text(row.get("qr_id"), 80)
+    if not qr_id:
+        return None
+    return _find_existing_row_id(con, "facility_qr_assets", {"tenant_id": tenant_id, "qr_id": qr_id})
+
+
+def _import_facility_assets(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    created = 0
+    updated = 0
+    skipped = 0
+    for row in rows:
+        asset_code = _clean_text(row.get("asset_code") or row.get("equipment_key"), 80)
+        asset_name = _clean_text(row.get("asset_name") or row.get("equipment_name"), 160)
+        if not asset_name:
+            skipped += 1
+            continue
+        asset_code = asset_code or f"LEGACY-{created + updated + skipped + 1:04d}"
+        existing_id = _find_existing_row_id(con, "facility_assets", {"tenant_id": tenant_id, "asset_code": asset_code})
+        values = (
+            asset_code,
+            asset_name,
+            _normalize_asset_category(row.get("category") or row.get("task_type")),
+            _clean_text(row.get("location_name"), 160) or None,
+            _normalize_facility_lifecycle(row.get("lifecycle_state")),
+            _clean_text(row.get("source"), 40) or "legacy",
+            _clean_text(row.get("qr_id"), 80) or None,
+            _clean_text(row.get("checklist_key"), 80) or None,
+            _clean_text(row.get("last_inspected_at"), 40) or None,
+            _clean_text(row.get("next_inspection_date"), 20) or None,
+            _clean_text(row.get("note"), 4000) or None,
+            _normalize_timestamp(row.get("updated_at") or row.get("created_at")),
+        )
+        created_at = _normalize_timestamp(row.get("created_at"))
+        updated_at = values[-1] or created_at
+        if existing_id:
+            con.execute(
+                """
+                UPDATE facility_assets
+                SET asset_name=?, category=?, location_name=?, lifecycle_state=?, source=?, qr_id=?, checklist_key=?,
+                    last_inspected_at=?, next_inspection_date=?, note=?, updated_at=?
+                WHERE id=? AND tenant_id=?
+                """,
+                values[1:] + (int(existing_id), tenant_id),
+            )
+            updated += 1
+            continue
+        cur = con.execute(
+            """
+            INSERT INTO facility_assets(
+              tenant_id, asset_code, asset_name, category, location_name, lifecycle_state, source, qr_id, checklist_key,
+              last_inspected_at, next_inspection_date, note, created_by_label, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (tenant_id, *values[:-1], "legacy-import", created_at, updated_at),
+        )
+        _apply_timestamps(con, "facility_assets", int(cur.lastrowid), created_at, updated_at)
+        created += 1
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
+def _import_facility_checklists(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    created = 0
+    updated = 0
+    skipped = 0
+    for row in rows:
+        checklist_key = _clean_text(row.get("checklist_key") or row.get("set_id"), 80)
+        title = _clean_text(row.get("title") or row.get("label"), 160)
+        if not checklist_key or not title:
+            skipped += 1
+            continue
+        existing_id = _find_existing_row_id(con, "facility_checklists", {"tenant_id": tenant_id, "checklist_key": checklist_key})
+        items_json = json.dumps(list(row.get("items") or []), ensure_ascii=False)
+        created_at = _normalize_timestamp(row.get("created_at"))
+        updated_at = _normalize_timestamp(row.get("updated_at") or row.get("created_at"))
+        values = (
+            title,
+            _clean_text(row.get("task_type"), 80) or None,
+            _clean_text(row.get("version_no"), 40) or None,
+            _normalize_facility_lifecycle(row.get("lifecycle_state")),
+            _clean_text(row.get("source"), 40) or "legacy",
+            _clean_text(row.get("note"), 4000) or None,
+            items_json,
+            updated_at,
+        )
+        if existing_id:
+            con.execute(
+                """
+                UPDATE facility_checklists
+                SET title=?, task_type=?, version_no=?, lifecycle_state=?, source=?, note=?, items_json=?, updated_at=?
+                WHERE id=? AND tenant_id=?
+                """,
+                values + (int(existing_id), tenant_id),
+            )
+            updated += 1
+            continue
+        cur = con.execute(
+            """
+            INSERT INTO facility_checklists(
+              tenant_id, checklist_key, title, task_type, version_no, lifecycle_state, source, note, items_json, created_by_label, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (tenant_id, checklist_key, *values[:-1], "legacy-import", created_at, updated_at),
+        )
+        _apply_timestamps(con, "facility_checklists", int(cur.lastrowid), created_at, updated_at)
+        created += 1
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
+def _import_facility_qr_assets(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    created = 0
+    updated = 0
+    skipped = 0
+    for row in rows:
+        qr_id = _clean_text(row.get("qr_id"), 80)
+        if not qr_id:
+            skipped += 1
+            continue
+        existing_id = _find_existing_row_id(con, "facility_qr_assets", {"tenant_id": tenant_id, "qr_id": qr_id})
+        asset_id = _resolve_facility_asset_id(con, tenant_id=tenant_id, row=row)
+        created_at = _normalize_timestamp(row.get("created_at"))
+        updated_at = _normalize_timestamp(row.get("updated_at") or row.get("created_at"))
+        values = (
+            asset_id,
+            _clean_text(row.get("asset_code_snapshot"), 120) or None,
+            _clean_text(row.get("asset_name_snapshot"), 160) or None,
+            _clean_text(row.get("location_snapshot"), 160) or None,
+            _clean_text(row.get("default_item"), 200) or None,
+            _clean_text(row.get("checklist_key"), 80) or None,
+            _normalize_facility_lifecycle(row.get("lifecycle_state"), qr=True),
+            _clean_text(row.get("source"), 40) or "legacy",
+            updated_at,
+        )
+        if existing_id:
+            con.execute(
+                """
+                UPDATE facility_qr_assets
+                SET asset_id=?, asset_code_snapshot=?, asset_name_snapshot=?, location_snapshot=?, default_item=?, checklist_key=?, lifecycle_state=?, source=?, updated_at=?
+                WHERE id=? AND tenant_id=?
+                """,
+                values + (int(existing_id), tenant_id),
+            )
+            updated += 1
+            continue
+        cur = con.execute(
+            """
+            INSERT INTO facility_qr_assets(
+              tenant_id, qr_id, asset_id, asset_code_snapshot, asset_name_snapshot, location_snapshot, default_item, checklist_key,
+              lifecycle_state, source, created_by_label, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (tenant_id, qr_id, *values[:-1], "legacy-import", created_at, updated_at),
+        )
+        _apply_timestamps(con, "facility_qr_assets", int(cur.lastrowid), created_at, updated_at)
+        created += 1
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
+def _import_facility_inspections(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    created = 0
+    updated = 0
+    skipped = 0
+    for row in rows:
+        title = _clean_text(row.get("title"), 200)
+        inspected_at = _normalize_timestamp(row.get("inspected_at"))
+        if not title or not inspected_at:
+            skipped += 1
+            continue
+        existing_id = _find_existing_row_id(con, "facility_inspections", {"tenant_id": tenant_id, "title": title, "inspected_at": inspected_at})
+        asset_id = _resolve_facility_asset_id(con, tenant_id=tenant_id, row=row)
+        qr_asset_id = _resolve_qr_asset_id(con, tenant_id=tenant_id, row=row)
+        measurement_json = json.dumps(row.get("measurement") or {}, ensure_ascii=False)
+        updated_at = _normalize_timestamp(row.get("updated_at") or row.get("created_at") or inspected_at)
+        values = (
+            asset_id,
+            qr_asset_id,
+            _clean_text(row.get("checklist_key"), 80) or None,
+            _clean_text(row.get("inspector"), 80) or None,
+            _normalize_inspection_result(row.get("result_status")),
+            _clean_text(row.get("notes"), 4000) or None,
+            measurement_json,
+            updated_at,
+        )
+        if existing_id:
+            con.execute(
+                """
+                UPDATE facility_inspections
+                SET asset_id=?, qr_asset_id=?, checklist_key=?, inspector=?, result_status=?, notes=?, measurement_json=?, updated_at=?
+                WHERE id=? AND tenant_id=?
+                """,
+                values + (int(existing_id), tenant_id),
+            )
+            updated += 1
+            continue
+        cur = con.execute(
+            """
+            INSERT INTO facility_inspections(
+              tenant_id, title, asset_id, qr_asset_id, checklist_key, inspector, inspected_at, result_status, notes, measurement_json,
+              created_by_label, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (tenant_id, title, values[0], values[1], values[2], values[3], inspected_at, values[4], values[5], values[6], "legacy-import", inspected_at, updated_at),
+        )
+        _apply_timestamps(con, "facility_inspections", int(cur.lastrowid), inspected_at, updated_at)
+        created += 1
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
+def _import_facility_work_orders(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    created = 0
+    updated = 0
+    skipped = 0
+    for row in rows:
+        title = _clean_text(row.get("title"), 200)
+        if not title:
+            skipped += 1
+            continue
+        due_date = _clean_text(row.get("due_date"), 20)
+        existing_id = _find_existing_row_id(con, "facility_work_orders", {"tenant_id": tenant_id, "title": title, "due_date": due_date or None})
+        asset_id = _resolve_facility_asset_id(con, tenant_id=tenant_id, row=row)
+        qr_asset_id = _resolve_qr_asset_id(con, tenant_id=tenant_id, row=row)
+        updated_at = _normalize_timestamp(row.get("updated_at") or row.get("created_at"))
+        values = (
+            _clean_text(row.get("description"), 8000) or None,
+            asset_id,
+            qr_asset_id,
+            None,
+            _clean_text(row.get("category"), 40) or "기타",
+            _normalize_work_order_priority(row.get("priority")),
+            _normalize_work_order_status(row.get("status")),
+            _clean_text(row.get("assignee"), 80) or None,
+            _clean_text(row.get("reporter"), 80) or None,
+            due_date or None,
+            _clean_text(row.get("completed_at"), 40) or None,
+            _clean_text(row.get("resolution_notes"), 4000) or None,
+            1 if row.get("is_escalated") else 0,
+            updated_at,
+        )
+        created_at = _normalize_timestamp(row.get("created_at"))
+        if existing_id:
+            con.execute(
+                """
+                UPDATE facility_work_orders
+                SET description=?, asset_id=?, qr_asset_id=?, inspection_id=?, category=?, priority=?, status=?, assignee=?, reporter=?,
+                    due_date=?, completed_at=?, resolution_notes=?, is_escalated=?, updated_at=?
+                WHERE id=? AND tenant_id=?
+                """,
+                values + (int(existing_id), tenant_id),
+            )
+            updated += 1
+            continue
+        cur = con.execute(
+            """
+            INSERT INTO facility_work_orders(
+              tenant_id, title, description, asset_id, qr_asset_id, inspection_id, category, priority, status, assignee, reporter,
+              due_date, completed_at, resolution_notes, is_escalated, created_by_label, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (tenant_id, title, *values[:-1], "legacy-import", created_at, updated_at),
+        )
+        _apply_timestamps(con, "facility_work_orders", int(cur.lastrowid), created_at, updated_at)
+        created += 1
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
 def _import_audit_logs(con: sqlite3.Connection, *, tenant_id: str, rows: List[Dict[str, Any]]) -> Dict[str, int]:
     created = 0
     skipped = 0
@@ -1101,6 +1628,14 @@ def import_legacy_source(
     default_user_password: str = "ChangeMe123!",
     dry_run: bool = False,
 ) -> Dict[str, Any]:
+    from .engine_db import init_engine_db
+    from .facility_db import init_facility_db
+    from .ops_db import init_ops_db
+
+    core_db.init_db()
+    init_engine_db()
+    init_ops_db()
+    init_facility_db()
     bundle = load_legacy_source(source_path)
     tenant_meta = bundle.get("tenant") or {}
     resolved_tenant_id = _clean_text(tenant_id or tenant_meta.get("id"), 32).lower()
@@ -1127,6 +1662,11 @@ def import_legacy_source(
             "documents": _import_documents(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("documents") or [])),
             "vendors": _import_vendors(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("vendors") or [])),
             "schedules": _import_schedules(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("schedules") or [])),
+            "facility_assets": _import_facility_assets(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("facility_assets") or [])),
+            "facility_qr_assets": _import_facility_qr_assets(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("facility_qr_assets") or [])),
+            "facility_checklists": _import_facility_checklists(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("facility_checklists") or [])),
+            "facility_inspections": _import_facility_inspections(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("facility_inspections") or [])),
+            "facility_work_orders": _import_facility_work_orders(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("facility_work_orders") or [])),
             "audit_logs": _import_audit_logs(con, tenant_id=resolved_tenant_id, rows=list(bundle.get("audit_logs") or [])),
         }
         if dry_run:

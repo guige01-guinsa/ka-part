@@ -31,10 +31,18 @@
   let opsDocuments = [];
   let opsSchedules = [];
   let opsVendors = [];
+  let facilityAssets = [];
+  let facilityChecklists = [];
+  let facilityInspections = [];
+  let facilityWorkOrders = [];
   let selectedNoticeId = 0;
   let selectedDocumentId = 0;
   let selectedScheduleId = 0;
   let selectedVendorId = 0;
+  let selectedFacilityAssetId = 0;
+  let selectedFacilityChecklistId = 0;
+  let selectedFacilityInspectionId = 0;
+  let selectedFacilityWorkOrderId = 0;
   let documentNumberingConfig = null;
   let chatSourcePreviewUrls = [];
   let chatDigestPreviewUrls = [];
@@ -90,6 +98,12 @@
 
   function canManageDocNumberingConfig() {
     return !!(me && me.user && (me.user.is_admin || me.user.is_site_admin));
+  }
+
+  function canEditFacility() {
+    if (!me || !me.user) return false;
+    if (me.user.is_admin || me.user.is_site_admin) return true;
+    return ["manager", "desk", "staff"].includes(String(me.user.role || ""));
   }
 
   function canDeleteComplaints() {
@@ -865,6 +879,18 @@
       : "현재 계정은 행정업무 조회만 가능합니다. 수정이 필요하면 현장관리자 이상 권한으로 로그인하세요.";
   }
 
+  function syncFacilityWriteState() {
+    const editable = canEditFacility();
+    document.querySelectorAll("[data-facility-write='1']").forEach((el) => {
+      el.disabled = !editable;
+    });
+    const hint = $("#facilityReadOnlyHint");
+    if (!hint) return;
+    hint.textContent = editable
+      ? "시설운영 편집 권한이 있습니다. 자산, 점검표, 점검기록, 작업지시를 여기서 직접 관리할 수 있습니다."
+      : "현재 계정은 시설운영 조회만 가능합니다. 수정이 필요하면 현장관리자 이상 권한으로 로그인하세요.";
+  }
+
   function syncComplaintDeleteOption() {
     const select = $("#detailStatus");
     if (!select) return;
@@ -886,6 +912,452 @@
       '<option value="">업체 미지정</option>',
       ...opsVendors.map((item) => `<option value="${Number(item.id || 0)}"${String(item.id) === current ? " selected" : ""}>${escapeHtml(item.company_name || "-")} / ${escapeHtml(item.service_type || "-")}</option>`),
     ].join("");
+  }
+
+  function formatDateTimeLocalInput(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    return raw.replace(" ", "T").slice(0, 16);
+  }
+
+  function renderFacilityAssetOptions(selected = "") {
+    ["#facilityInspectionAssetId", "#facilityWorkOrderAssetId"].forEach((selector) => {
+      const el = $(selector);
+      if (!el) return;
+      const current = String(selected || el.value || "");
+      el.innerHTML = [
+        '<option value="">자산 미지정</option>',
+        ...facilityAssets.map((item) => `<option value="${Number(item.id || 0)}"${String(item.id) === current ? " selected" : ""}>${escapeHtml(item.asset_code || "-")} / ${escapeHtml(item.asset_name || "-")}</option>`),
+      ].join("");
+    });
+  }
+
+  function renderFacilityInspectionOptions(selected = "") {
+    const el = $("#facilityWorkOrderInspectionId");
+    if (!el) return;
+    const current = String(selected || el.value || "");
+    el.innerHTML = [
+      '<option value="">점검 미지정</option>',
+      ...facilityInspections.map((item) => `<option value="${Number(item.id || 0)}"${String(item.id) === current ? " selected" : ""}>${escapeHtml(item.title || "-")} / ${escapeHtml(formatDateTime(item.inspected_at))}</option>`),
+    ].join("");
+  }
+
+  function clearFacilityAssetForm() {
+    selectedFacilityAssetId = 0;
+    $("#facilityAssetCode").value = "";
+    $("#facilityAssetName").value = "";
+    $("#facilityAssetCategory").value = "승강기";
+    $("#facilityAssetState").value = "운영중";
+    $("#facilityAssetLocation").value = "";
+    $("#facilityAssetQrId").value = "";
+    $("#facilityAssetChecklistKey").value = "";
+    $("#facilityAssetNextDate").value = "";
+    $("#facilityAssetNote").value = "";
+    $("#facilityAssetDetail").textContent = "자산을 선택하거나 새로 등록하세요.";
+  }
+
+  function clearFacilityChecklistForm() {
+    selectedFacilityChecklistId = 0;
+    $("#facilityChecklistKey").value = "";
+    $("#facilityChecklistTitle").value = "";
+    $("#facilityChecklistTaskType").value = "";
+    $("#facilityChecklistVersion").value = "";
+    $("#facilityChecklistState").value = "운영중";
+    $("#facilityChecklistSource").value = "manual";
+    $("#facilityChecklistItems").value = "";
+    $("#facilityChecklistNote").value = "";
+    $("#facilityChecklistDetail").textContent = "점검표를 선택하거나 새로 등록하세요.";
+  }
+
+  function clearFacilityInspectionForm() {
+    selectedFacilityInspectionId = 0;
+    $("#facilityInspectionTitle").value = "";
+    $("#facilityInspectionAssetId").value = "";
+    $("#facilityInspectionChecklistKey").value = "";
+    $("#facilityInspectionInspector").value = "";
+    $("#facilityInspectionAt").value = "";
+    $("#facilityInspectionStatus").value = "정상";
+    $("#facilityInspectionNotes").value = "";
+    $("#facilityInspectionDetail").textContent = "점검 기록을 선택하거나 새로 등록하세요.";
+  }
+
+  function clearFacilityWorkOrderForm() {
+    selectedFacilityWorkOrderId = 0;
+    $("#facilityWorkOrderTitle").value = "";
+    $("#facilityWorkOrderAssetId").value = "";
+    $("#facilityWorkOrderInspectionId").value = "";
+    $("#facilityWorkOrderCategory").value = "점검후속";
+    $("#facilityWorkOrderPriority").value = "보통";
+    $("#facilityWorkOrderStatus").value = "접수";
+    $("#facilityWorkOrderAssignee").value = "";
+    $("#facilityWorkOrderReporter").value = "";
+    $("#facilityWorkOrderDueDate").value = "";
+    $("#facilityWorkOrderEscalated").checked = false;
+    $("#facilityWorkOrderDescription").value = "";
+    $("#facilityWorkOrderResolution").value = "";
+    $("#facilityWorkOrderDetail").textContent = "작업지시를 선택하거나 새로 등록하세요.";
+  }
+
+  function renderFacilityAssetDetail(item) {
+    selectedFacilityAssetId = Number(item.id || 0);
+    $("#facilityAssetCode").value = String(item.asset_code || "");
+    $("#facilityAssetName").value = String(item.asset_name || "");
+    $("#facilityAssetCategory").value = String(item.category || "기타");
+    $("#facilityAssetState").value = String(item.lifecycle_state || "운영중");
+    $("#facilityAssetLocation").value = String(item.location_name || "");
+    $("#facilityAssetQrId").value = String(item.qr_id || "");
+    $("#facilityAssetChecklistKey").value = String(item.checklist_key || "");
+    $("#facilityAssetNextDate").value = String(item.next_inspection_date || "");
+    $("#facilityAssetNote").value = String(item.note || "");
+    $("#facilityAssetDetail").innerHTML = [
+      `<strong>${escapeHtml(item.asset_name || "-")}</strong>`,
+      `코드: ${escapeHtml(item.asset_code || "-")}`,
+      `분류: ${escapeHtml(item.category || "-")}`,
+      `위치: ${escapeHtml(item.location_name || "-")}`,
+      `상태: ${escapeHtml(item.lifecycle_state || "-")}`,
+      `다음 점검일: ${escapeHtml(formatDate(item.next_inspection_date))}`,
+    ].join("<br>");
+  }
+
+  function renderFacilityChecklistDetail(item) {
+    selectedFacilityChecklistId = Number(item.id || 0);
+    $("#facilityChecklistKey").value = String(item.checklist_key || "");
+    $("#facilityChecklistTitle").value = String(item.title || "");
+    $("#facilityChecklistTaskType").value = String(item.task_type || "");
+    $("#facilityChecklistVersion").value = String(item.version_no || "");
+    $("#facilityChecklistState").value = String(item.lifecycle_state || "운영중");
+    $("#facilityChecklistSource").value = String(item.source || "manual");
+    $("#facilityChecklistItems").value = Array.isArray(item.items) ? item.items.join("\n") : "";
+    $("#facilityChecklistNote").value = String(item.note || "");
+    $("#facilityChecklistDetail").innerHTML = [
+      `<strong>${escapeHtml(item.title || "-")}</strong>`,
+      `Key: ${escapeHtml(item.checklist_key || "-")}`,
+      `유형: ${escapeHtml(item.task_type || "-")}`,
+      `상태: ${escapeHtml(item.lifecycle_state || "-")}`,
+      `항목수: ${escapeHtml(String((item.items || []).length || 0))}`,
+    ].join("<br>");
+  }
+
+  function renderFacilityInspectionDetail(item) {
+    selectedFacilityInspectionId = Number(item.id || 0);
+    $("#facilityInspectionTitle").value = String(item.title || "");
+    $("#facilityInspectionAssetId").value = String(item.asset_id || "");
+    $("#facilityInspectionChecklistKey").value = String(item.checklist_key || "");
+    $("#facilityInspectionInspector").value = String(item.inspector || "");
+    $("#facilityInspectionAt").value = formatDateTimeLocalInput(item.inspected_at);
+    $("#facilityInspectionStatus").value = String(item.result_status || "정상");
+    $("#facilityInspectionNotes").value = String(item.notes || "");
+    $("#facilityInspectionDetail").innerHTML = [
+      `<strong>${escapeHtml(item.title || "-")}</strong>`,
+      `자산: ${escapeHtml(item.asset_name || "-")}`,
+      `결과: ${escapeHtml(item.result_status || "-")}`,
+      `점검일시: ${escapeHtml(formatDateTime(item.inspected_at))}`,
+      `점검자: ${escapeHtml(item.inspector || "-")}`,
+    ].join("<br>");
+  }
+
+  function renderFacilityWorkOrderDetail(item) {
+    selectedFacilityWorkOrderId = Number(item.id || 0);
+    $("#facilityWorkOrderTitle").value = String(item.title || "");
+    $("#facilityWorkOrderAssetId").value = String(item.asset_id || "");
+    $("#facilityWorkOrderInspectionId").value = String(item.inspection_id || "");
+    $("#facilityWorkOrderCategory").value = String(item.category || "기타");
+    $("#facilityWorkOrderPriority").value = String(item.priority || "보통");
+    $("#facilityWorkOrderStatus").value = String(item.status || "접수");
+    $("#facilityWorkOrderAssignee").value = String(item.assignee || "");
+    $("#facilityWorkOrderReporter").value = String(item.reporter || "");
+    $("#facilityWorkOrderDueDate").value = String(item.due_date || "");
+    $("#facilityWorkOrderEscalated").checked = !!item.is_escalated;
+    $("#facilityWorkOrderDescription").value = String(item.description || "");
+    $("#facilityWorkOrderResolution").value = String(item.resolution_notes || "");
+    $("#facilityWorkOrderDetail").innerHTML = [
+      `<strong>${escapeHtml(item.title || "-")}</strong>`,
+      `자산: ${escapeHtml(item.asset_name || "-")}`,
+      `우선순위: ${escapeHtml(item.priority || "-")}`,
+      `상태: ${escapeHtml(item.status || "-")}`,
+      `기한: ${escapeHtml(formatDate(item.due_date))}`,
+      `담당: ${escapeHtml(item.assignee || "-")}`,
+    ].join("<br>");
+  }
+
+  function facilityAssetPayloadFromForm() {
+    return {
+      tenant_id: currentTenantId(),
+      asset_code: String($("#facilityAssetCode").value || "").trim(),
+      asset_name: String($("#facilityAssetName").value || "").trim(),
+      category: String($("#facilityAssetCategory").value || "기타").trim(),
+      lifecycle_state: String($("#facilityAssetState").value || "운영중").trim(),
+      location_name: String($("#facilityAssetLocation").value || "").trim(),
+      qr_id: String($("#facilityAssetQrId").value || "").trim(),
+      checklist_key: String($("#facilityAssetChecklistKey").value || "").trim(),
+      next_inspection_date: String($("#facilityAssetNextDate").value || "").trim(),
+      note: String($("#facilityAssetNote").value || "").trim(),
+    };
+  }
+
+  function facilityChecklistPayloadFromForm() {
+    return {
+      tenant_id: currentTenantId(),
+      checklist_key: String($("#facilityChecklistKey").value || "").trim(),
+      title: String($("#facilityChecklistTitle").value || "").trim(),
+      task_type: String($("#facilityChecklistTaskType").value || "").trim(),
+      version_no: String($("#facilityChecklistVersion").value || "").trim(),
+      lifecycle_state: String($("#facilityChecklistState").value || "운영중").trim(),
+      source: String($("#facilityChecklistSource").value || "manual").trim(),
+      items: String($("#facilityChecklistItems").value || "").trim(),
+      note: String($("#facilityChecklistNote").value || "").trim(),
+    };
+  }
+
+  function facilityInspectionPayloadFromForm() {
+    const inspectedAt = String($("#facilityInspectionAt").value || "").trim();
+    return {
+      tenant_id: currentTenantId(),
+      title: String($("#facilityInspectionTitle").value || "").trim(),
+      asset_id: String($("#facilityInspectionAssetId").value || "").trim(),
+      checklist_key: String($("#facilityInspectionChecklistKey").value || "").trim(),
+      inspector: String($("#facilityInspectionInspector").value || "").trim(),
+      inspected_at: inspectedAt ? inspectedAt.replace("T", " ") : "",
+      result_status: String($("#facilityInspectionStatus").value || "정상").trim(),
+      notes: String($("#facilityInspectionNotes").value || "").trim(),
+    };
+  }
+
+  function facilityWorkOrderPayloadFromForm() {
+    return {
+      tenant_id: currentTenantId(),
+      title: String($("#facilityWorkOrderTitle").value || "").trim(),
+      asset_id: String($("#facilityWorkOrderAssetId").value || "").trim(),
+      inspection_id: String($("#facilityWorkOrderInspectionId").value || "").trim(),
+      category: String($("#facilityWorkOrderCategory").value || "기타").trim(),
+      priority: String($("#facilityWorkOrderPriority").value || "보통").trim(),
+      status: String($("#facilityWorkOrderStatus").value || "접수").trim(),
+      assignee: String($("#facilityWorkOrderAssignee").value || "").trim(),
+      reporter: String($("#facilityWorkOrderReporter").value || "").trim(),
+      due_date: String($("#facilityWorkOrderDueDate").value || "").trim(),
+      is_escalated: !!$("#facilityWorkOrderEscalated").checked,
+      description: String($("#facilityWorkOrderDescription").value || "").trim(),
+      resolution_notes: String($("#facilityWorkOrderResolution").value || "").trim(),
+    };
+  }
+
+  async function loadFacilityDashboard() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return;
+    const data = await api(`/api/facility/dashboard?tenant_id=${encodeURIComponent(tenantId)}`);
+    const item = data.item || {};
+    $("#facilityMetricAssets").textContent = String(item.active_assets || 0);
+    $("#facilityMetricQr").textContent = String(item.active_qr_assets || 0);
+    $("#facilityMetricWorkOrders").textContent = String(item.open_work_orders || 0);
+    $("#facilityMetricInspections").textContent = String(item.month_inspections || 0);
+    $("#facilityDueAssets").innerHTML = (item.due_assets || []).length
+      ? item.due_assets.map((row) => `<article class="timeline-item"><strong>${escapeHtml(row.asset_name || "-")}</strong><p>${escapeHtml(row.category || "-")} / ${escapeHtml(row.location_name || "-")} / ${escapeHtml(formatDate(row.next_inspection_date))}</p></article>`).join("")
+      : '<div class="empty-state">다가오는 점검 자산이 없습니다.</div>';
+    $("#facilityUrgentWorkOrders").innerHTML = (item.urgent_work_orders || []).length
+      ? item.urgent_work_orders.map((row) => `<article class="timeline-item"><strong>${escapeHtml(row.title || "-")}</strong><p>${escapeHtml(row.priority || "-")} / ${escapeHtml(row.status || "-")} / ${escapeHtml(row.asset_name || "-")}</p></article>`).join("")
+      : '<div class="empty-state">긴급 작업지시가 없습니다.</div>';
+    $("#facilityRecentInspections").innerHTML = (item.recent_inspections || []).length
+      ? item.recent_inspections.map((row) => `<article class="timeline-item"><strong>${escapeHtml(row.title || "-")}</strong><p>${escapeHtml(row.result_status || "-")} / ${escapeHtml(formatDateTime(row.inspected_at))} / ${escapeHtml(row.inspector || "-")}</p></article>`).join("")
+      : '<div class="empty-state">최근 점검 기록이 없습니다.</div>';
+    $("#facilityRecentChecklists").innerHTML = (item.recent_checklists || []).length
+      ? item.recent_checklists.map((row) => `<article class="timeline-item"><strong>${escapeHtml(row.title || "-")}</strong><p>${escapeHtml(row.checklist_key || "-")} / ${escapeHtml(row.task_type || "-")} / ${escapeHtml(row.lifecycle_state || "-")}</p></article>`).join("")
+      : '<div class="empty-state">등록된 점검표가 없습니다.</div>';
+  }
+
+  async function loadFacilityAssets() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/facility/assets?tenant_id=${encodeURIComponent(tenantId)}`);
+    facilityAssets = Array.isArray(data.items) ? data.items : [];
+    renderFacilityAssetOptions($("#facilityInspectionAssetId")?.value || $("#facilityWorkOrderAssetId")?.value || "");
+    const body = $("#facilityAssetsTableBody");
+    body.innerHTML = facilityAssets.length
+      ? facilityAssets.map((item) => `<tr class="facility-asset-row" data-id="${Number(item.id || 0)}"><td>${escapeHtml(item.asset_code || "-")}</td><td>${escapeHtml(item.asset_name || "-")}</td><td>${escapeHtml(item.category || "-")}</td><td>${escapeHtml(item.location_name || "-")}</td><td>${escapeHtml(item.lifecycle_state || "-")}</td></tr>`).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 자산이 없습니다.</td></tr>';
+    body.querySelectorAll(".facility-asset-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = facilityAssets.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderFacilityAssetDetail(item);
+      });
+    });
+    if (selectedFacilityAssetId) {
+      const found = facilityAssets.find((item) => Number(item.id || 0) === selectedFacilityAssetId);
+      if (found) renderFacilityAssetDetail(found); else clearFacilityAssetForm();
+    }
+    return facilityAssets;
+  }
+
+  async function loadFacilityChecklists() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/facility/checklists?tenant_id=${encodeURIComponent(tenantId)}`);
+    facilityChecklists = Array.isArray(data.items) ? data.items : [];
+    const body = $("#facilityChecklistsTableBody");
+    body.innerHTML = facilityChecklists.length
+      ? facilityChecklists.map((item) => `<tr class="facility-checklist-row" data-id="${Number(item.id || 0)}"><td>${escapeHtml(item.checklist_key || "-")}</td><td>${escapeHtml(item.title || "-")}</td><td>${escapeHtml(item.task_type || "-")}</td><td>${escapeHtml(item.lifecycle_state || "-")}</td><td>${escapeHtml(String(item.item_count || 0))}</td></tr>`).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 점검표가 없습니다.</td></tr>';
+    body.querySelectorAll(".facility-checklist-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = facilityChecklists.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderFacilityChecklistDetail(item);
+      });
+    });
+    if (selectedFacilityChecklistId) {
+      const found = facilityChecklists.find((item) => Number(item.id || 0) === selectedFacilityChecklistId);
+      if (found) renderFacilityChecklistDetail(found); else clearFacilityChecklistForm();
+    }
+    return facilityChecklists;
+  }
+
+  async function loadFacilityInspections() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/facility/inspections?tenant_id=${encodeURIComponent(tenantId)}`);
+    facilityInspections = Array.isArray(data.items) ? data.items : [];
+    renderFacilityInspectionOptions($("#facilityWorkOrderInspectionId")?.value || "");
+    const body = $("#facilityInspectionsTableBody");
+    body.innerHTML = facilityInspections.length
+      ? facilityInspections.map((item) => `<tr class="facility-inspection-row" data-id="${Number(item.id || 0)}"><td>${escapeHtml(item.title || "-")}</td><td>${escapeHtml(item.asset_name || "-")}</td><td>${escapeHtml(item.result_status || "-")}</td><td>${escapeHtml(formatDateTime(item.inspected_at))}</td><td>${escapeHtml(item.inspector || "-")}</td></tr>`).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 점검 기록이 없습니다.</td></tr>';
+    body.querySelectorAll(".facility-inspection-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = facilityInspections.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderFacilityInspectionDetail(item);
+      });
+    });
+    if (selectedFacilityInspectionId) {
+      const found = facilityInspections.find((item) => Number(item.id || 0) === selectedFacilityInspectionId);
+      if (found) renderFacilityInspectionDetail(found); else clearFacilityInspectionForm();
+    }
+    return facilityInspections;
+  }
+
+  async function loadFacilityWorkOrders() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return [];
+    const data = await api(`/api/facility/work_orders?tenant_id=${encodeURIComponent(tenantId)}`);
+    facilityWorkOrders = Array.isArray(data.items) ? data.items : [];
+    const body = $("#facilityWorkOrdersTableBody");
+    body.innerHTML = facilityWorkOrders.length
+      ? facilityWorkOrders.map((item) => `<tr class="facility-work-order-row" data-id="${Number(item.id || 0)}"><td>${escapeHtml(item.title || "-")}</td><td>${escapeHtml(item.asset_name || "-")}</td><td>${escapeHtml(item.priority || "-")}</td><td>${escapeHtml(item.status || "-")}</td><td>${escapeHtml(formatDate(item.due_date))}</td></tr>`).join("")
+      : '<tr><td colspan="5" class="empty-state">등록된 작업지시가 없습니다.</td></tr>';
+    body.querySelectorAll(".facility-work-order-row").forEach((rowEl) => {
+      rowEl.addEventListener("click", () => {
+        const item = facilityWorkOrders.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
+        if (item) renderFacilityWorkOrderDetail(item);
+      });
+    });
+    if (selectedFacilityWorkOrderId) {
+      const found = facilityWorkOrders.find((item) => Number(item.id || 0) === selectedFacilityWorkOrderId);
+      if (found) renderFacilityWorkOrderDetail(found); else clearFacilityWorkOrderForm();
+    }
+    return facilityWorkOrders;
+  }
+
+  async function createFacilityAsset() {
+    const data = await api("/api/facility/assets", { method: "POST", body: JSON.stringify(facilityAssetPayloadFromForm()) });
+    renderFacilityAssetDetail(data.item || {});
+    setMessage("#facilityAssetMsg", "자산을 등록했습니다.");
+    await loadFacilityAssets();
+    await loadFacilityDashboard();
+  }
+
+  async function updateFacilityAsset() {
+    if (!selectedFacilityAssetId) throw new Error("수정할 자산을 선택하세요.");
+    const data = await api(`/api/facility/assets/${selectedFacilityAssetId}`, { method: "PATCH", body: JSON.stringify(facilityAssetPayloadFromForm()) });
+    renderFacilityAssetDetail(data.item || {});
+    setMessage("#facilityAssetMsg", "자산을 수정했습니다.");
+    await loadFacilityAssets();
+    await loadFacilityDashboard();
+  }
+
+  async function deleteFacilityAsset() {
+    if (!selectedFacilityAssetId) throw new Error("삭제할 자산을 선택하세요.");
+    await api(`/api/facility/assets/${selectedFacilityAssetId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearFacilityAssetForm();
+    setMessage("#facilityAssetMsg", "자산을 삭제했습니다.");
+    await loadFacilityAssets();
+    await loadFacilityDashboard();
+  }
+
+  async function createFacilityChecklist() {
+    const data = await api("/api/facility/checklists", { method: "POST", body: JSON.stringify(facilityChecklistPayloadFromForm()) });
+    renderFacilityChecklistDetail(data.item || {});
+    setMessage("#facilityChecklistMsg", "점검표를 등록했습니다.");
+    await loadFacilityChecklists();
+    await loadFacilityDashboard();
+  }
+
+  async function updateFacilityChecklist() {
+    if (!selectedFacilityChecklistId) throw new Error("수정할 점검표를 선택하세요.");
+    const data = await api(`/api/facility/checklists/${selectedFacilityChecklistId}`, { method: "PATCH", body: JSON.stringify(facilityChecklistPayloadFromForm()) });
+    renderFacilityChecklistDetail(data.item || {});
+    setMessage("#facilityChecklistMsg", "점검표를 수정했습니다.");
+    await loadFacilityChecklists();
+    await loadFacilityDashboard();
+  }
+
+  async function deleteFacilityChecklist() {
+    if (!selectedFacilityChecklistId) throw new Error("삭제할 점검표를 선택하세요.");
+    await api(`/api/facility/checklists/${selectedFacilityChecklistId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearFacilityChecklistForm();
+    setMessage("#facilityChecklistMsg", "점검표를 삭제했습니다.");
+    await loadFacilityChecklists();
+    await loadFacilityDashboard();
+  }
+
+  async function createFacilityInspection() {
+    const data = await api("/api/facility/inspections", { method: "POST", body: JSON.stringify(facilityInspectionPayloadFromForm()) });
+    renderFacilityInspectionDetail(data.item || {});
+    setMessage("#facilityInspectionMsg", "점검 기록을 등록했습니다.");
+    await loadFacilityAssets();
+    await loadFacilityInspections();
+    await loadFacilityDashboard();
+  }
+
+  async function updateFacilityInspection() {
+    if (!selectedFacilityInspectionId) throw new Error("수정할 점검 기록을 선택하세요.");
+    const data = await api(`/api/facility/inspections/${selectedFacilityInspectionId}`, { method: "PATCH", body: JSON.stringify(facilityInspectionPayloadFromForm()) });
+    renderFacilityInspectionDetail(data.item || {});
+    setMessage("#facilityInspectionMsg", "점검 기록을 수정했습니다.");
+    await loadFacilityAssets();
+    await loadFacilityInspections();
+    await loadFacilityDashboard();
+  }
+
+  async function deleteFacilityInspection() {
+    if (!selectedFacilityInspectionId) throw new Error("삭제할 점검 기록을 선택하세요.");
+    await api(`/api/facility/inspections/${selectedFacilityInspectionId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearFacilityInspectionForm();
+    setMessage("#facilityInspectionMsg", "점검 기록을 삭제했습니다.");
+    await loadFacilityInspections();
+    await loadFacilityDashboard();
+  }
+
+  async function createFacilityWorkOrder() {
+    const data = await api("/api/facility/work_orders", { method: "POST", body: JSON.stringify(facilityWorkOrderPayloadFromForm()) });
+    renderFacilityWorkOrderDetail(data.item || {});
+    setMessage("#facilityWorkOrderMsg", "작업지시를 등록했습니다.");
+    await loadFacilityWorkOrders();
+    await loadFacilityDashboard();
+  }
+
+  async function updateFacilityWorkOrder() {
+    if (!selectedFacilityWorkOrderId) throw new Error("수정할 작업지시를 선택하세요.");
+    const data = await api(`/api/facility/work_orders/${selectedFacilityWorkOrderId}`, { method: "PATCH", body: JSON.stringify(facilityWorkOrderPayloadFromForm()) });
+    renderFacilityWorkOrderDetail(data.item || {});
+    setMessage("#facilityWorkOrderMsg", "작업지시를 수정했습니다.");
+    await loadFacilityWorkOrders();
+    await loadFacilityDashboard();
+  }
+
+  async function deleteFacilityWorkOrder() {
+    if (!selectedFacilityWorkOrderId) throw new Error("삭제할 작업지시를 선택하세요.");
+    await api(`/api/facility/work_orders/${selectedFacilityWorkOrderId}`, { method: "DELETE", body: JSON.stringify({ tenant_id: currentTenantId() }) });
+    clearFacilityWorkOrderForm();
+    setMessage("#facilityWorkOrderMsg", "작업지시를 삭제했습니다.");
+    await loadFacilityWorkOrders();
+    await loadFacilityDashboard();
   }
 
   function clearNoticeForm() {
@@ -2134,6 +2606,11 @@
     await loadDashboard();
     await loadComplaints();
     await generateReport();
+    await loadFacilityDashboard();
+    await loadFacilityAssets();
+    await loadFacilityChecklists();
+    await loadFacilityInspections();
+    await loadFacilityWorkOrders();
     await loadOpsDashboard();
     await loadOpsNotices();
     await loadDocumentNumberingConfig();
@@ -2169,6 +2646,23 @@
     $("#btnPreviewDigestSource")?.addEventListener("click", () => previewChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDownloadDigestSource")?.addEventListener("click", () => downloadChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnPasteDigestImage")?.addEventListener("click", () => importClipboardImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
+    $("#btnLoadFacilityDashboard")?.addEventListener("click", () => loadFacilityDashboard().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#btnCreateFacilityAsset")?.addEventListener("click", () => createFacilityAsset().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#btnUpdateFacilityAsset")?.addEventListener("click", () => updateFacilityAsset().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#btnDeleteFacilityAsset")?.addEventListener("click", () => deleteFacilityAsset().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#btnClearFacilityAsset")?.addEventListener("click", () => clearFacilityAssetForm());
+    $("#btnCreateFacilityChecklist")?.addEventListener("click", () => createFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
+    $("#btnUpdateFacilityChecklist")?.addEventListener("click", () => updateFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
+    $("#btnDeleteFacilityChecklist")?.addEventListener("click", () => deleteFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
+    $("#btnClearFacilityChecklist")?.addEventListener("click", () => clearFacilityChecklistForm());
+    $("#btnCreateFacilityInspection")?.addEventListener("click", () => createFacilityInspection().catch((error) => setMessage("#facilityInspectionMsg", error.message || String(error), true)));
+    $("#btnUpdateFacilityInspection")?.addEventListener("click", () => updateFacilityInspection().catch((error) => setMessage("#facilityInspectionMsg", error.message || String(error), true)));
+    $("#btnDeleteFacilityInspection")?.addEventListener("click", () => deleteFacilityInspection().catch((error) => setMessage("#facilityInspectionMsg", error.message || String(error), true)));
+    $("#btnClearFacilityInspection")?.addEventListener("click", () => clearFacilityInspectionForm());
+    $("#btnCreateFacilityWorkOrder")?.addEventListener("click", () => createFacilityWorkOrder().catch((error) => setMessage("#facilityWorkOrderMsg", error.message || String(error), true)));
+    $("#btnUpdateFacilityWorkOrder")?.addEventListener("click", () => updateFacilityWorkOrder().catch((error) => setMessage("#facilityWorkOrderMsg", error.message || String(error), true)));
+    $("#btnDeleteFacilityWorkOrder")?.addEventListener("click", () => deleteFacilityWorkOrder().catch((error) => setMessage("#facilityWorkOrderMsg", error.message || String(error), true)));
+    $("#btnClearFacilityWorkOrder")?.addEventListener("click", () => clearFacilityWorkOrderForm());
     $("#btnLoadOpsDashboard")?.addEventListener("click", () => loadOpsDashboard().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
     $("#btnCreateNotice")?.addEventListener("click", () => createNotice().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
     $("#btnUpdateNotice")?.addEventListener("click", () => updateNotice().catch((error) => setMessage("#opsNoticeMsg", error.message || String(error), true)));
@@ -2264,6 +2758,7 @@
     applyHero();
     syncUserTenantDisplay();
     syncOpsWriteState();
+    syncFacilityWriteState();
     syncComplaintDeleteOption();
     $("#filterStatus").value = "접수";
     clearChatDigestImagePreview();
@@ -2272,6 +2767,10 @@
     updateChatDigestHint();
     clearNoticeForm();
     clearComplaintDetail();
+    clearFacilityAssetForm();
+    clearFacilityChecklistForm();
+    clearFacilityInspectionForm();
+    clearFacilityWorkOrderForm();
     clearDocumentForm();
     clearScheduleForm();
     clearVendorForm();

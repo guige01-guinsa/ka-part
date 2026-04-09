@@ -433,10 +433,17 @@ def modules_contracts(request: Request) -> Dict[str, Any]:
             "api_prefix": "/api/ops",
             "auth_modes": ["session"],
         },
+        {
+            "module_key": "facility_ops",
+            "module_name": "시설운영 모듈",
+            "ui_path": "/pwa/",
+            "api_prefix": "/api/facility",
+            "auth_modes": ["session"],
+        },
     ]
     return {
         "ok": True,
-        "allowed_modules": ["complaint_engine", "operations_admin"],
+        "allowed_modules": ["complaint_engine", "operations_admin", "facility_ops"],
         "contracts": contracts,
     }
 

@@ -24,6 +24,7 @@ def app_client(tmp_path, monkeypatch):
         "app.main",
         "app.db",
         "app.engine_db",
+        "app.facility_db",
         "app.legacy_import",
         "app.ops_db",
         "app.voice_db",
@@ -31,6 +32,7 @@ def app_client(tmp_path, monkeypatch):
         "app.ai_service",
         "app.routes.core",
         "app.routes.engine",
+        "app.routes.facility",
         "app.routes.ops",
         "app.routes.voice",
     ):
@@ -38,17 +40,20 @@ def app_client(tmp_path, monkeypatch):
 
     db = importlib.import_module("app.db")
     engine_db = importlib.import_module("app.engine_db")
+    facility_db = importlib.import_module("app.facility_db")
     ops_db = importlib.import_module("app.ops_db")
     voice_db = importlib.import_module("app.voice_db")
 
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "engine_test.db")
     monkeypatch.setattr(engine_db, "DB_PATH", tmp_path / "engine_test.db")
+    monkeypatch.setattr(facility_db, "DB_PATH", tmp_path / "engine_test.db")
     monkeypatch.setattr(ops_db, "DB_PATH", tmp_path / "engine_test.db")
     monkeypatch.setattr(voice_db, "DB_PATH", tmp_path / "engine_test.db")
 
     main = importlib.import_module("app.main")
     db.init_db()
     engine_db.init_engine_db()
+    facility_db.init_facility_db()
     ops_db.init_ops_db()
 
     with TestClient(main.app) as client:
@@ -114,7 +119,7 @@ def test_session_admin_can_run_new_mvp_engine_and_legacy_api_is_gone(app_client)
 
     contracts = client.get("/api/modules/contracts")
     assert contracts.status_code == 200
-    assert contracts.json()["allowed_modules"] == ["complaint_engine", "operations_admin"]
+    assert contracts.json()["allowed_modules"] == ["complaint_engine", "operations_admin", "facility_ops"]
 
     assert client.get("/api/v1/complaints").status_code == 404
 
@@ -773,6 +778,124 @@ def test_operations_admin_module_blocks_reader_write_access(app_client) -> None:
     assert allowed_read.status_code == 200
 
 
+def test_facility_ops_module_supports_crud_and_dashboard(app_client) -> None:
+    client = app_client
+    _bootstrap_admin_and_tenant(client)
+
+    asset = client.post(
+        "/api/facility/assets",
+        json={
+            "tenant_id": "ys_thesharp",
+            "asset_code": "ELV-A-25",
+            "asset_name": "상가A동 25호기 승강기",
+            "category": "승강기",
+            "location_name": "상가A동 1층",
+            "lifecycle_state": "운영중",
+            "next_inspection_date": "2026-04-30",
+        },
+    )
+    assert asset.status_code == 200
+    asset_id = int(asset.json()["item"]["id"])
+
+    checklist = client.post(
+        "/api/facility/checklists",
+        json={
+            "tenant_id": "ys_thesharp",
+            "checklist_key": "ELV-MONTHLY",
+            "title": "승강기 월간 점검표",
+            "task_type": "월간점검",
+            "version_no": "1",
+            "items": ["도어 상태 확인", "비상통화 확인"],
+        },
+    )
+    assert checklist.status_code == 200
+    assert checklist.json()["item"]["items"] == ["도어 상태 확인", "비상통화 확인"]
+
+    qr_asset = client.post(
+        "/api/facility/qr_assets",
+        json={
+            "tenant_id": "ys_thesharp",
+            "qr_id": "QR-ELV-A-25",
+            "asset_id": asset_id,
+            "asset_name_snapshot": "상가A동 25호기 승강기",
+            "location_snapshot": "상가A동 1층",
+            "checklist_key": "ELV-MONTHLY",
+        },
+    )
+    assert qr_asset.status_code == 200
+    qr_asset_id = int(qr_asset.json()["item"]["id"])
+
+    inspection = client.post(
+        "/api/facility/inspections",
+        json={
+            "tenant_id": "ys_thesharp",
+            "title": "상가A동 25호기 월간 점검",
+            "asset_id": asset_id,
+            "qr_asset_id": qr_asset_id,
+            "checklist_key": "ELV-MONTHLY",
+            "inspector": "시설과장",
+            "inspected_at": "2026-04-09 10:30:00",
+            "result_status": "주의",
+            "notes": "도어 개폐 속도 점검 필요",
+            "measurement": {"door_speed": "slow"},
+        },
+    )
+    assert inspection.status_code == 200
+    inspection_id = int(inspection.json()["item"]["id"])
+    assert inspection.json()["item"]["measurement"]["door_speed"] == "slow"
+
+    work_order = client.post(
+        "/api/facility/work_orders",
+        json={
+            "tenant_id": "ys_thesharp",
+            "title": "승강기 도어 조정 작업",
+            "description": "월간 점검 후속 조치",
+            "asset_id": asset_id,
+            "qr_asset_id": qr_asset_id,
+            "inspection_id": inspection_id,
+            "category": "점검후속",
+            "priority": "높음",
+            "status": "접수",
+            "assignee": "현장1",
+            "due_date": "2026-04-10",
+            "is_escalated": True,
+        },
+    )
+    assert work_order.status_code == 200
+    work_order_id = int(work_order.json()["item"]["id"])
+
+    dashboard = client.get("/api/facility/dashboard?tenant_id=ys_thesharp")
+    assert dashboard.status_code == 200
+    item = dashboard.json()["item"]
+    assert item["active_assets"] == 1
+    assert item["active_qr_assets"] == 1
+    assert item["open_work_orders"] == 1
+    assert item["month_inspections"] == 1
+    assert len(item["urgent_work_orders"]) == 1
+
+    listed_assets = client.get("/api/facility/assets?tenant_id=ys_thesharp&category=승강기")
+    assert listed_assets.status_code == 200
+    assert listed_assets.json()["items"][0]["asset_code"] == "ELV-A-25"
+
+    listed_checklists = client.get("/api/facility/checklists?tenant_id=ys_thesharp")
+    assert listed_checklists.status_code == 200
+    assert listed_checklists.json()["items"][0]["item_count"] == 2
+
+    updated_work_order = client.patch(
+        f"/api/facility/work_orders/{work_order_id}",
+        json={"tenant_id": "ys_thesharp", "status": "진행중", "assignee": "현장2"},
+    )
+    assert updated_work_order.status_code == 200
+    assert updated_work_order.json()["item"]["status"] == "진행중"
+
+    deleted_qr = client.request(
+        "DELETE",
+        f"/api/facility/qr_assets/{qr_asset_id}",
+        json={"tenant_id": "ys_thesharp"},
+    )
+    assert deleted_qr.status_code == 200
+
+
 def test_document_numbering_config_is_tenant_configurable(app_client) -> None:
     client = app_client
     _bootstrap_admin_and_tenant(client)
@@ -902,6 +1025,15 @@ def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_p
                 "documents": [{"title": "월간 운영보고", "category": "보고", "status": "완료", "reference_no": "OPS-1"}],
                 "vendors": [{"company_name": "한빛설비", "service_type": "설비 유지보수", "status": "활성"}],
                 "schedules": [{"title": "옥상 방수 점검", "schedule_type": "점검", "status": "예정", "vendor_name": "한빛설비", "vendor_service_type": "설비 유지보수"}],
+                "facility_assets": [
+                    {"asset_code": "MECH-01", "asset_name": "지하 기계실 펌프", "category": "기계", "location_name": "지하1층"}
+                ],
+                "facility_checklists": [
+                    {"checklist_key": "PUMP-MONTHLY", "title": "펌프 월간 점검표", "task_type": "월간점검", "items": ["진동 확인", "누수 확인"]}
+                ],
+                "facility_work_orders": [
+                    {"title": "펌프 진동 보수", "category": "점검후속", "priority": "높음", "status": "접수"}
+                ],
             },
             ensure_ascii=False,
         ),
@@ -920,6 +1052,9 @@ def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_p
     assert summary["documents"]["created"] == 1
     assert summary["vendors"]["created"] == 1
     assert summary["schedules"]["created"] == 1
+    assert summary["facility_assets"]["created"] == 1
+    assert summary["facility_checklists"]["created"] == 1
+    assert summary["facility_work_orders"]["created"] == 1
 
     legacy_sqlite = tmp_path / "legacy.sqlite"
     con = sqlite3.connect(str(legacy_sqlite))
@@ -979,6 +1114,14 @@ def test_legacy_import_supports_json_bundle_and_sqlite_aliases(app_client, tmp_p
     notice_map = {item["title"]: item for item in notices.json()["items"]}
     assert notice_map["정기 단수 안내"]["category"] == "기안"
     assert notice_map["소방훈련 안내"]["category"] == "작업내용"
+
+    facility_assets = app_client.get("/api/facility/assets?tenant_id=ys_thesharp")
+    assert facility_assets.status_code == 200
+    assert any(item["asset_code"] == "MECH-01" for item in facility_assets.json()["items"])
+
+    facility_checklists = app_client.get("/api/facility/checklists?tenant_id=ys_thesharp")
+    assert facility_checklists.status_code == 200
+    assert any(item["checklist_key"] == "PUMP-MONTHLY" for item in facility_checklists.json()["items"])
 
 
 def test_legacy_import_supports_facility_db_schema(app_client, tmp_path) -> None:

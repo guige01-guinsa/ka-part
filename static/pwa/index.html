@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260409p1" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260409p3" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -654,6 +654,372 @@
       </div>
     </section>
 
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Facility</p>
+          <h2>시설운영 대시보드</h2>
+          <p class="panel-copy">자산, 점검표, 점검이력, 작업지시를 기존보다 단순하고 안정적인 구조로 관리합니다.</p>
+        </div>
+        <button id="btnLoadFacilityDashboard" class="ghost-btn" type="button">시설 새로고침</button>
+      </div>
+      <div class="ops-metrics">
+        <article class="metric-card">
+          <span>운영 자산</span>
+          <strong id="facilityMetricAssets">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>활성 QR</span>
+          <strong id="facilityMetricQr">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>열린 작업지시</span>
+          <strong id="facilityMetricWorkOrders">0</strong>
+        </article>
+        <article class="metric-card">
+          <span>당월 점검</span>
+          <strong id="facilityMetricInspections">0</strong>
+        </article>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">점검 예정 자산</div>
+          <div id="facilityDueAssets" class="timeline"></div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">긴급 작업지시</div>
+          <div id="facilityUrgentWorkOrders" class="timeline"></div>
+        </div>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">최근 점검</div>
+          <div id="facilityRecentInspections" class="timeline"></div>
+        </div>
+        <div class="detail-stack">
+          <div class="subhead">최근 점검표</div>
+          <div id="facilityRecentChecklists" class="timeline"></div>
+          <div id="facilityReadOnlyHint" class="detail-block">시설운영 권한을 확인하는 중입니다.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel reveal">
+      <div class="panel-head">
+        <div>
+          <p class="section-kicker">Facility Admin</p>
+          <h2>시설 자산 및 점검표 관리</h2>
+        </div>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">자산 관리</div>
+          <div id="facilityAssetDetail" class="detail-block">자산을 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>자산코드</span>
+              <input id="facilityAssetCode" type="text" maxlength="80" placeholder="예: ELV-A-25" />
+            </label>
+            <label class="field">
+              <span>자산명</span>
+              <input id="facilityAssetName" type="text" maxlength="160" placeholder="예: 상가A동 25호기 승강기" />
+            </label>
+            <label class="field">
+              <span>분류</span>
+              <select id="facilityAssetCategory">
+                <option value="승강기">승강기</option>
+                <option value="전기">전기</option>
+                <option value="기계">기계</option>
+                <option value="소방">소방</option>
+                <option value="건축">건축</option>
+                <option value="미화">미화</option>
+                <option value="보안">보안</option>
+                <option value="공용부">공용부</option>
+                <option value="기타">기타</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="facilityAssetState">
+                <option value="운영중">운영중</option>
+                <option value="점검중">점검중</option>
+                <option value="중지">중지</option>
+                <option value="폐기">폐기</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>위치</span>
+              <input id="facilityAssetLocation" type="text" maxlength="160" placeholder="예: 상가A동 1층" />
+            </label>
+            <label class="field">
+              <span>QR ID</span>
+              <input id="facilityAssetQrId" type="text" maxlength="80" placeholder="예: QR-ELV-A-25" />
+            </label>
+            <label class="field">
+              <span>점검표 Key</span>
+              <input id="facilityAssetChecklistKey" type="text" maxlength="80" placeholder="예: ELV-MONTHLY" />
+            </label>
+            <label class="field">
+              <span>다음 점검일</span>
+              <input id="facilityAssetNextDate" type="date" />
+            </label>
+            <label class="field field-span">
+              <span>메모</span>
+              <textarea id="facilityAssetNote" rows="3" placeholder="자산 특이사항, 설치 메모"></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateFacilityAsset" data-facility-write="1" class="action-btn" type="button">자산 등록</button>
+            <button id="btnUpdateFacilityAsset" data-facility-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteFacilityAsset" data-facility-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearFacilityAsset" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="facilityAssetMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>코드</th>
+                  <th>자산명</th>
+                  <th>분류</th>
+                  <th>위치</th>
+                  <th>상태</th>
+                </tr>
+              </thead>
+              <tbody id="facilityAssetsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="detail-stack">
+          <div class="subhead">점검표 관리</div>
+          <div id="facilityChecklistDetail" class="detail-block">점검표를 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>점검표 Key</span>
+              <input id="facilityChecklistKey" type="text" maxlength="80" placeholder="예: ELV-MONTHLY" />
+            </label>
+            <label class="field">
+              <span>점검표 제목</span>
+              <input id="facilityChecklistTitle" type="text" maxlength="160" placeholder="예: 승강기 월간 점검표" />
+            </label>
+            <label class="field">
+              <span>작업유형</span>
+              <input id="facilityChecklistTaskType" type="text" maxlength="80" placeholder="예: 월간점검" />
+            </label>
+            <label class="field">
+              <span>버전</span>
+              <input id="facilityChecklistVersion" type="text" maxlength="40" placeholder="예: 1" />
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="facilityChecklistState">
+                <option value="운영중">운영중</option>
+                <option value="점검중">점검중</option>
+                <option value="중지">중지</option>
+                <option value="폐기">폐기</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>원본</span>
+              <input id="facilityChecklistSource" type="text" maxlength="40" placeholder="예: manual" />
+            </label>
+            <label class="field field-span">
+              <span>점검 항목</span>
+              <textarea id="facilityChecklistItems" rows="4" placeholder="한 줄에 한 항목씩 입력하세요."></textarea>
+            </label>
+            <label class="field field-span">
+              <span>메모</span>
+              <textarea id="facilityChecklistNote" rows="3" placeholder="점검표 운영 메모"></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateFacilityChecklist" data-facility-write="1" class="action-btn" type="button">점검표 등록</button>
+            <button id="btnUpdateFacilityChecklist" data-facility-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteFacilityChecklist" data-facility-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearFacilityChecklist" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="facilityChecklistMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>제목</th>
+                  <th>유형</th>
+                  <th>상태</th>
+                  <th>항목수</th>
+                </tr>
+              </thead>
+              <tbody id="facilityChecklistsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="stage-grid">
+        <div class="detail-stack">
+          <div class="subhead">점검 기록</div>
+          <div id="facilityInspectionDetail" class="detail-block">점검 기록을 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>점검 제목</span>
+              <input id="facilityInspectionTitle" type="text" maxlength="200" placeholder="예: 상가A동 25호기 월간 점검" />
+            </label>
+            <label class="field">
+              <span>자산</span>
+              <select id="facilityInspectionAssetId">
+                <option value="">자산 미지정</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>점검표 Key</span>
+              <input id="facilityInspectionChecklistKey" type="text" maxlength="80" placeholder="예: ELV-MONTHLY" />
+            </label>
+            <label class="field">
+              <span>점검자</span>
+              <input id="facilityInspectionInspector" type="text" maxlength="80" placeholder="예: 시설과장" />
+            </label>
+            <label class="field">
+              <span>점검일시</span>
+              <input id="facilityInspectionAt" type="datetime-local" />
+            </label>
+            <label class="field">
+              <span>결과</span>
+              <select id="facilityInspectionStatus">
+                <option value="정상">정상</option>
+                <option value="주의">주의</option>
+                <option value="조치필요">조치필요</option>
+              </select>
+            </label>
+            <label class="field field-span">
+              <span>점검 메모</span>
+              <textarea id="facilityInspectionNotes" rows="3" placeholder="점검 결과와 특이사항"></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateFacilityInspection" data-facility-write="1" class="action-btn" type="button">점검 등록</button>
+            <button id="btnUpdateFacilityInspection" data-facility-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteFacilityInspection" data-facility-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearFacilityInspection" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="facilityInspectionMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>점검명</th>
+                  <th>자산</th>
+                  <th>결과</th>
+                  <th>점검일시</th>
+                  <th>점검자</th>
+                </tr>
+              </thead>
+              <tbody id="facilityInspectionsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="detail-stack">
+          <div class="subhead">작업지시 관리</div>
+          <div id="facilityWorkOrderDetail" class="detail-block">작업지시를 선택하거나 새로 등록하세요.</div>
+          <div class="form-grid compact-grid">
+            <label class="field">
+              <span>작업 제목</span>
+              <input id="facilityWorkOrderTitle" type="text" maxlength="200" placeholder="예: 승강기 도어 조정 작업" />
+            </label>
+            <label class="field">
+              <span>자산</span>
+              <select id="facilityWorkOrderAssetId">
+                <option value="">자산 미지정</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>점검 연결</span>
+              <select id="facilityWorkOrderInspectionId">
+                <option value="">점검 미지정</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>분류</span>
+              <select id="facilityWorkOrderCategory">
+                <option value="점검후속">점검후속</option>
+                <option value="고장수리">고장수리</option>
+                <option value="예방정비">예방정비</option>
+                <option value="외주요청">외주요청</option>
+                <option value="기타">기타</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>우선순위</span>
+              <select id="facilityWorkOrderPriority">
+                <option value="낮음">낮음</option>
+                <option value="보통">보통</option>
+                <option value="높음">높음</option>
+                <option value="긴급">긴급</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>상태</span>
+              <select id="facilityWorkOrderStatus">
+                <option value="접수">접수</option>
+                <option value="진행중">진행중</option>
+                <option value="완료">완료</option>
+                <option value="보류">보류</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>담당자</span>
+              <input id="facilityWorkOrderAssignee" type="text" maxlength="80" placeholder="예: 현장1" />
+            </label>
+            <label class="field">
+              <span>보고자</span>
+              <input id="facilityWorkOrderReporter" type="text" maxlength="80" placeholder="예: 시설과장" />
+            </label>
+            <label class="field">
+              <span>기한</span>
+              <input id="facilityWorkOrderDueDate" type="date" />
+            </label>
+            <label class="field">
+              <span>긴급에스컬레이션</span>
+              <label class="check-all">
+                <input id="facilityWorkOrderEscalated" type="checkbox" />
+                <span>즉시 대응 필요</span>
+              </label>
+            </label>
+            <label class="field field-span">
+              <span>작업 내용</span>
+              <textarea id="facilityWorkOrderDescription" rows="3" placeholder="작업지시 내용을 입력하세요."></textarea>
+            </label>
+            <label class="field field-span">
+              <span>조치 메모</span>
+              <textarea id="facilityWorkOrderResolution" rows="3" placeholder="완료 후 조치 내용을 기록합니다."></textarea>
+            </label>
+          </div>
+          <div class="cta-row">
+            <button id="btnCreateFacilityWorkOrder" data-facility-write="1" class="action-btn" type="button">작업지시 등록</button>
+            <button id="btnUpdateFacilityWorkOrder" data-facility-write="1" class="ghost-btn" type="button">선택 수정</button>
+            <button id="btnDeleteFacilityWorkOrder" data-facility-write="1" class="action-btn action-danger" type="button">선택 삭제</button>
+            <button id="btnClearFacilityWorkOrder" class="ghost-btn" type="button">입력 초기화</button>
+          </div>
+          <div id="facilityWorkOrderMsg" class="inline-message" aria-live="polite"></div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>작업명</th>
+                  <th>자산</th>
+                  <th>우선순위</th>
+                  <th>상태</th>
+                  <th>기한</th>
+                </tr>
+              </thead>
+              <tbody id="facilityWorkOrdersTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="userPanel" class="panel reveal hidden">
       <div class="panel-head">
         <div>
@@ -822,6 +1188,6 @@
   </main>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260409p2"></script>
+  <script src="/pwa/portal.js?v=20260409p3"></script>
 </body>
 </html>
