@@ -4,6 +4,7 @@
   const $ = (sel) => document.querySelector(sel);
   const STATUS_VALUES = ["접수", "처리중", "완료", "이월"];
   const MAX_CHAT_DIGEST_IMAGES = 30;
+  const MAX_FACILITY_ASSET_IMAGES = 3;
   const DEFAULT_DOCUMENT_CATEGORY_VALUES = [
     "기안지(10만원 이상)",
     "구매요청서(10만원 이하)",
@@ -67,8 +68,9 @@
   let selectedFacilityChecklistId = 0;
   let selectedFacilityInspectionId = 0;
   let selectedFacilityWorkOrderId = 0;
-  let pendingFacilityAssetImageFile = null;
-  let facilityAssetPreviewUrl = "";
+  let pendingFacilityAssetImages = [];
+  let facilityAssetPreviewUrls = [];
+  let facilityAssetPendingImageSequence = 0;
   let documentNumberingConfig = null;
   let documentCatalog = {
     categories: [...DEFAULT_DOCUMENT_CATEGORY_VALUES],
@@ -120,6 +122,14 @@
     const dt = new Date(`${raw}T00:00:00`);
     if (Number.isNaN(dt.getTime())) return raw;
     return dt.toLocaleDateString("ko-KR");
+  }
+
+  function formatFileSize(value) {
+    const size = Number(value || 0);
+    if (!Number.isFinite(size) || size <= 0) return "";
+    if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
+    if (size >= 1024) return `${Math.round(size / 1024)}KB`;
+    return `${size}B`;
   }
 
   function isMobileViewport() {
@@ -1006,14 +1016,15 @@
     ].join("");
   }
 
-  function revokeFacilityAssetPreviewUrl() {
-    if (!facilityAssetPreviewUrl) return;
-    try {
-      URL.revokeObjectURL(facilityAssetPreviewUrl);
-    } catch (_) {
-      // ignore revoke errors for already released object URLs
+  function revokeFacilityAssetPreviewUrls() {
+    for (const url of facilityAssetPreviewUrls) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch (_) {
+        // ignore revoke errors for already released object URLs
+      }
     }
-    facilityAssetPreviewUrl = "";
+    facilityAssetPreviewUrls = [];
   }
 
   function clearFacilityAssetImageInputs() {
@@ -1026,65 +1037,235 @@
     return facilityAssets.find((item) => Number(item.id || 0) === selectedFacilityAssetId) || null;
   }
 
-  function renderFacilityAssetImagePreview(item = null, sourceLabel = "") {
+  function nextFacilityAssetPendingImageKey() {
+    facilityAssetPendingImageSequence += 1;
+    return `asset-pending-${Date.now()}-${facilityAssetPendingImageSequence}`;
+  }
+
+  function normalizeFacilityAssetImages(item = null) {
+    const images = Array.isArray(item?.images) ? item.images : [];
+    if (!images.length) {
+      const legacyUrl = String(item?.image_url || "").trim();
+      if (!legacyUrl) return [];
+      return [{
+        id: 0,
+        image_url: legacyUrl,
+        image_mime_type: String(item?.image_mime_type || "").trim(),
+        image_size_bytes: Number(item?.image_size_bytes || 0) || 0,
+        is_primary: true,
+        sort_order: 0,
+      }];
+    }
+    const hasPrimary = images.some((image) => !!image?.is_primary);
+    return [...images]
+      .map((image, index) => ({
+        id: Number(image?.id || 0),
+        image_url: String(image?.image_url || image?.file_url || "").trim(),
+        image_mime_type: String(image?.image_mime_type || image?.mime_type || "").trim(),
+        image_size_bytes: Number(image?.image_size_bytes || image?.size_bytes || 0) || 0,
+        is_primary: hasPrimary ? !!image?.is_primary : index === 0,
+        sort_order: Number(image?.sort_order || index) || 0,
+      }))
+      .filter((image) => !!image.image_url)
+      .sort((left, right) => {
+        if (!!left.is_primary !== !!right.is_primary) return left.is_primary ? -1 : 1;
+        return Number(left.sort_order || 0) - Number(right.sort_order || 0);
+      });
+  }
+
+  function ensurePendingFacilityAssetPrimary(item = null) {
+    if (!pendingFacilityAssetImages.length) return;
+    if (pendingFacilityAssetImages.some((image) => image.is_primary)) return;
+    if (!normalizeFacilityAssetImages(item || selectedFacilityAssetRecord()).length) {
+      pendingFacilityAssetImages[0].is_primary = true;
+    }
+  }
+
+  function facilityAssetCombinedPreviewItems(item = null) {
+    const savedImages = normalizeFacilityAssetImages(item);
+    ensurePendingFacilityAssetPrimary(item);
+    return [
+      ...savedImages.map((image, index) => ({
+        ...image,
+        source: "saved",
+        sort_index: index,
+      })),
+      ...pendingFacilityAssetImages.map((image, index) => ({
+        key: image.key,
+        image_url: "",
+        image_mime_type: String(image.file?.type || "").trim(),
+        image_size_bytes: Number(image.file?.size || 0) || 0,
+        is_primary: !!image.is_primary,
+        sort_order: index + savedImages.length,
+        source: "pending",
+        sort_index: index,
+        file: image.file,
+        file_name: String(image.file?.name || `image-${index + 1}`),
+        source_label: String(image.source_label || ""),
+      })),
+    ].sort((left, right) => {
+      if (!!left.is_primary !== !!right.is_primary) return left.is_primary ? -1 : 1;
+      if (left.source !== right.source) return left.source === "saved" ? -1 : 1;
+      return Number(left.sort_order || left.sort_index || 0) - Number(right.sort_order || right.sort_index || 0);
+    });
+  }
+
+  function renderFacilityAssetImagePreview(item = null) {
     const preview = $("#facilityAssetImagePreview");
     const hint = $("#facilityAssetImageHint");
     const clearButton = $("#btnFacilityAssetClearImageSelection");
-    const deleteButton = $("#btnFacilityAssetDeleteImage");
+    const cameraButton = $("#btnFacilityAssetCamera");
+    const fileButton = $("#btnFacilityAssetFile");
     if (!preview || !hint) return;
 
-    revokeFacilityAssetPreviewUrl();
+    const savedImages = normalizeFacilityAssetImages(item);
+    const previewItems = facilityAssetCombinedPreviewItems(item);
+    const hasPendingPrimary = pendingFacilityAssetImages.some((image) => image.is_primary);
+    const totalCount = savedImages.length + pendingFacilityAssetImages.length;
+    const remainingCount = Math.max(0, MAX_FACILITY_ASSET_IMAGES - totalCount);
+
+    revokeFacilityAssetPreviewUrls();
     preview.classList.remove("empty-state");
 
-    if (pendingFacilityAssetImageFile instanceof File) {
-      facilityAssetPreviewUrl = URL.createObjectURL(pendingFacilityAssetImageFile);
-      preview.innerHTML = [
-        '<article class="asset-image-card">',
-        `<img src="${escapeHtml(facilityAssetPreviewUrl)}" alt="자산 대표 이미지 미리보기" loading="lazy" />`,
-        `<div class="asset-image-meta">${escapeHtml(pendingFacilityAssetImageFile.name || "selected-image")}</div>`,
-        "</article>",
-      ].join("");
-      hint.textContent = `${sourceLabel || "선택한 이미지"}가 준비되었습니다. 자산 등록 또는 선택 수정 시 저장됩니다.`;
-      if (clearButton) clearButton.classList.remove("hidden");
-      if (deleteButton) deleteButton.classList.add("hidden");
-      return;
-    }
-
-    const imageUrl = String(item?.image_url || "").trim();
-    if (imageUrl) {
-      preview.innerHTML = [
-        '<article class="asset-image-card">',
-        `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item?.asset_name || "자산 대표 이미지")}" loading="lazy" />`,
-        '<div class="asset-image-meta">저장된 대표 이미지입니다. 새 이미지를 선택하면 교체됩니다.</div>',
-        "</article>",
-      ].join("");
-      hint.textContent = "저장된 대표 이미지입니다. 카메라 촬영 또는 파일 이미지 선택으로 교체할 수 있습니다.";
+    if (!previewItems.length) {
+      preview.classList.add("empty-state");
+      preview.innerHTML = `대표 이미지를 포함해 최대 ${MAX_FACILITY_ASSET_IMAGES}장까지 등록할 수 있습니다.`;
+      hint.textContent = "카메라 촬영과 파일 이미지 선택을 섞어서 등록할 수 있습니다.";
       if (clearButton) clearButton.classList.add("hidden");
-      if (deleteButton) deleteButton.classList.remove("hidden");
+      if (cameraButton) cameraButton.disabled = false;
+      if (fileButton) fileButton.disabled = false;
       return;
     }
 
-    preview.classList.add("empty-state");
-    preview.textContent = "대표 이미지 미리보기가 여기에 표시됩니다.";
-    hint.textContent = "대표 이미지가 없습니다. 카메라 촬영 또는 파일 이미지를 선택하세요.";
-    if (clearButton) clearButton.classList.add("hidden");
-    if (deleteButton) deleteButton.classList.add("hidden");
+    preview.innerHTML = previewItems.map((image, index) => {
+      const isPending = image.source === "pending";
+      const highlightPrimary = !!image.is_primary && (!hasPendingPrimary || isPending);
+      const imageUrl = isPending ? URL.createObjectURL(image.file) : String(image.image_url || "").trim();
+      if (isPending) facilityAssetPreviewUrls.push(imageUrl);
+      const badgeLabel = image.is_primary
+        ? (isPending ? (savedImages.length ? "대표 예정" : "대표 이미지") : (hasPendingPrimary ? "현재 대표" : "대표 이미지"))
+        : `이미지 ${index + 1}`;
+      const statusLabel = isPending ? "저장 전" : "저장됨";
+      const meta = [statusLabel, formatFileSize(image.image_size_bytes || image.file?.size || 0), isPending ? image.source_label : ""]
+        .filter(Boolean)
+        .join(" · ");
+      const actions = isPending
+        ? [
+            !image.is_primary
+              ? `<button class="ghost-btn asset-image-card-btn" type="button" data-pending-primary="${escapeHtml(image.key || "")}">대표로 지정</button>`
+              : '<button class="action-btn action-secondary asset-image-card-btn" type="button" disabled>대표 예정</button>',
+            `<button class="ghost-btn asset-image-card-btn" type="button" data-pending-remove="${escapeHtml(image.key || "")}">선택 취소</button>`,
+          ].join("")
+        : [
+            !image.is_primary && image.id
+              ? `<button class="ghost-btn asset-image-card-btn" type="button" data-image-primary="${Number(image.id || 0)}">대표로 지정</button>`
+              : '<button class="action-btn action-secondary asset-image-card-btn" type="button" disabled>대표 이미지</button>',
+            image.id
+              ? `<button class="ghost-btn asset-image-card-btn" type="button" data-image-delete="${Number(image.id || 0)}">삭제</button>`
+              : "",
+          ].join("");
+      return [
+        `<article class="asset-image-card${highlightPrimary ? " is-primary" : ""}">`,
+        '<div class="asset-image-card-head">',
+        `<span class="asset-image-badge${highlightPrimary ? " is-primary" : ""}">${escapeHtml(badgeLabel)}</span>`,
+        `<span class="asset-image-state">${escapeHtml(statusLabel)}</span>`,
+        "</div>",
+        `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(isPending ? image.file_name || "자산 이미지" : item?.asset_name || "자산 이미지")}" loading="lazy" />`,
+        `<div class="asset-image-meta">${escapeHtml(meta || "-")}</div>`,
+        `<div class="asset-image-card-actions">${actions}</div>`,
+        "</article>",
+      ].join("");
+    }).join("");
+
+    if (pendingFacilityAssetImages.length) {
+      hint.textContent = `총 ${totalCount}/${MAX_FACILITY_ASSET_IMAGES}장입니다. 저장 전 이미지 ${pendingFacilityAssetImages.length}장은 자산 등록 또는 선택 수정 시 함께 저장됩니다.`;
+    } else {
+      hint.textContent = `총 ${totalCount}/${MAX_FACILITY_ASSET_IMAGES}장이 저장되어 있습니다. 카드에서 대표 이미지 지정과 개별 삭제가 가능합니다.`;
+    }
+    if (remainingCount > 0) {
+      hint.textContent += ` ${remainingCount}장 더 추가할 수 있습니다.`;
+    }
+    if (clearButton) clearButton.classList.toggle("hidden", !pendingFacilityAssetImages.length);
+    if (cameraButton) cameraButton.disabled = remainingCount <= 0;
+    if (fileButton) fileButton.disabled = remainingCount <= 0;
   }
 
-  function clearPendingFacilityAssetImage(item = null) {
-    pendingFacilityAssetImageFile = null;
+  function clearPendingFacilityAssetImages(item = null) {
+    pendingFacilityAssetImages = [];
     clearFacilityAssetImageInputs();
     renderFacilityAssetImagePreview(item || selectedFacilityAssetRecord());
   }
 
-  function queueFacilityAssetImage(file, sourceLabel = "") {
-    if (!(file instanceof File)) return;
-    if (!String(file.type || "").startsWith("image/")) {
-      throw new Error("이미지 파일만 선택할 수 있습니다.");
+  function queueFacilityAssetImages(files, sourceLabel = "") {
+    const incomingFiles = Array.from(files || []).filter((file) => file instanceof File);
+    if (!incomingFiles.length) {
+      return { added: 0, duplicates: 0, overflow: 0, total: normalizeFacilityAssetImages(selectedFacilityAssetRecord()).length + pendingFacilityAssetImages.length };
     }
-    pendingFacilityAssetImageFile = file;
+    const savedImages = normalizeFacilityAssetImages(selectedFacilityAssetRecord());
+    const availableSlots = Math.max(0, MAX_FACILITY_ASSET_IMAGES - savedImages.length - pendingFacilityAssetImages.length);
+    if (availableSlots <= 0) {
+      throw new Error(`자산 이미지는 대표 이미지를 포함해 최대 ${MAX_FACILITY_ASSET_IMAGES}장까지 등록할 수 있습니다.`);
+    }
+    const seen = new Set(pendingFacilityAssetImages.map((image) => image.signature));
+    const addedImages = [];
+    let duplicates = 0;
+    let overflow = 0;
+
+    for (const file of incomingFiles) {
+      if (!String(file.type || "").startsWith("image/")) {
+        throw new Error("이미지 파일만 선택할 수 있습니다.");
+      }
+      const signature = fileSignature(file);
+      if (seen.has(signature)) {
+        duplicates += 1;
+        continue;
+      }
+      if (addedImages.length >= availableSlots) {
+        overflow += 1;
+        continue;
+      }
+      seen.add(signature);
+      addedImages.push({
+        key: nextFacilityAssetPendingImageKey(),
+        file,
+        signature,
+        source_label: sourceLabel || "선택 이미지",
+        is_primary: false,
+      });
+    }
+
+    if (!addedImages.length) {
+      throw new Error(duplicates ? "같은 이미지는 한 번만 선택할 수 있습니다." : `자산 이미지는 대표 이미지를 포함해 최대 ${MAX_FACILITY_ASSET_IMAGES}장까지 등록할 수 있습니다.`);
+    }
+
+    pendingFacilityAssetImages = [...pendingFacilityAssetImages, ...addedImages];
+    ensurePendingFacilityAssetPrimary(selectedFacilityAssetRecord());
     clearFacilityAssetImageInputs();
-    renderFacilityAssetImagePreview(selectedFacilityAssetRecord(), sourceLabel);
+    renderFacilityAssetImagePreview(selectedFacilityAssetRecord());
+    return {
+      added: addedImages.length,
+      duplicates,
+      overflow,
+      total: savedImages.length + pendingFacilityAssetImages.length,
+    };
+  }
+
+  function markPendingFacilityAssetImagePrimary(key) {
+    const targetKey = String(key || "");
+    if (!targetKey) return;
+    pendingFacilityAssetImages = pendingFacilityAssetImages.map((image) => ({
+      ...image,
+      is_primary: image.key === targetKey,
+    }));
+    renderFacilityAssetImagePreview(selectedFacilityAssetRecord());
+  }
+
+  function removePendingFacilityAssetImage(key) {
+    const targetKey = String(key || "");
+    if (!targetKey) return;
+    pendingFacilityAssetImages = pendingFacilityAssetImages.filter((image) => image.key !== targetKey);
+    ensurePendingFacilityAssetPrimary(selectedFacilityAssetRecord());
+    renderFacilityAssetImagePreview(selectedFacilityAssetRecord());
   }
 
   function clearFacilityAssetForm() {
@@ -1102,7 +1283,7 @@
     $("#facilityAssetNextDate").value = "";
     $("#facilityAssetNote").value = "";
     $("#facilityAssetDetail").textContent = "자산을 선택하거나 새로 등록하세요.";
-    clearPendingFacilityAssetImage(null);
+    clearPendingFacilityAssetImages(null);
   }
 
   function clearFacilityChecklistForm() {
@@ -1147,8 +1328,15 @@
     $("#facilityWorkOrderDetail").textContent = "작업지시를 선택하거나 새로 등록하세요.";
   }
 
-  function renderFacilityAssetDetail(item) {
-    selectedFacilityAssetId = Number(item.id || 0);
+  function renderFacilityAssetDetail(item, options = {}) {
+    const preservePending = !!options.preservePending;
+    const nextAssetId = Number(item.id || 0);
+    const previousAssetId = Number(selectedFacilityAssetId || 0);
+    if (!preservePending && (previousAssetId !== nextAssetId || previousAssetId === 0)) {
+      pendingFacilityAssetImages = [];
+      clearFacilityAssetImageInputs();
+    }
+    selectedFacilityAssetId = nextAssetId;
     $("#facilityAssetCode").value = String(item.asset_code || "");
     $("#facilityAssetName").value = String(item.asset_name || "");
     $("#facilityAssetCategory").value = String(item.category || "기타");
@@ -1161,11 +1349,21 @@
     $("#facilityAssetChecklistKey").value = String(item.checklist_key || "");
     $("#facilityAssetNextDate").value = String(item.next_inspection_date || "");
     $("#facilityAssetNote").value = String(item.note || "");
-    pendingFacilityAssetImageFile = null;
-    clearFacilityAssetImageInputs();
+    const images = normalizeFacilityAssetImages(item);
     renderFacilityAssetImagePreview(item);
     $("#facilityAssetDetail").innerHTML = [
-      item.image_url ? `<div class="detail-media"><img class="detail-inline-image" src="${escapeHtml(item.image_url)}" alt="${escapeHtml(item.asset_name || "자산 대표 이미지")}" loading="lazy" /></div>` : "",
+      images.length
+        ? [
+            '<div class="detail-media asset-detail-gallery">',
+            ...images.map((image, index) => [
+              `<article class="asset-detail-tile${image.is_primary ? " is-primary" : ""}">`,
+              `<img class="detail-inline-image" src="${escapeHtml(image.image_url)}" alt="${escapeHtml(item.asset_name || "자산 이미지")}" loading="lazy" />`,
+              `<div class="asset-image-meta">${escapeHtml(image.is_primary ? "대표 이미지" : `이미지 ${index + 1}`)}${image.image_size_bytes ? ` · ${escapeHtml(formatFileSize(image.image_size_bytes))}` : ""}</div>`,
+              "</article>",
+            ].join("")),
+            "</div>",
+          ].join("")
+        : "",
       `<strong>${escapeHtml(item.asset_name || "-")}</strong>`,
       `코드: ${escapeHtml(item.asset_code || "-")}`,
       `분류: ${escapeHtml(item.category || "-")}`,
@@ -1260,32 +1458,83 @@
     };
   }
 
-  async function uploadFacilityAssetImage(assetId) {
-    if (!pendingFacilityAssetImageFile) return null;
+  async function uploadPendingFacilityAssetImages(assetId) {
+    if (!pendingFacilityAssetImages.length) return null;
     const tenantId = currentTenantId();
     if (!tenantId) throw new Error("테넌트를 선택하세요.");
-    const fd = new FormData();
-    fd.append("file", pendingFacilityAssetImageFile, pendingFacilityAssetImageFile.name || "asset-image");
-    const data = await authFetchJson(`/api/facility/assets/${assetId}/image?tenant_id=${encodeURIComponent(tenantId)}`, {
-      method: "POST",
-      body: fd,
+    let latestItem = null;
+    const uploadQueue = [...pendingFacilityAssetImages].sort((left, right) => {
+      if (!!left.is_primary !== !!right.is_primary) return left.is_primary ? -1 : 1;
+      return 0;
     });
-    pendingFacilityAssetImageFile = null;
+    for (const image of uploadQueue) {
+      const formData = new FormData();
+      formData.append("file", image.file, image.file?.name || "asset-image");
+      const data = await authFetchJson(
+        `/api/facility/assets/${assetId}/images?tenant_id=${encodeURIComponent(tenantId)}&is_primary=${image.is_primary ? "true" : "false"}`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
+      latestItem = data.item || latestItem;
+      pendingFacilityAssetImages = pendingFacilityAssetImages.filter((pending) => pending.key !== image.key);
+      renderFacilityAssetImagePreview(latestItem || selectedFacilityAssetRecord());
+    }
     clearFacilityAssetImageInputs();
-    return data.item || null;
+    return latestItem;
   }
 
-  async function deleteFacilityAssetImage() {
+  async function setFacilityAssetPrimaryImage(imageId) {
+    if (!selectedFacilityAssetId) throw new Error("대표 이미지를 변경할 자산을 선택하세요.");
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const data = await api(`/api/facility/assets/${selectedFacilityAssetId}/images/${Number(imageId || 0)}/primary?tenant_id=${encodeURIComponent(tenantId)}`, {
+      method: "PATCH",
+    });
+    renderFacilityAssetDetail(data.item || {}, { preservePending: true });
+    setMessage("#facilityAssetMsg", "대표 이미지를 변경했습니다.");
+    await loadFacilityAssets();
+    await loadFacilityDashboard();
+  }
+
+  async function deleteFacilityAssetImage(imageId) {
     if (!selectedFacilityAssetId) throw new Error("이미지를 삭제할 자산을 선택하세요.");
     const tenantId = currentTenantId();
     if (!tenantId) throw new Error("테넌트를 선택하세요.");
-    const data = await api(`/api/facility/assets/${selectedFacilityAssetId}/image?tenant_id=${encodeURIComponent(tenantId)}`, {
+    const data = await api(`/api/facility/assets/${selectedFacilityAssetId}/images/${Number(imageId || 0)}?tenant_id=${encodeURIComponent(tenantId)}`, {
       method: "DELETE",
     });
-    renderFacilityAssetDetail(data.item || {});
-    setMessage("#facilityAssetMsg", "저장된 대표 이미지를 삭제했습니다.");
+    renderFacilityAssetDetail(data.item || {}, { preservePending: true });
+    setMessage("#facilityAssetMsg", "저장된 이미지를 삭제했습니다.");
     await loadFacilityAssets();
     await loadFacilityDashboard();
+  }
+
+  async function handleFacilityAssetPreviewAction(event) {
+    const button = event.target.closest("button");
+    if (!button) return;
+    const pendingPrimaryKey = String(button.getAttribute("data-pending-primary") || "").trim();
+    if (pendingPrimaryKey) {
+      markPendingFacilityAssetImagePrimary(pendingPrimaryKey);
+      setMessage("#facilityAssetMsg", "선택한 이미지를 대표 이미지로 지정했습니다. 저장 시 반영됩니다.");
+      return;
+    }
+    const pendingRemoveKey = String(button.getAttribute("data-pending-remove") || "").trim();
+    if (pendingRemoveKey) {
+      removePendingFacilityAssetImage(pendingRemoveKey);
+      setMessage("#facilityAssetMsg", "선택한 저장 전 이미지를 제거했습니다.");
+      return;
+    }
+    const imagePrimaryId = Number(button.getAttribute("data-image-primary") || 0);
+    if (imagePrimaryId) {
+      await setFacilityAssetPrimaryImage(imagePrimaryId);
+      return;
+    }
+    const imageDeleteId = Number(button.getAttribute("data-image-delete") || 0);
+    if (imageDeleteId) {
+      await deleteFacilityAssetImage(imageDeleteId);
+    }
   }
 
   function facilityChecklistPayloadFromForm() {
@@ -1450,25 +1699,20 @@
   async function createFacilityAsset() {
     const data = await api("/api/facility/assets", { method: "POST", body: JSON.stringify(facilityAssetPayloadFromForm()) });
     let item = data.item || {};
-    const hadPendingImage = pendingFacilityAssetImageFile instanceof File;
-    if (item.id && hadPendingImage) {
+    const hadPendingImages = pendingFacilityAssetImages.length > 0;
+    if (item.id && hadPendingImages) {
       try {
-        item = (await uploadFacilityAssetImage(item.id)) || item;
+        item = (await uploadPendingFacilityAssetImages(item.id)) || item;
       } catch (error) {
-        const failedImage = pendingFacilityAssetImageFile;
-        renderFacilityAssetDetail(item);
-        pendingFacilityAssetImageFile = failedImage;
-        renderFacilityAssetImagePreview(item, "선택한 이미지");
         await loadFacilityAssets();
-        pendingFacilityAssetImageFile = failedImage;
-        renderFacilityAssetImagePreview(selectedFacilityAssetRecord(), "선택한 이미지");
+        renderFacilityAssetDetail(selectedFacilityAssetRecord() || item, { preservePending: true });
         await loadFacilityDashboard();
-        setMessage("#facilityAssetMsg", `자산은 등록했지만 대표 이미지 저장은 실패했습니다: ${error.message || String(error)}`, true);
+        setMessage("#facilityAssetMsg", `자산은 등록했지만 일부 이미지 저장은 실패했습니다: ${error.message || String(error)}`, true);
         return;
       }
     }
     renderFacilityAssetDetail(item);
-    setMessage("#facilityAssetMsg", hadPendingImage ? "자산과 대표 이미지를 등록했습니다." : "자산을 등록했습니다.");
+    setMessage("#facilityAssetMsg", hadPendingImages ? "자산과 이미지를 등록했습니다." : "자산을 등록했습니다.");
     await loadFacilityAssets();
     await loadFacilityDashboard();
   }
@@ -1477,25 +1721,20 @@
     if (!selectedFacilityAssetId) throw new Error("수정할 자산을 선택하세요.");
     const data = await api(`/api/facility/assets/${selectedFacilityAssetId}`, { method: "PATCH", body: JSON.stringify(facilityAssetPayloadFromForm()) });
     let item = data.item || {};
-    const hadPendingImage = pendingFacilityAssetImageFile instanceof File;
-    if (item.id && hadPendingImage) {
+    const hadPendingImages = pendingFacilityAssetImages.length > 0;
+    if (item.id && hadPendingImages) {
       try {
-        item = (await uploadFacilityAssetImage(item.id)) || item;
+        item = (await uploadPendingFacilityAssetImages(item.id)) || item;
       } catch (error) {
-        const failedImage = pendingFacilityAssetImageFile;
-        renderFacilityAssetDetail(item);
-        pendingFacilityAssetImageFile = failedImage;
-        renderFacilityAssetImagePreview(item, "선택한 이미지");
         await loadFacilityAssets();
-        pendingFacilityAssetImageFile = failedImage;
-        renderFacilityAssetImagePreview(selectedFacilityAssetRecord(), "선택한 이미지");
+        renderFacilityAssetDetail(selectedFacilityAssetRecord() || item, { preservePending: true });
         await loadFacilityDashboard();
-        setMessage("#facilityAssetMsg", `자산은 수정했지만 대표 이미지 저장은 실패했습니다: ${error.message || String(error)}`, true);
+        setMessage("#facilityAssetMsg", `자산은 수정했지만 일부 이미지 저장은 실패했습니다: ${error.message || String(error)}`, true);
         return;
       }
     }
     renderFacilityAssetDetail(item);
-    setMessage("#facilityAssetMsg", hadPendingImage ? "자산과 대표 이미지를 수정했습니다." : "자산을 수정했습니다.");
+    setMessage("#facilityAssetMsg", hadPendingImages ? "자산과 이미지를 수정했습니다." : "자산을 수정했습니다.");
     await loadFacilityAssets();
     await loadFacilityDashboard();
   }
@@ -1753,7 +1992,16 @@
         activeTarget = item.target;
       }
     }
-    sections.forEach((item) => item.button.classList.toggle("is-active", item.target === activeTarget));
+    let activeButton = sections[0].button;
+    sections.forEach((item) => {
+      const isActive = item.target === activeTarget;
+      item.button.classList.toggle("is-active", isActive);
+      if (isActive) activeButton = item.button;
+    });
+    const current = $("#mobileDockCurrent");
+    if (current) {
+      current.textContent = `현재: ${String(activeButton?.getAttribute("data-label") || activeButton?.textContent || "").trim() || "접수"}`;
+    }
   }
 
   function renderDocumentCategoryOptions() {
@@ -3434,8 +3682,8 @@
     $("#btnClearFacilityAsset")?.addEventListener("click", () => clearFacilityAssetForm());
     $("#btnFacilityAssetCamera")?.addEventListener("click", () => $("#facilityAssetCameraInput")?.click());
     $("#btnFacilityAssetFile")?.addEventListener("click", () => $("#facilityAssetFileInput")?.click());
-    $("#btnFacilityAssetClearImageSelection")?.addEventListener("click", () => clearPendingFacilityAssetImage());
-    $("#btnFacilityAssetDeleteImage")?.addEventListener("click", () => deleteFacilityAssetImage().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#btnFacilityAssetClearImageSelection")?.addEventListener("click", () => clearPendingFacilityAssetImages());
+    $("#facilityAssetImagePreview")?.addEventListener("click", (event) => handleFacilityAssetPreviewAction(event).catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnCreateFacilityChecklist")?.addEventListener("click", () => createFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
     $("#btnUpdateFacilityChecklist")?.addEventListener("click", () => updateFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
     $("#btnDeleteFacilityChecklist")?.addEventListener("click", () => deleteFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
@@ -3497,19 +3745,27 @@
       updateIntakeReview();
     });
     $("#facilityAssetCameraInput")?.addEventListener("change", (event) => {
-      const file = event?.target?.files?.[0];
-      if (!file) return;
       try {
-        queueFacilityAssetImage(file, "촬영한 이미지");
+        const result = queueFacilityAssetImages(event?.target?.files, "촬영한 이미지");
+        if (result.added) {
+          const notes = [];
+          if (result.duplicates) notes.push(`중복 ${result.duplicates}장 제외`);
+          if (result.overflow) notes.push(`최대 ${MAX_FACILITY_ASSET_IMAGES}장 제한으로 ${result.overflow}장 제외`);
+          setMessage("#facilityAssetMsg", notes.length ? `이미지 ${result.added}장을 추가했습니다. ${notes.join(", ")}.` : `이미지 ${result.added}장을 추가했습니다.`);
+        }
       } catch (error) {
         setMessage("#facilityAssetMsg", error.message || String(error), true);
       }
     });
     $("#facilityAssetFileInput")?.addEventListener("change", (event) => {
-      const file = event?.target?.files?.[0];
-      if (!file) return;
       try {
-        queueFacilityAssetImage(file, "선택한 파일 이미지");
+        const result = queueFacilityAssetImages(event?.target?.files, "선택한 파일 이미지");
+        if (result.added) {
+          const notes = [];
+          if (result.duplicates) notes.push(`중복 ${result.duplicates}장 제외`);
+          if (result.overflow) notes.push(`최대 ${MAX_FACILITY_ASSET_IMAGES}장 제한으로 ${result.overflow}장 제외`);
+          setMessage("#facilityAssetMsg", notes.length ? `이미지 ${result.added}장을 추가했습니다. ${notes.join(", ")}.` : `이미지 ${result.added}장을 추가했습니다.`);
+        }
       } catch (error) {
         setMessage("#facilityAssetMsg", error.message || String(error), true);
       }

@@ -935,6 +935,14 @@ body {
   display: none;
 }
 
+.mobile-dock-current {
+  display: none;
+}
+
+.mobile-dock-track {
+  display: contents;
+}
+
 .mobile-dock-btn {
   appearance: none;
   border: 1px solid transparent;
@@ -1179,14 +1187,45 @@ body {
     bottom: calc(12px + env(safe-area-inset-bottom));
     z-index: 30;
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: 6px;
-    padding: 8px;
-    border-radius: 22px;
-    background: rgba(255, 250, 242, 0.96);
-    border: 1px solid rgba(23, 38, 37, 0.08);
-    box-shadow: 0 18px 34px rgba(29, 42, 40, 0.14);
+    gap: 8px;
+    padding: 10px;
+    border-radius: 24px;
+    background: rgba(255, 250, 242, 0.98);
+    border: 1px solid rgba(23, 38, 37, 0.1);
+    box-shadow: 0 18px 34px rgba(29, 42, 40, 0.16);
     backdrop-filter: blur(16px);
+  }
+
+  .mobile-dock-current {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 0 4px;
+  }
+
+  .mobile-dock-track {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(74px, 1fr);
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .mobile-dock-track::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-dock-btn {
+    min-height: 46px;
+    padding: 12px 10px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.72);
+    border-color: rgba(23, 38, 37, 0.06);
+    box-shadow: 0 8px 18px rgba(29, 42, 40, 0.06);
   }
 
   .sticky-action-bar {
@@ -1200,25 +1239,62 @@ body {
 
 .asset-image-actions {
   margin-bottom: 10px;
+  align-items: stretch;
 }
 
 .asset-image-preview {
-  min-height: 180px;
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  min-height: 0;
+}
+
+.asset-image-preview.empty-state {
+  min-height: 180px;
   place-items: center;
-  overflow: hidden;
+  padding: 24px;
+  border: 1px dashed rgba(13, 106, 103, 0.2);
+  border-radius: 22px;
+  background: rgba(246, 252, 251, 0.72);
+  color: var(--muted);
+  text-align: center;
 }
 
 .asset-image-card {
-  width: 100%;
   display: grid;
   gap: 10px;
+  padding: 12px;
+  border-radius: 22px;
+  background: rgba(255, 250, 242, 0.96);
+  border: 1px solid rgba(23, 38, 37, 0.08);
+  box-shadow: 0 14px 28px rgba(29, 42, 40, 0.08);
+}
+
+.asset-image-card.is-primary,
+.asset-detail-tile.is-primary {
+  border-color: rgba(13, 106, 103, 0.22);
+  box-shadow:
+    0 0 0 3px rgba(13, 106, 103, 0.08),
+    0 16px 32px rgba(13, 106, 103, 0.12);
+}
+
+.asset-image-card-head,
+.asset-image-meta,
+.asset-image-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.asset-image-card-head {
+  justify-content: space-between;
 }
 
 .asset-image-card img,
 .detail-inline-image {
   width: 100%;
-  max-height: 280px;
+  aspect-ratio: 4 / 3;
   object-fit: cover;
   border-radius: 18px;
   border: 1px solid rgba(23, 38, 37, 0.08);
@@ -1226,13 +1302,68 @@ body {
   box-shadow: 0 12px 28px rgba(29, 42, 40, 0.1);
 }
 
+.asset-image-badge,
+.asset-image-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.asset-image-badge {
+  background: rgba(23, 38, 37, 0.06);
+  color: var(--ink);
+}
+
+.asset-image-badge.is-primary {
+  background: rgba(13, 106, 103, 0.16);
+  color: var(--accent-strong);
+}
+
+.asset-image-state {
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--muted);
+  border: 1px solid rgba(23, 38, 37, 0.08);
+}
+
 .asset-image-meta {
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.5;
+}
+
+.asset-image-card-actions {
+  margin-top: auto;
+}
+
+.asset-image-card-btn {
+  min-height: 38px;
+  padding: 0 12px;
+  font-size: 12px;
+  flex: 1 1 120px;
 }
 
 .detail-media {
   margin-bottom: 14px;
+}
+
+.asset-detail-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.asset-detail-tile {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 20px;
+  background: rgba(255, 250, 242, 0.96);
+  border: 1px solid rgba(23, 38, 37, 0.08);
+  box-shadow: 0 12px 24px rgba(29, 42, 40, 0.08);
 }
 
 .attachment-actions > * {

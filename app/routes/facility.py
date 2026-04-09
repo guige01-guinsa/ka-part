@@ -11,11 +11,14 @@ from fastapi.responses import FileResponse
 from ..db import STORAGE_ROOT, append_audit_log, get_tenant, log_usage
 from ..engine_db import create_complaint, get_complaint
 from ..facility_db import (
+    MAX_ASSET_IMAGE_COUNT,
+    add_asset_image,
     clear_asset_image,
     create_asset,
     create_checklist,
     create_inspection,
     create_qr_asset,
+    delete_asset_image,
     create_work_order,
     delete_asset,
     delete_checklist,
@@ -24,6 +27,7 @@ from ..facility_db import (
     delete_work_order,
     facility_dashboard_summary,
     get_asset,
+    get_asset_image,
     get_inspection,
     get_open_work_order_by_inspection,
     get_work_order,
@@ -33,6 +37,7 @@ from ..facility_db import (
     list_qr_assets,
     list_work_orders,
     set_asset_image,
+    set_asset_primary_image,
     update_asset,
     update_checklist,
     update_inspection,
@@ -128,6 +133,64 @@ def _resolve_uploaded_asset_path(file_url: str) -> Path | None:
     return target
 
 
+async def _store_uploaded_asset_image(file: UploadFile, *, tenant_id: str) -> Tuple[Path, str, int, str]:
+    content_type = str(file.content_type or "").strip().lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="이미지 파일만 업로드할 수 있습니다.")
+
+    ext = Path(str(file.filename or "asset-image")).suffix.lower()
+    if not ext:
+        ext = str(mimetypes.guess_extension(content_type or "image/jpeg") or ".jpg").lower()
+
+    target_dir = (UPLOAD_ROOT / str(tenant_id or "").strip().lower()).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_name = f"{uuid.uuid4().hex}{ext}"
+    target_path = target_dir / target_name
+    total = 0
+
+    try:
+        with target_path.open("wb") as handle:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_ASSET_IMAGE_BYTES:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"자산 이미지는 장당 최대 10MB까지 업로드할 수 있습니다. 최대 {MAX_ASSET_IMAGE_COUNT}장까지 등록됩니다.",
+                    )
+                handle.write(chunk)
+    finally:
+        try:
+            await file.close()
+        except Exception:
+            pass
+
+    return target_path, target_name, total, content_type or "image/jpeg"
+
+
+def _asset_uploaded_targets(item: Dict[str, Any]) -> list[Path]:
+    targets: list[Path] = []
+    seen: set[str] = set()
+    images = item.get("images") if isinstance(item.get("images"), list) else []
+    for image in images:
+        target = _resolve_uploaded_asset_path(str((image or {}).get("image_url") or (image or {}).get("file_url") or ""))
+        if not target:
+            continue
+        key = str(target)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append(target)
+    legacy_target = _resolve_uploaded_asset_path(str(item.get("image_url") or ""))
+    if legacy_target:
+        key = str(legacy_target)
+        if key not in seen:
+            targets.append(legacy_target)
+    return targets
+
+
 @router.get("/facility/dashboard")
 def facility_dashboard(request: Request, tenant_id: str = Query(default="")) -> Dict[str, Any]:
     user, resolved_tenant_id = _resolve_facility_context(request, {"tenant_id": tenant_id})
@@ -203,45 +266,57 @@ def facility_assets_update(request: Request, asset_id: int, payload: Dict[str, A
     return {"ok": True, "item": item}
 
 
-@router.post("/facility/assets/{asset_id}/image")
+@router.post("/facility/assets/{asset_id}/images")
 async def facility_assets_upload_image(
+    request: Request,
+    asset_id: int,
+    file: UploadFile = File(...),
+    tenant_id: str = Query(default=""),
+    is_primary: bool = Query(default=False),
+) -> Dict[str, Any]:
+    user, resolved_tenant_id = _require_facility_editor(request, {"tenant_id": tenant_id})
+    target_path, target_name, total, content_type = await _store_uploaded_asset_image(file, tenant_id=resolved_tenant_id)
+    try:
+        item = add_asset_image(
+            tenant_id=resolved_tenant_id,
+            asset_id=int(asset_id),
+            image_url=f"/api/facility/files/{resolved_tenant_id}/{target_name}",
+            image_mime_type=content_type or "image/jpeg",
+            image_size_bytes=total,
+            is_primary=bool(is_primary),
+        )
+    except Exception as exc:
+        if target_path.exists():
+            target_path.unlink(missing_ok=True)
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise
+
+    log_usage(resolved_tenant_id, "facility.assets.image.upload")
+    append_audit_log(
+        resolved_tenant_id,
+        "facility_asset_image_upload",
+        _actor_label(user),
+        {"asset_id": int(asset_id), "is_primary": bool(is_primary)},
+    )
+    return {"ok": True, "item": item}
+
+
+@router.post("/facility/assets/{asset_id}/image")
+async def facility_assets_replace_primary_image(
     request: Request,
     asset_id: int,
     file: UploadFile = File(...),
     tenant_id: str = Query(default=""),
 ) -> Dict[str, Any]:
     user, resolved_tenant_id = _require_facility_editor(request, {"tenant_id": tenant_id})
-    current = get_asset(tenant_id=resolved_tenant_id, asset_id=int(asset_id))
-    content_type = str(file.content_type or "").strip().lower()
-    if not content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="이미지 파일만 업로드할 수 있습니다.")
-
-    ext = Path(str(file.filename or "asset-image")).suffix.lower()
-    if not ext:
-        ext = str(mimetypes.guess_extension(content_type or "image/jpeg") or ".jpg").lower()
-
-    target_dir = (UPLOAD_ROOT / resolved_tenant_id).resolve()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target_name = f"{uuid.uuid4().hex}{ext}"
-    target_path = target_dir / target_name
-    total = 0
-
     try:
-        with target_path.open("wb") as handle:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > MAX_ASSET_IMAGE_BYTES:
-                    raise HTTPException(status_code=400, detail="대표 이미지는 최대 10MB까지 업로드할 수 있습니다.")
-                handle.write(chunk)
-    finally:
-        try:
-            await file.close()
-        except Exception:
-            pass
-
+        current = get_asset(tenant_id=resolved_tenant_id, asset_id=int(asset_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    current_primary = next((image for image in (current.get("images") or []) if int(image.get("is_primary") or 0) == 1), None)
+    target_path, target_name, total, content_type = await _store_uploaded_asset_image(file, tenant_id=resolved_tenant_id)
+    old_target = _resolve_uploaded_asset_path(str((current_primary or {}).get("image_url") or current.get("image_url") or ""))
     try:
         item = set_asset_image(
             tenant_id=resolved_tenant_id,
@@ -256,33 +331,75 @@ async def facility_assets_upload_image(
         if isinstance(exc, ValueError):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         raise
-
-    old_target = _resolve_uploaded_asset_path(str(current.get("image_url") or ""))
     if old_target and old_target != target_path and old_target.exists() and old_target.is_file():
         old_target.unlink(missing_ok=True)
-
-    log_usage(resolved_tenant_id, "facility.assets.image.upload")
+    log_usage(resolved_tenant_id, "facility.assets.image.replace_primary")
     append_audit_log(
         resolved_tenant_id,
-        "facility_asset_image_upload",
+        "facility_asset_primary_image_replace",
         _actor_label(user),
         {"asset_id": int(asset_id)},
     )
     return {"ok": True, "item": item}
 
 
-@router.delete("/facility/assets/{asset_id}/image")
-def facility_assets_delete_image(request: Request, asset_id: int, tenant_id: str = Query(default="")) -> Dict[str, Any]:
+@router.patch("/facility/assets/{asset_id}/images/{image_id}/primary")
+def facility_assets_set_primary_image(request: Request, asset_id: int, image_id: int, tenant_id: str = Query(default="")) -> Dict[str, Any]:
     user, resolved_tenant_id = _require_facility_editor(request, {"tenant_id": tenant_id})
-    current = get_asset(tenant_id=resolved_tenant_id, asset_id=int(asset_id))
-    item = clear_asset_image(tenant_id=resolved_tenant_id, asset_id=int(asset_id))
-    target = _resolve_uploaded_asset_path(str(current.get("image_url") or ""))
+    try:
+        item = set_asset_primary_image(tenant_id=resolved_tenant_id, asset_id=int(asset_id), image_id=int(image_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_usage(resolved_tenant_id, "facility.assets.image.primary")
+    append_audit_log(
+        resolved_tenant_id,
+        "facility_asset_image_set_primary",
+        _actor_label(user),
+        {"asset_id": int(asset_id), "image_id": int(image_id)},
+    )
+    return {"ok": True, "item": item}
+
+
+@router.delete("/facility/assets/{asset_id}/images/{image_id}")
+def facility_assets_delete_image(request: Request, asset_id: int, image_id: int, tenant_id: str = Query(default="")) -> Dict[str, Any]:
+    user, resolved_tenant_id = _require_facility_editor(request, {"tenant_id": tenant_id})
+    try:
+        current_image = get_asset_image(tenant_id=resolved_tenant_id, asset_id=int(asset_id), image_id=int(image_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        item = delete_asset_image(tenant_id=resolved_tenant_id, asset_id=int(asset_id), image_id=int(image_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    target = _resolve_uploaded_asset_path(str(current_image.get("image_url") or current_image.get("file_url") or ""))
     if target and target.exists() and target.is_file():
         target.unlink(missing_ok=True)
     log_usage(resolved_tenant_id, "facility.assets.image.delete")
     append_audit_log(
         resolved_tenant_id,
         "facility_asset_image_delete",
+        _actor_label(user),
+        {"asset_id": int(asset_id), "image_id": int(image_id)},
+    )
+    return {"ok": True, "item": item}
+
+
+@router.delete("/facility/assets/{asset_id}/image")
+def facility_assets_delete_primary_image(request: Request, asset_id: int, tenant_id: str = Query(default="")) -> Dict[str, Any]:
+    user, resolved_tenant_id = _require_facility_editor(request, {"tenant_id": tenant_id})
+    try:
+        current = get_asset(tenant_id=resolved_tenant_id, asset_id=int(asset_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    current_primary = next((image for image in (current.get("images") or []) if int(image.get("is_primary") or 0) == 1), None)
+    item = clear_asset_image(tenant_id=resolved_tenant_id, asset_id=int(asset_id))
+    target = _resolve_uploaded_asset_path(str((current_primary or {}).get("image_url") or current.get("image_url") or ""))
+    if target and target.exists() and target.is_file():
+        target.unlink(missing_ok=True)
+    log_usage(resolved_tenant_id, "facility.assets.image.delete_primary")
+    append_audit_log(
+        resolved_tenant_id,
+        "facility_asset_primary_image_delete",
         _actor_label(user),
         {"asset_id": int(asset_id)},
     )
@@ -293,9 +410,9 @@ def facility_assets_delete_image(request: Request, asset_id: int, tenant_id: str
 def facility_assets_delete(request: Request, asset_id: int, payload: Dict[str, Any] | None = Body(default=None)) -> Dict[str, Any]:
     user, tenant_id = _require_facility_editor(request, payload or {})
     item = delete_asset(tenant_id=tenant_id, asset_id=int(asset_id))
-    target = _resolve_uploaded_asset_path(str(item.get("image_url") or ""))
-    if target and target.exists() and target.is_file():
-        target.unlink(missing_ok=True)
+    for target in _asset_uploaded_targets(item):
+        if target.exists() and target.is_file():
+            target.unlink(missing_ok=True)
     log_usage(tenant_id, "facility.assets.delete")
     append_audit_log(tenant_id, "facility_delete_asset", _actor_label(user), {"asset_id": int(asset_id)})
     return {"ok": True, "item": item}

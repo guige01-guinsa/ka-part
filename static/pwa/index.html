@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260410b1" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260410c1" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -991,17 +991,16 @@
               <input id="facilityAssetNextDate" type="date" />
             </label>
             <div class="field field-span">
-              <span>대표 이미지</span>
+              <span>자산 이미지 (대표 포함 최대 3장)</span>
               <div class="cta-row asset-image-actions">
                 <button id="btnFacilityAssetCamera" data-facility-write="1" class="action-btn action-secondary" type="button">카메라 촬영</button>
                 <button id="btnFacilityAssetFile" data-facility-write="1" class="ghost-btn" type="button">파일 이미지 선택</button>
                 <button id="btnFacilityAssetClearImageSelection" class="ghost-btn hidden" type="button">선택 취소</button>
-                <button id="btnFacilityAssetDeleteImage" data-facility-write="1" class="ghost-btn hidden" type="button">저장 이미지 삭제</button>
               </div>
               <input id="facilityAssetCameraInput" class="hidden-input" type="file" accept="image/*" capture="environment" />
-              <input id="facilityAssetFileInput" class="hidden-input" type="file" accept="image/*" />
-              <div id="facilityAssetImageHint" class="inline-note">대표 이미지가 없습니다. 카메라 촬영 또는 파일 이미지를 선택하세요.</div>
-              <div id="facilityAssetImagePreview" class="asset-image-preview empty-state">대표 이미지 미리보기가 여기에 표시됩니다.</div>
+              <input id="facilityAssetFileInput" class="hidden-input" type="file" accept="image/*" multiple />
+              <div id="facilityAssetImageHint" class="inline-note">카메라 촬영과 파일 이미지 선택을 섞어서 대표 이미지 포함 최대 3장까지 등록할 수 있습니다.</div>
+              <div id="facilityAssetImagePreview" class="asset-image-preview empty-state">대표 이미지를 포함해 최대 3장까지 등록할 수 있습니다.</div>
             </div>
             <label class="field field-span">
               <span>메모</span>
@@ -1430,27 +1429,36 @@
   </main>
 
   <nav class="mobile-dock" aria-label="모바일 빠른 이동">
-    <button class="mobile-dock-btn" type="button" data-target="#intakeSection">
-      <span>접수</span>
-    </button>
-    <button class="mobile-dock-btn" type="button" data-target="#queueSection">
-      <span>민원</span>
-    </button>
-    <button class="mobile-dock-btn" type="button" data-target="#kakaoSection">
-      <span>카톡</span>
-    </button>
-    <button class="mobile-dock-btn" type="button" data-target="#facilitySection">
-      <span>시설</span>
-    </button>
-    <button class="mobile-dock-btn" type="button" data-target="#operationsSection">
-      <span>행정</span>
-    </button>
-    <button class="mobile-dock-btn" type="button" data-target="#infoSection">
-      <span>정보</span>
-    </button>
+    <div id="mobileDockCurrent" class="mobile-dock-current">현재: 접수</div>
+    <div class="mobile-dock-track">
+      <button class="mobile-dock-btn is-active" type="button" data-target="#intakeSection" data-label="접수">
+        <span>접수</span>
+      </button>
+      <button class="mobile-dock-btn" type="button" data-target="#dashboardSection" data-label="대시보드">
+        <span>대시</span>
+      </button>
+      <button class="mobile-dock-btn" type="button" data-target="#queueSection" data-label="민원 목록">
+        <span>민원</span>
+      </button>
+      <button class="mobile-dock-btn" type="button" data-target="#kakaoSection" data-label="카톡 정리">
+        <span>카톡</span>
+      </button>
+      <button class="mobile-dock-btn" type="button" data-target="#facilitySection" data-label="시설 관리">
+        <span>시설</span>
+      </button>
+      <button class="mobile-dock-btn" type="button" data-target="#operationsSection" data-label="행정 관리">
+        <span>행정</span>
+      </button>
+      <button class="mobile-dock-btn" type="button" data-target="#infoSection" data-label="건물 정보">
+        <span>정보</span>
+      </button>
+      <button class="mobile-dock-btn" type="button" data-target="#homeSection" data-label="맨 위로">
+        <span>상단</span>
+      </button>
+    </div>
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260410b1"></script>
+  <script src="/pwa/portal.js?v=20260410c1"></script>
 </body>
 </html>

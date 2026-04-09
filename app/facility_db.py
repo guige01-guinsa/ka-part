@@ -14,6 +14,7 @@ INSPECTION_STATUS_VALUES = ("정상", "주의", "조치필요")
 WORK_ORDER_CATEGORY_VALUES = ("점검후속", "고장수리", "예방정비", "외주요청", "기타")
 WORK_ORDER_PRIORITY_VALUES = ("낮음", "보통", "높음", "긴급")
 WORK_ORDER_STATUS_VALUES = ("접수", "진행중", "완료", "보류")
+MAX_ASSET_IMAGE_COUNT = 3
 
 
 def _connect() -> sqlite3.Connection:
@@ -289,6 +290,20 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
           updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS facility_asset_images (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          asset_id INTEGER NOT NULL REFERENCES facility_assets(id) ON DELETE CASCADE,
+          file_url TEXT NOT NULL,
+          mime_type TEXT,
+          size_bytes INTEGER NOT NULL DEFAULT 0,
+          is_primary INTEGER NOT NULL DEFAULT 0 CHECK(is_primary IN (0,1)),
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(tenant_id, asset_id, file_url)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_facility_assets_tenant
           ON facility_assets(tenant_id, category, lifecycle_state, asset_name ASC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_facility_checklists_tenant
@@ -299,6 +314,8 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
           ON facility_inspections(tenant_id, inspected_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_facility_work_orders_tenant
           ON facility_work_orders(tenant_id, status, priority, due_date ASC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_facility_asset_images_asset
+          ON facility_asset_images(tenant_id, asset_id, is_primary DESC, sort_order ASC, id ASC);
         """
     )
     _ensure_column(con, "facility_assets", "vendor_name", "vendor_name TEXT")
@@ -315,6 +332,185 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
           ON facility_work_orders(tenant_id, complaint_id, id DESC)
         """
     )
+    _migrate_legacy_asset_images(con)
+
+
+def _migrate_legacy_asset_images(con: sqlite3.Connection) -> None:
+    legacy_rows = con.execute(
+        """
+        SELECT id, tenant_id, image_url, image_mime_type, image_size_bytes, created_at, updated_at
+        FROM facility_assets
+        WHERE COALESCE(image_url, '') <> ''
+        """
+    ).fetchall()
+    touched_assets = set()
+    for row in legacy_rows:
+        tenant_id = str(row["tenant_id"] or "").strip().lower()
+        asset_id = int(row["id"])
+        image_url = str(row["image_url"] or "").strip()
+        if not tenant_id or not image_url:
+            continue
+        exists = con.execute(
+            """
+            SELECT id
+            FROM facility_asset_images
+            WHERE tenant_id=? AND asset_id=? AND file_url=?
+            LIMIT 1
+            """,
+            (tenant_id, asset_id, image_url),
+        ).fetchone()
+        if exists:
+            continue
+        touched_assets.add((tenant_id, asset_id))
+        ts = str(row["updated_at"] or row["created_at"] or now_iso())
+        cur = con.execute(
+            """
+            INSERT INTO facility_asset_images(
+              tenant_id, asset_id, file_url, mime_type, size_bytes, is_primary, sort_order, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                tenant_id,
+                asset_id,
+                image_url,
+                str(row["image_mime_type"] or "").strip(),
+                max(0, int(row["image_size_bytes"] or 0)),
+                1,
+                0,
+                str(row["created_at"] or ts),
+                ts,
+            ),
+        )
+    for tenant_id, asset_id in touched_assets:
+        _normalize_asset_images(con, tenant_id=tenant_id, asset_id=asset_id)
+
+
+def _asset_images(con: sqlite3.Connection, *, tenant_id: str, asset_id: int) -> List[Dict[str, Any]]:
+    rows = con.execute(
+        """
+        SELECT
+          id, tenant_id, asset_id,
+          file_url,
+          file_url AS image_url,
+          mime_type,
+          mime_type AS image_mime_type,
+          size_bytes,
+          size_bytes AS image_size_bytes,
+          is_primary,
+          sort_order,
+          created_at,
+          updated_at
+        FROM facility_asset_images
+        WHERE tenant_id=? AND asset_id=?
+        ORDER BY
+          CASE is_primary WHEN 1 THEN 0 ELSE 1 END,
+          sort_order ASC,
+          id ASC
+        """,
+        (str(tenant_id or "").strip().lower(), int(asset_id)),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _primary_asset_image(images: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    for image in images:
+        if int(image.get("is_primary") or 0) == 1:
+            return image
+    return dict(images[0]) if images else None
+
+
+def _sync_asset_primary_columns(
+    con: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    asset_id: int,
+    primary_image: Optional[Dict[str, Any]],
+    updated_at: str,
+) -> None:
+    con.execute(
+        """
+        UPDATE facility_assets
+        SET image_url=?, image_mime_type=?, image_size_bytes=?, updated_at=?
+        WHERE id=? AND tenant_id=?
+        """,
+        (
+            str((primary_image or {}).get("image_url") or ""),
+            str((primary_image or {}).get("image_mime_type") or ""),
+            max(0, int((primary_image or {}).get("image_size_bytes") or 0)),
+            str(updated_at or now_iso()),
+            int(asset_id),
+            str(tenant_id or "").strip().lower(),
+        ),
+    )
+
+
+def _normalize_asset_images(
+    con: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    asset_id: int,
+    primary_image_id: Optional[int] = None,
+) -> None:
+    clean_tenant_id = str(tenant_id or "").strip().lower()
+    rows = con.execute(
+        """
+        SELECT id, is_primary, sort_order
+        FROM facility_asset_images
+        WHERE tenant_id=? AND asset_id=?
+        ORDER BY
+          CASE is_primary WHEN 1 THEN 0 ELSE 1 END,
+          sort_order ASC,
+          id ASC
+        """,
+        (clean_tenant_id, int(asset_id)),
+    ).fetchall()
+    ts = now_iso()
+    if not rows:
+        _sync_asset_primary_columns(con, tenant_id=clean_tenant_id, asset_id=int(asset_id), primary_image=None, updated_at=ts)
+        return
+    requested_primary_id = int(primary_image_id) if primary_image_id else 0
+    primary_id = requested_primary_id if requested_primary_id and any(int(row["id"]) == requested_primary_id for row in rows) else next(
+        (int(row["id"]) for row in rows if int(row["is_primary"] or 0) == 1),
+        int(rows[0]["id"]),
+    )
+    ordered_ids = [primary_id, *[int(row["id"]) for row in rows if int(row["id"]) != primary_id]]
+    for sort_order, image_id in enumerate(ordered_ids):
+        con.execute(
+            """
+            UPDATE facility_asset_images
+            SET is_primary=?, sort_order=?, updated_at=?
+            WHERE id=? AND tenant_id=? AND asset_id=?
+            """,
+            (
+                1 if image_id == primary_id else 0,
+                sort_order,
+                ts,
+                image_id,
+                clean_tenant_id,
+                int(asset_id),
+            ),
+        )
+    images = _asset_images(con, tenant_id=clean_tenant_id, asset_id=int(asset_id))
+    _sync_asset_primary_columns(
+        con,
+        tenant_id=clean_tenant_id,
+        asset_id=int(asset_id),
+        primary_image=_primary_asset_image(images),
+        updated_at=ts,
+    )
+
+
+def _attach_asset_images(con: sqlite3.Connection, item: Dict[str, Any]) -> Dict[str, Any]:
+    clean_tenant_id = str(item.get("tenant_id") or "").strip().lower()
+    asset_id = int(item.get("id") or 0)
+    images = _asset_images(con, tenant_id=clean_tenant_id, asset_id=asset_id) if asset_id else []
+    primary_image = _primary_asset_image(images)
+    item["images"] = images
+    item["image_url"] = str((primary_image or {}).get("image_url") or "")
+    item["image_mime_type"] = str((primary_image or {}).get("image_mime_type") or "")
+    item["image_size_bytes"] = max(0, int((primary_image or {}).get("image_size_bytes") or 0))
+    return item
 
 
 def init_facility_db() -> None:
@@ -343,7 +539,7 @@ def _asset_detail(con: sqlite3.Connection, asset_id: int, tenant_id: str) -> Dic
     ).fetchone()
     if not row:
         raise ValueError("asset not found")
-    return dict(row)
+    return _attach_asset_images(con, dict(row))
 
 
 def get_asset(*, tenant_id: str, asset_id: int) -> Dict[str, Any]:
@@ -536,29 +732,27 @@ def list_assets(*, tenant_id: str, category: str = "", lifecycle_state: str = ""
     con = _connect()
     try:
         _ensure_schema(con)
-        return [
-            dict(row)
-            for row in con.execute(
-                f"""
-                SELECT
-                  id, tenant_id, asset_code, asset_name, category, location_name, vendor_name, installed_on,
-                  inspection_cycle_days, last_result_status, lifecycle_state, source, qr_id,
-                  checklist_key, last_inspected_at, next_inspection_date, note,
-                  image_url, image_mime_type, image_size_bytes,
-                  created_by_label, created_at, updated_at
-                FROM facility_assets
-                WHERE {' AND '.join(clauses)}
-                ORDER BY
-                  CASE lifecycle_state WHEN '운영중' THEN 0 WHEN '점검중' THEN 1 WHEN '중지' THEN 2 ELSE 3 END,
-                  CASE WHEN next_inspection_date IS NULL OR next_inspection_date='' THEN 1 ELSE 0 END,
-                  next_inspection_date ASC,
-                  asset_name ASC,
-                  id DESC
-                LIMIT ?
-                """,
-                tuple(params),
-            ).fetchall()
-        ]
+        rows = con.execute(
+            f"""
+            SELECT
+              id, tenant_id, asset_code, asset_name, category, location_name, vendor_name, installed_on,
+              inspection_cycle_days, last_result_status, lifecycle_state, source, qr_id,
+              checklist_key, last_inspected_at, next_inspection_date, note,
+              image_url, image_mime_type, image_size_bytes,
+              created_by_label, created_at, updated_at
+            FROM facility_assets
+            WHERE {' AND '.join(clauses)}
+            ORDER BY
+              CASE lifecycle_state WHEN '운영중' THEN 0 WHEN '점검중' THEN 1 WHEN '중지' THEN 2 ELSE 3 END,
+              CASE WHEN next_inspection_date IS NULL OR next_inspection_date='' THEN 1 ELSE 0 END,
+              next_inspection_date ASC,
+              asset_name ASC,
+              id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+        return [_attach_asset_images(con, dict(row)) for row in rows]
     finally:
         con.close()
 
@@ -653,23 +847,139 @@ def set_asset_image(
     try:
         _ensure_schema(con)
         _asset_detail(con, int(asset_id), clean_tenant_id)
-        con.execute(
+        images = _asset_images(con, tenant_id=clean_tenant_id, asset_id=int(asset_id))
+        primary_image = _primary_asset_image(images)
+        if primary_image:
+            con.execute(
+                "DELETE FROM facility_asset_images WHERE id=? AND tenant_id=? AND asset_id=?",
+                (int(primary_image["id"]), clean_tenant_id, int(asset_id)),
+            )
+        elif len(images) >= MAX_ASSET_IMAGE_COUNT:
+            raise ValueError(f"자산 이미지는 대표 이미지를 포함해 최대 {MAX_ASSET_IMAGE_COUNT}장까지 등록할 수 있습니다.")
+        ts = now_iso()
+        cur = con.execute(
             """
-            UPDATE facility_assets
-            SET image_url=?, image_mime_type=?, image_size_bytes=?, updated_at=?
-            WHERE id=? AND tenant_id=?
+            INSERT INTO facility_asset_images(
+              tenant_id, asset_id, file_url, mime_type, size_bytes, is_primary, sort_order, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?)
             """,
             (
+                clean_tenant_id,
+                int(asset_id),
                 clean_image_url,
                 clean_mime_type,
                 clean_size,
-                now_iso(),
-                int(asset_id),
-                clean_tenant_id,
+                1,
+                0,
+                ts,
+                ts,
             ),
         )
+        _normalize_asset_images(con, tenant_id=clean_tenant_id, asset_id=int(asset_id))
         con.commit()
         return _asset_detail(con, int(asset_id), clean_tenant_id)
+    finally:
+        con.close()
+
+
+def add_asset_image(
+    *,
+    tenant_id: str,
+    asset_id: int,
+    image_url: str,
+    image_mime_type: str = "",
+    image_size_bytes: int = 0,
+    is_primary: bool = False,
+) -> Dict[str, Any]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    clean_image_url = _clean_text(image_url, field="image_url", required=True, max_len=500)
+    clean_mime_type = _clean_text(image_mime_type, field="image_mime_type", max_len=120)
+    try:
+        clean_size = max(0, int(image_size_bytes or 0))
+    except Exception as exc:
+        raise ValueError("image_size_bytes must be an integer") from exc
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        _asset_detail(con, int(asset_id), clean_tenant_id)
+        images = _asset_images(con, tenant_id=clean_tenant_id, asset_id=int(asset_id))
+        if len(images) >= MAX_ASSET_IMAGE_COUNT:
+            raise ValueError(f"자산 이미지는 대표 이미지를 포함해 최대 {MAX_ASSET_IMAGE_COUNT}장까지 등록할 수 있습니다.")
+        ts = now_iso()
+        cur = con.execute(
+            """
+            INSERT INTO facility_asset_images(
+              tenant_id, asset_id, file_url, mime_type, size_bytes, is_primary, sort_order, created_at, updated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                clean_tenant_id,
+                int(asset_id),
+                clean_image_url,
+                clean_mime_type,
+                clean_size,
+                1 if is_primary or not images else 0,
+                len(images),
+                ts,
+                ts,
+            ),
+        )
+        if is_primary or not images:
+            _normalize_asset_images(
+                con,
+                tenant_id=clean_tenant_id,
+                asset_id=int(asset_id),
+                primary_image_id=int(cur.lastrowid),
+            )
+        else:
+            _sync_asset_primary_columns(
+                con,
+                tenant_id=clean_tenant_id,
+                asset_id=int(asset_id),
+                primary_image=_primary_asset_image(_asset_images(con, tenant_id=clean_tenant_id, asset_id=int(asset_id))),
+                updated_at=ts,
+            )
+        con.commit()
+        return _asset_detail(con, int(asset_id), clean_tenant_id)
+    finally:
+        con.close()
+
+
+def get_asset_image(*, tenant_id: str, asset_id: int, image_id: int) -> Dict[str, Any]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        _asset_detail(con, int(asset_id), clean_tenant_id)
+        row = con.execute(
+            """
+            SELECT
+              id, tenant_id, asset_id,
+              file_url,
+              file_url AS image_url,
+              mime_type,
+              mime_type AS image_mime_type,
+              size_bytes,
+              size_bytes AS image_size_bytes,
+              is_primary,
+              sort_order,
+              created_at,
+              updated_at
+            FROM facility_asset_images
+            WHERE tenant_id=? AND asset_id=? AND id=?
+            LIMIT 1
+            """,
+            (
+                clean_tenant_id,
+                int(asset_id),
+                int(image_id),
+            ),
+        ).fetchone()
+        if not row:
+            raise ValueError("asset image not found")
+        return dict(row)
     finally:
         con.close()
 
@@ -680,18 +990,73 @@ def clear_asset_image(*, tenant_id: str, asset_id: int) -> Dict[str, Any]:
     try:
         _ensure_schema(con)
         _asset_detail(con, int(asset_id), clean_tenant_id)
+        primary_image = _primary_asset_image(_asset_images(con, tenant_id=clean_tenant_id, asset_id=int(asset_id)))
+        if primary_image:
+            con.execute(
+                "DELETE FROM facility_asset_images WHERE id=? AND tenant_id=? AND asset_id=?",
+                (int(primary_image["id"]), clean_tenant_id, int(asset_id)),
+            )
+            _normalize_asset_images(con, tenant_id=clean_tenant_id, asset_id=int(asset_id))
+            con.commit()
+        return _asset_detail(con, int(asset_id), clean_tenant_id)
+    finally:
+        con.close()
+
+
+def set_asset_primary_image(*, tenant_id: str, asset_id: int, image_id: int) -> Dict[str, Any]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        _asset_detail(con, int(asset_id), clean_tenant_id)
+        _ = con.execute(
+            """
+            SELECT id
+            FROM facility_asset_images
+            WHERE tenant_id=? AND asset_id=? AND id=?
+            LIMIT 1
+            """,
+            (clean_tenant_id, int(asset_id), int(image_id)),
+        ).fetchone()
+        if not _:
+            raise ValueError("asset image not found")
         con.execute(
             """
-            UPDATE facility_assets
-            SET image_url='', image_mime_type='', image_size_bytes=0, updated_at=?
-            WHERE id=? AND tenant_id=?
+            UPDATE facility_asset_images
+            SET is_primary=CASE WHEN id=? THEN 1 ELSE 0 END, updated_at=?
+            WHERE tenant_id=? AND asset_id=?
             """,
-            (
-                now_iso(),
-                int(asset_id),
-                clean_tenant_id,
-            ),
+            (int(image_id), now_iso(), clean_tenant_id, int(asset_id)),
         )
+        _normalize_asset_images(con, tenant_id=clean_tenant_id, asset_id=int(asset_id))
+        con.commit()
+        return _asset_detail(con, int(asset_id), clean_tenant_id)
+    finally:
+        con.close()
+
+
+def delete_asset_image(*, tenant_id: str, asset_id: int, image_id: int) -> Dict[str, Any]:
+    clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        _asset_detail(con, int(asset_id), clean_tenant_id)
+        row = con.execute(
+            """
+            SELECT id
+            FROM facility_asset_images
+            WHERE tenant_id=? AND asset_id=? AND id=?
+            LIMIT 1
+            """,
+            (clean_tenant_id, int(asset_id), int(image_id)),
+        ).fetchone()
+        if not row:
+            raise ValueError("asset image not found")
+        con.execute(
+            "DELETE FROM facility_asset_images WHERE tenant_id=? AND asset_id=? AND id=?",
+            (clean_tenant_id, int(asset_id), int(image_id)),
+        )
+        _normalize_asset_images(con, tenant_id=clean_tenant_id, asset_id=int(asset_id))
         con.commit()
         return _asset_detail(con, int(asset_id), clean_tenant_id)
     finally:
