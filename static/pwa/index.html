@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260409p5" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260409p6" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -56,20 +56,27 @@
         <div id="tenantBadge" class="badge-group"></div>
       </div>
 
+      <div class="mobile-intake-stepper" aria-label="모바일 접수 단계">
+        <button class="mobile-intake-step is-active" type="button" data-step="1">1. 위치</button>
+        <button class="mobile-intake-step" type="button" data-step="2">2. 내용</button>
+        <button class="mobile-intake-step" type="button" data-step="3">3. 사진</button>
+        <button class="mobile-intake-step" type="button" data-step="4">4. 저장</button>
+      </div>
+
       <div class="form-grid">
-        <label id="tenantSelectWrap" class="field hidden">
+        <label id="tenantSelectWrap" class="field hidden" data-intake-step="1">
           <span>테넌트</span>
           <select id="tenantSelect"></select>
         </label>
-        <label class="field">
+        <label class="field" data-intake-step="1">
           <span>동</span>
           <input id="buildingInput" type="text" maxlength="20" placeholder="예: 101" />
         </label>
-        <label class="field">
+        <label class="field" data-intake-step="1">
           <span>호</span>
           <input id="unitInput" type="text" maxlength="20" placeholder="예: 1203" />
         </label>
-        <label class="field">
+        <label class="field" data-intake-step="1">
           <span>접수채널</span>
           <select id="channelInput">
             <option value="전화">전화</option>
@@ -79,31 +86,40 @@
             <option value="기타">기타</option>
           </select>
         </label>
-        <label class="field">
+        <label class="field" data-intake-step="1">
           <span>담당자</span>
           <input id="managerInput" type="text" maxlength="60" placeholder="예: 김대리" />
         </label>
-        <label class="field">
+        <label class="field" data-intake-step="1">
           <span>민원인 연락처</span>
           <input id="phoneInput" type="text" maxlength="40" placeholder="예: 010-1234-5678" />
         </label>
-        <label class="field field-span">
+        <label class="field field-span" data-intake-step="2">
           <span>민원내용</span>
           <textarea id="contentInput" rows="5" placeholder="예: 101동 엘리베이터가 멈췄어요."></textarea>
         </label>
-        <label class="field">
-          <span>사진 업로드 (최대 6장)</span>
-          <input id="photoInput" type="file" accept="image/*" multiple />
-        </label>
-        <div id="photoHint" class="inline-note">선택된 사진이 없습니다.</div>
-        <div class="field field-span">
+        <div class="field field-span" data-intake-step="2">
           <span>AI 추천</span>
           <div id="aiSuggestion" class="detail-block">민원내용을 입력하고 AI 자동분류를 실행하세요.</div>
         </div>
+        <label class="field" data-intake-step="3">
+          <span>사진 업로드 (최대 6장)</span>
+          <input id="photoInput" type="file" accept="image/*" multiple />
+        </label>
+        <div id="photoHint" class="inline-note" data-intake-step="3">선택된 사진이 없습니다.</div>
+        <div class="field field-span" data-intake-step="4">
+          <span>입력 검토</span>
+          <div id="intakeReview" class="detail-block">입력된 내용이 여기에 요약됩니다.</div>
+        </div>
       </div>
-      <div class="cta-row">
-        <button id="btnClassify" class="action-btn action-secondary" type="button">AI 자동분류</button>
-        <button id="btnCreateComplaint" class="action-btn" type="button">민원 저장</button>
+      <div class="cta-row intake-action-row">
+        <button id="btnClassify" class="action-btn action-secondary" type="button" data-intake-step="2">AI 자동분류</button>
+        <button id="btnCreateComplaint" class="action-btn" type="button" data-intake-step="4">민원 저장</button>
+      </div>
+      <div class="mobile-intake-nav">
+        <button id="btnIntakePrev" class="ghost-btn" type="button">이전</button>
+        <div id="mobileIntakeStepHint" class="mobile-intake-step-hint">1단계 / 위치와 연락처</div>
+        <button id="btnIntakeNext" class="action-btn action-secondary" type="button">다음</button>
       </div>
       <div id="intakeMsg" class="inline-message" aria-live="polite"></div>
     </section>
@@ -1223,6 +1239,6 @@
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260409p5"></script>
+  <script src="/pwa/portal.js?v=20260409p6"></script>
 </body>
 </html>

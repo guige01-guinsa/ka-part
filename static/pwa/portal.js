@@ -49,6 +49,14 @@
   let lastDigestResult = null;
   let lastDigestImported = false;
   let lastDigestSelectedKeys = new Set();
+  let currentIntakeStep = 1;
+
+  const MOBILE_INTAKE_STEPS = [
+    { step: 1, title: "1단계 / 위치와 연락처" },
+    { step: 2, title: "2단계 / 민원 내용과 AI 분류" },
+    { step: 3, title: "3단계 / 사진 첨부" },
+    { step: 4, title: "4단계 / 검토 후 저장" },
+  ];
 
   function setMessage(selector, message, isError = false) {
     const el = $(selector);
@@ -80,6 +88,10 @@
     const dt = new Date(`${raw}T00:00:00`);
     if (Number.isNaN(dt.getTime())) return raw;
     return dt.toLocaleDateString("ko-KR");
+  }
+
+  function isMobileViewport() {
+    return window.matchMedia("(max-width: 760px)").matches;
   }
 
   function isAdmin() {
@@ -703,6 +715,7 @@
     if (!box) return;
     if (!result) {
       box.textContent = "민원내용을 입력하고 AI 자동분류를 실행하세요.";
+      updateIntakeReview();
       return;
     }
     box.innerHTML = [
@@ -711,6 +724,7 @@
       `<strong>요약:</strong> ${escapeHtml(result.summary)}`,
       `<strong>모델:</strong> ${escapeHtml(result.model || "-")}`,
     ].join("<br>");
+    updateIntakeReview();
   }
 
   function digestRowKey(row) {
@@ -812,6 +826,9 @@
       model: String(item?.image_analysis_model || "kakao-digest").trim() || "kakao-digest",
     };
     renderAiSuggestion(lastAiResult);
+    if (isMobileViewport()) {
+      setCurrentIntakeStep(4);
+    }
   }
 
   function syncUserTenantDisplay() {
@@ -1445,6 +1462,76 @@
     syncComplaintDeleteOption();
   }
 
+  function updateIntakeReview() {
+    const review = $("#intakeReview");
+    if (!review) return;
+    const payload = complaintPayloadFromForm();
+    const photoCount = selectedFiles("#photoInput").length;
+    const location = [payload.building ? `${payload.building}동` : "", payload.unit ? `${payload.unit}호` : ""].filter(Boolean).join(" ");
+    review.innerHTML = [
+      `<strong>${escapeHtml((lastAiResult || {}).summary || payload.content || "민원 요약 대기")}</strong>`,
+      `위치: ${escapeHtml(location || "미입력")}`,
+      `접수채널: ${escapeHtml(payload.channel || "-")}`,
+      `연락처: ${escapeHtml(payload.complainant_phone || "미입력")}`,
+      `담당자: ${escapeHtml(payload.manager || "미지정")}`,
+      `AI 분류: ${escapeHtml((lastAiResult || {}).type || "미분류")} / ${escapeHtml((lastAiResult || {}).urgency || "미분류")}`,
+      `사진: ${escapeHtml(String(photoCount))}장`,
+      `내용: ${escapeHtml(payload.content || "미입력")}`,
+    ].join("<br>");
+  }
+
+  function syncMobileIntakeStep() {
+    updateIntakeReview();
+    const hint = $("#mobileIntakeStepHint");
+    const prevButton = $("#btnIntakePrev");
+    const nextButton = $("#btnIntakeNext");
+    const stepItems = document.querySelectorAll("[data-intake-step]");
+    const stepButtons = document.querySelectorAll(".mobile-intake-step");
+
+    if (!isMobileViewport()) {
+      stepItems.forEach((el) => el.classList.remove("intake-step-hidden", "is-active-step"));
+      stepButtons.forEach((el) => el.classList.remove("is-active"));
+      if (hint) hint.textContent = "모바일에서 단계형 입력이 활성화됩니다.";
+      if (prevButton) prevButton.disabled = false;
+      if (nextButton) {
+        nextButton.disabled = false;
+        nextButton.textContent = "다음";
+      }
+      return;
+    }
+
+    stepItems.forEach((el) => {
+      const step = Number(el.getAttribute("data-intake-step") || 0);
+      const active = step === currentIntakeStep;
+      el.classList.toggle("is-active-step", active);
+      el.classList.toggle("intake-step-hidden", !active);
+    });
+    stepButtons.forEach((el) => {
+      el.classList.toggle("is-active", Number(el.getAttribute("data-step") || 0) === currentIntakeStep);
+    });
+    if (hint) {
+      hint.textContent = MOBILE_INTAKE_STEPS.find((item) => item.step === currentIntakeStep)?.title || "";
+    }
+    if (prevButton) prevButton.disabled = currentIntakeStep <= 1;
+    if (nextButton) {
+      nextButton.disabled = currentIntakeStep >= MOBILE_INTAKE_STEPS.length;
+      nextButton.textContent = currentIntakeStep >= MOBILE_INTAKE_STEPS.length ? "저장 단계" : "다음";
+    }
+  }
+
+  function setCurrentIntakeStep(step) {
+    currentIntakeStep = Math.max(1, Math.min(MOBILE_INTAKE_STEPS.length, Number(step || 1)));
+    syncMobileIntakeStep();
+  }
+
+  function moveIntakeStep(delta) {
+    const next = currentIntakeStep + Number(delta || 0);
+    if (currentIntakeStep === 2 && delta > 0 && !String($("#contentInput")?.value || "").trim()) {
+      throw new Error("민원내용을 입력한 뒤 다음 단계로 이동하세요.");
+    }
+    setCurrentIntakeStep(next);
+  }
+
   function mobileDockSections() {
     return Array.from(document.querySelectorAll(".mobile-dock-btn"))
       .map((button) => ({ button, target: document.querySelector(String(button.getAttribute("data-target") || "")) }))
@@ -2072,6 +2159,9 @@
     });
     lastAiResult = data.item || null;
     renderAiSuggestion(lastAiResult);
+    if (isMobileViewport() && currentIntakeStep === 2) {
+      setCurrentIntakeStep(3);
+    }
     return lastAiResult;
   }
 
@@ -2103,8 +2193,12 @@
       });
     }
     setMessage("#intakeMsg", "민원을 저장했습니다.");
+    $("#buildingInput").value = "";
+    $("#unitInput").value = "";
+    $("#managerInput").value = "";
     $("#contentInput").value = "";
     $("#phoneInput").value = "";
+    $("#channelInput").value = "전화";
     $("#photoInput").value = "";
     updatePhotoHint("#photoInput", "#photoHint");
     if (hadDigestRows) {
@@ -2116,6 +2210,7 @@
       lastAiResult = null;
       renderAiSuggestion(null);
     }
+    setCurrentIntakeStep(1);
     await reloadAll();
   }
 
@@ -2738,6 +2833,23 @@
   }
 
   function wire() {
+    document.querySelectorAll(".mobile-intake-step").forEach((button) => {
+      button.addEventListener("click", () => setCurrentIntakeStep(button.getAttribute("data-step") || 1));
+    });
+    $("#btnIntakePrev")?.addEventListener("click", () => {
+      try {
+        moveIntakeStep(-1);
+      } catch (error) {
+        setMessage("#intakeMsg", error.message || String(error), true);
+      }
+    });
+    $("#btnIntakeNext")?.addEventListener("click", () => {
+      try {
+        moveIntakeStep(1);
+      } catch (error) {
+        setMessage("#intakeMsg", error.message || String(error), true);
+      }
+    });
     document.querySelectorAll(".mobile-dock-btn").forEach((button) => {
       button.addEventListener("click", () => {
         const target = document.querySelector(String(button.getAttribute("data-target") || ""));
@@ -2746,7 +2858,10 @@
       });
     });
     window.addEventListener("scroll", syncMobileDockState, { passive: true });
-    window.addEventListener("resize", syncMobileDockState, { passive: true });
+    window.addEventListener("resize", () => {
+      syncMobileDockState();
+      syncMobileIntakeStep();
+    }, { passive: true });
     $("#btnLogout")?.addEventListener("click", () => window.KAAuth.logout());
     $("#btnReloadAll")?.addEventListener("click", () => reloadAll().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnClassify")?.addEventListener("click", () => {
@@ -2830,7 +2945,16 @@
     $("#btnResetUserPassword")?.addEventListener("click", () => resetSelectedUserPassword().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#btnDeleteUser")?.addEventListener("click", () => deleteSelectedUser().catch((error) => setMessage("#usersMsg", error.message || String(error), true)));
     $("#tenantSelect")?.addEventListener("change", () => reloadAll().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
-    $("#photoInput")?.addEventListener("change", () => updatePhotoHint("#photoInput", "#photoHint"));
+    $("#photoInput")?.addEventListener("change", () => {
+      updatePhotoHint("#photoInput", "#photoHint");
+      updateIntakeReview();
+    });
+    ["#buildingInput", "#unitInput", "#channelInput", "#managerInput", "#phoneInput", "#contentInput"].forEach((selector) => {
+      const el = $(selector);
+      if (!el) return;
+      el.addEventListener("input", () => updateIntakeReview());
+      el.addEventListener("change", () => updateIntakeReview());
+    });
     $("#chatImageInput")?.addEventListener("change", () => {
       clearChatSourcePreview();
       resetDigestImportState();
@@ -2893,6 +3017,8 @@
     updateChatDigestHint();
     clearNoticeForm();
     clearComplaintDetail();
+    updateIntakeReview();
+    setCurrentIntakeStep(1);
     clearFacilityAssetForm();
     clearFacilityChecklistForm();
     clearFacilityInspectionForm();
