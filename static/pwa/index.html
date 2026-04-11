@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260411a1" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260411b1" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -47,7 +47,7 @@
   </header>
 
   <main class="layout">
-    <section id="intakeSection" class="panel reveal">
+    <section id="intakeSection" class="panel reveal" data-mobile-workspace="intake">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Intake</p>
@@ -124,7 +124,7 @@
       <div id="intakeMsg" class="inline-message" aria-live="polite"></div>
     </section>
 
-    <section id="dashboardSection" class="panel reveal">
+    <section id="dashboardSection" class="panel reveal" data-mobile-workspace="overview">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Dashboard</p>
@@ -148,7 +148,7 @@
       </div>
     </section>
 
-    <section id="queueSection" class="panel reveal">
+    <section id="queueSection" class="panel reveal" data-mobile-workspace="queue">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Queue</p>
@@ -237,7 +237,7 @@
       </div>
     </section>
 
-    <section id="reportSection" class="panel reveal">
+    <section id="reportSection" class="panel reveal" data-mobile-workspace="overview">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Report</p>
@@ -248,7 +248,7 @@
       <div id="reportBox" class="detail-block">버튼을 누르면 일일보고가 생성됩니다.</div>
     </section>
 
-    <section id="kakaoSection" class="panel reveal">
+    <section id="kakaoSection" class="panel reveal" data-mobile-workspace="kakao">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Kakao Digest</p>
@@ -286,7 +286,7 @@
       <div id="chatDigestBox" class="detail-block">카톡 분석 결과가 여기에 표시됩니다.</div>
     </section>
 
-    <section id="operationsSection" class="panel reveal">
+    <section id="operationsSection" class="panel reveal" data-mobile-workspace="admin">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Operations</p>
@@ -335,7 +335,7 @@
       </div>
     </section>
 
-    <section id="facilitySection" class="panel reveal" data-mobile-compact="accordion">
+    <section id="facilitySection" class="panel reveal" data-mobile-compact="accordion" data-mobile-workspace="admin">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Operations Admin</p>
@@ -674,7 +674,7 @@
       </div>
     </section>
 
-    <section id="infoSection" class="panel reveal" data-mobile-compact="accordion">
+    <section id="infoSection" class="panel reveal" data-mobile-compact="accordion" data-mobile-workspace="info">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Information</p>
@@ -869,7 +869,7 @@
       </div>
     </section>
 
-    <section id="facilityDashboardSection" class="panel reveal">
+    <section id="facilityDashboardSection" class="panel reveal" data-mobile-workspace="facility">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Facility</p>
@@ -919,7 +919,7 @@
       </div>
     </section>
 
-    <section id="facilityAdminSection" class="panel reveal" data-mobile-compact="accordion">
+    <section id="facilityAdminSection" class="panel reveal" data-mobile-compact="accordion" data-mobile-workspace="facility">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Facility Admin</p>
@@ -1261,7 +1261,7 @@
       </div>
     </section>
 
-    <section id="userPanel" class="panel reveal hidden">
+    <section id="userPanel" class="panel reveal hidden" data-mobile-workspace="info">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Users</p>
@@ -1379,7 +1379,7 @@
       </div>
     </section>
 
-    <section id="adminPanel" class="panel reveal hidden">
+    <section id="adminPanel" class="panel reveal hidden" data-mobile-workspace="info">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Admin</p>
@@ -1431,34 +1431,34 @@
   <nav class="mobile-dock" aria-label="모바일 빠른 이동">
     <div id="mobileDockCurrent" class="mobile-dock-current">현재: 접수</div>
     <div class="mobile-dock-track">
-      <button class="mobile-dock-btn is-active" type="button" data-target="#intakeSection" data-label="접수">
+      <button class="mobile-dock-btn is-active" type="button" data-target="#intakeSection" data-workspace="intake" data-label="접수">
         <span>접수</span>
       </button>
-      <button class="mobile-dock-btn" type="button" data-target="#dashboardSection" data-label="대시보드">
+      <button class="mobile-dock-btn" type="button" data-target="#dashboardSection" data-workspace="overview" data-label="대시보드">
         <span>대시</span>
       </button>
-      <button class="mobile-dock-btn" type="button" data-target="#queueSection" data-label="민원 목록">
+      <button class="mobile-dock-btn" type="button" data-target="#queueSection" data-workspace="queue" data-label="민원 목록">
         <span>민원</span>
       </button>
-      <button class="mobile-dock-btn" type="button" data-target="#kakaoSection" data-label="카톡 정리">
+      <button class="mobile-dock-btn" type="button" data-target="#kakaoSection" data-workspace="kakao" data-label="카톡 정리">
         <span>카톡</span>
       </button>
-      <button class="mobile-dock-btn" type="button" data-target="#facilityAdminSection" data-label="시설 관리">
+      <button class="mobile-dock-btn" type="button" data-target="#facilityAdminSection" data-workspace="facility" data-label="시설 관리">
         <span>시설</span>
       </button>
-      <button class="mobile-dock-btn" type="button" data-target="#facilitySection" data-label="행정 관리">
+      <button class="mobile-dock-btn" type="button" data-target="#facilitySection" data-workspace="admin" data-label="행정 관리">
         <span>행정</span>
       </button>
-      <button class="mobile-dock-btn" type="button" data-target="#infoSection" data-label="건물 정보">
+      <button class="mobile-dock-btn" type="button" data-target="#infoSection" data-workspace="info" data-label="건물 정보">
         <span>정보</span>
       </button>
-      <button class="mobile-dock-btn" type="button" data-target="#homeSection" data-label="맨 위로">
+      <button class="mobile-dock-btn" type="button" data-target="#homeSection" data-workspace="top" data-label="맨 위로">
         <span>상단</span>
       </button>
     </div>
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260411a1"></script>
+  <script src="/pwa/portal.js?v=20260411b1"></script>
 </body>
 </html>

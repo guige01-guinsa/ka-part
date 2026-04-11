@@ -39,6 +39,10 @@ body {
   padding: 28px 20px 60px;
 }
 
+.mobile-workspace-hidden {
+  display: none !important;
+}
+
 .hero,
 .panel {
   scroll-margin-top: 16px;
@@ -1118,6 +1122,26 @@ body {
     padding: 12px 12px calc(108px + env(safe-area-inset-bottom));
   }
 
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 18px 16px;
+  }
+
+  .hero-line {
+    margin-top: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .hero-metrics {
+    display: none;
+  }
+
+  body.mobile-workspace-mode .layout {
+    gap: 12px;
+  }
+
   .hero,
   .panel {
     padding: 16px;
@@ -1187,6 +1211,30 @@ body {
 
   .intake-action-row [data-intake-step] {
     width: 100%;
+  }
+
+  .intake-action-row {
+    position: sticky;
+    bottom: calc(82px + env(safe-area-inset-bottom));
+    z-index: 4;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(132px, 1fr);
+    gap: 8px;
+    overflow-x: auto;
+    margin-top: 10px;
+    padding: 10px 0 6px;
+    background: linear-gradient(180deg, rgba(255, 250, 242, 0), rgba(255, 250, 242, 0.94) 34%, rgba(255, 250, 242, 1));
+    scrollbar-width: none;
+  }
+
+  .intake-action-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .intake-action-row > * {
+    min-width: 132px;
+    width: auto;
   }
 
   .field-inline {

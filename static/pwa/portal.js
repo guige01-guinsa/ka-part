@@ -84,6 +84,7 @@
   let lastDigestImported = false;
   let lastDigestSelectedKeys = new Set();
   let currentIntakeStep = 1;
+  let currentMobileWorkspace = "intake";
 
   const MOBILE_INTAKE_STEPS = [
     { step: 1, title: "1단계 / 위치와 연락처" },
@@ -2065,15 +2066,78 @@
     syncMobileCompactStacks();
   }
 
+  function mobileWorkspaceSections() {
+    return Array.from(document.querySelectorAll("[data-mobile-workspace]"));
+  }
+
+  function normalizeMobileWorkspace(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function mobileWorkspaceButtons() {
+    return Array.from(document.querySelectorAll(".mobile-dock-btn[data-workspace]"));
+  }
+
+  function visibleSectionForWorkspace(workspace) {
+    const cleanWorkspace = normalizeMobileWorkspace(workspace);
+    return mobileWorkspaceSections().find((section) => {
+      if (normalizeMobileWorkspace(section.getAttribute("data-mobile-workspace")) !== cleanWorkspace) return false;
+      if (section.classList.contains("hidden")) return false;
+      return true;
+    }) || null;
+  }
+
+  function applyMobileWorkspace(scrollToTarget = false) {
+    const cleanWorkspace = normalizeMobileWorkspace(currentMobileWorkspace) || "intake";
+    if (!isMobileViewport()) {
+      document.body.classList.remove("mobile-workspace-mode");
+      mobileWorkspaceSections().forEach((section) => section.classList.remove("mobile-workspace-hidden"));
+      return;
+    }
+    document.body.classList.add("mobile-workspace-mode");
+    mobileWorkspaceSections().forEach((section) => {
+      const sectionWorkspace = normalizeMobileWorkspace(section.getAttribute("data-mobile-workspace"));
+      const shouldHide = sectionWorkspace && sectionWorkspace !== cleanWorkspace;
+      section.classList.toggle("mobile-workspace-hidden", shouldHide);
+    });
+    const target = visibleSectionForWorkspace(cleanWorkspace);
+    if (scrollToTarget && target) {
+      const top = target.getBoundingClientRect().top + window.scrollY - 12;
+      window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    }
+  }
+
+  function setMobileWorkspace(workspace, scrollToTarget = false) {
+    const cleanWorkspace = normalizeMobileWorkspace(workspace) || "intake";
+    currentMobileWorkspace = cleanWorkspace;
+    applyMobileWorkspace(scrollToTarget);
+    syncMobileDockState();
+    syncMobileCompactStacks();
+  }
+
   function mobileDockSections() {
     return Array.from(document.querySelectorAll(".mobile-dock-btn"))
-      .map((button) => ({ button, target: document.querySelector(String(button.getAttribute("data-target") || "")) }))
+      .map((button) => ({
+        button,
+        target: document.querySelector(String(button.getAttribute("data-target") || "")),
+        workspace: normalizeMobileWorkspace(button.getAttribute("data-workspace")),
+      }))
       .filter((item) => item.target);
   }
 
   function syncMobileDockState() {
     const sections = mobileDockSections();
     if (!sections.length) return;
+    if (isMobileViewport()) {
+      const cleanWorkspace = normalizeMobileWorkspace(currentMobileWorkspace) || "intake";
+      const activeButton = sections.find((item) => item.workspace === cleanWorkspace) || sections[0];
+      sections.forEach((item) => item.button.classList.toggle("is-active", item === activeButton));
+      const current = $("#mobileDockCurrent");
+      if (current) {
+        current.textContent = `현재: ${String(activeButton?.button?.getAttribute("data-label") || activeButton?.button?.textContent || "").trim() || "접수"}`;
+      }
+      return;
+    }
     let activeTarget = sections[0].target;
     const threshold = window.innerHeight * 0.28;
     for (const item of sections) {
@@ -3723,6 +3787,11 @@
     });
     document.querySelectorAll(".mobile-dock-btn").forEach((button) => {
       button.addEventListener("click", () => {
+        const workspace = button.getAttribute("data-workspace");
+        if (isMobileViewport() && workspace && workspace !== "top") {
+          setMobileWorkspace(workspace, true);
+          return;
+        }
         const target = document.querySelector(String(button.getAttribute("data-target") || ""));
         if (!target) return;
         target.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -3730,6 +3799,7 @@
     });
     window.addEventListener("scroll", syncMobileDockState, { passive: true });
     window.addEventListener("resize", () => {
+      applyMobileWorkspace(false);
       syncMobileDockState();
       syncMobileIntakeStep();
       syncMobileCompactStacks();
@@ -3953,6 +4023,7 @@
       $("#userPanel")?.classList.remove("hidden");
     }
     await reloadAll();
+    setMobileWorkspace(currentMobileWorkspace, false);
     syncMobileDockState();
   }
 
