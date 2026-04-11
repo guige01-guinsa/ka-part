@@ -1975,6 +1975,96 @@
     setCurrentIntakeStep(next);
   }
 
+  function mobileCompactRootSections() {
+    return Array.from(document.querySelectorAll("[data-mobile-compact='accordion']"));
+  }
+
+  function mobileCompactStacks(root = document) {
+    return Array.from(root.querySelectorAll(".detail-stack"))
+      .filter((stack) => stack.dataset.mobileStackReady === "1");
+  }
+
+  function setMobileCompactStackExpanded(stack, expanded) {
+    if (!(stack instanceof HTMLElement)) return;
+    const toggle = stack.querySelector(":scope > .mobile-stack-head .mobile-stack-toggle");
+    const content = stack.querySelector(":scope > .mobile-stack-content");
+    const state = stack.querySelector(":scope > .mobile-stack-head .mobile-stack-toggle-state");
+    const shouldCollapse = isMobileViewport() ? !expanded : false;
+    stack.classList.toggle("is-collapsed", shouldCollapse);
+    stack.dataset.mobileExpanded = shouldCollapse ? "0" : "1";
+    if (toggle) toggle.setAttribute("aria-expanded", shouldCollapse ? "false" : "true");
+    if (content) content.hidden = shouldCollapse;
+    if (state) state.textContent = shouldCollapse ? "펼치기" : "접기";
+  }
+
+  function syncMobileCompactStacks() {
+    mobileCompactRootSections().forEach((section) => {
+      const stacks = mobileCompactStacks(section);
+      if (!stacks.length) return;
+      if (!isMobileViewport()) {
+        stacks.forEach((stack) => setMobileCompactStackExpanded(stack, true));
+        return;
+      }
+      const openStacks = stacks.filter((stack) => stack.dataset.mobileExpanded === "1");
+      const activeStack = openStacks[0] || stacks.find((stack) => stack.dataset.mobileDefaultOpen === "1") || stacks[0];
+      stacks.forEach((stack) => setMobileCompactStackExpanded(stack, stack === activeStack));
+    });
+  }
+
+  function toggleMobileCompactStack(stack) {
+    if (!(stack instanceof HTMLElement) || !isMobileViewport()) return;
+    const section = stack.closest("[data-mobile-compact='accordion']");
+    if (!section) return;
+    const willExpand = stack.dataset.mobileExpanded !== "1";
+    mobileCompactStacks(section).forEach((candidate) => setMobileCompactStackExpanded(candidate, willExpand && candidate === stack));
+    if (willExpand) {
+      const top = stack.getBoundingClientRect().top + window.scrollY - 18;
+      window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    }
+  }
+
+  function setupMobileCompactStacks() {
+    mobileCompactRootSections().forEach((section) => {
+      const stacks = Array.from(section.querySelectorAll(".detail-stack"))
+        .filter((stack) => stack.querySelector(":scope > .subhead") && stack.querySelector(".form-grid"));
+      stacks.forEach((stack, index) => {
+        if (stack.dataset.mobileStackReady === "1") return;
+        const subhead = stack.querySelector(":scope > .subhead");
+        if (!(subhead instanceof HTMLElement)) return;
+        const title = String(subhead.textContent || "").trim() || `항목 ${index + 1}`;
+        const head = document.createElement("div");
+        head.className = "mobile-stack-head";
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "mobile-stack-toggle";
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.innerHTML = [
+          `<span class="subhead">${escapeHtml(title)}</span>`,
+          '<span class="mobile-stack-toggle-state">펼치기</span>',
+        ].join("");
+        head.appendChild(toggle);
+
+        const content = document.createElement("div");
+        content.className = "mobile-stack-content";
+        let next = subhead.nextSibling;
+        while (next) {
+          const current = next;
+          next = next.nextSibling;
+          content.appendChild(current);
+        }
+        subhead.replaceWith(head);
+        stack.appendChild(content);
+        stack.dataset.mobileStackReady = "1";
+        stack.dataset.mobileDefaultOpen = index === 0 ? "1" : "0";
+        Array.from(content.children)
+          .filter((child) => child instanceof HTMLElement && child.classList.contains("cta-row"))
+          .forEach((row) => row.classList.add("mobile-form-actions"));
+        toggle.addEventListener("click", () => toggleMobileCompactStack(stack));
+      });
+    });
+    syncMobileCompactStacks();
+  }
+
   function mobileDockSections() {
     return Array.from(document.querySelectorAll(".mobile-dock-btn"))
       .map((button) => ({ button, target: document.querySelector(String(button.getAttribute("data-target") || "")) }))
@@ -3642,6 +3732,7 @@
     window.addEventListener("resize", () => {
       syncMobileDockState();
       syncMobileIntakeStep();
+      syncMobileCompactStacks();
     }, { passive: true });
     $("#btnLogout")?.addEventListener("click", () => window.KAAuth.logout());
     $("#btnReloadAll")?.addEventListener("click", () => reloadAll().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
@@ -3865,6 +3956,7 @@
     syncMobileDockState();
   }
 
+  setupMobileCompactStacks();
   wire();
   init().catch((error) => {
     setMessage("#intakeMsg", error.message || String(error), true);

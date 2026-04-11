@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260410c1" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260411a1" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -335,7 +335,7 @@
       </div>
     </section>
 
-    <section id="facilitySection" class="panel reveal">
+    <section id="facilitySection" class="panel reveal" data-mobile-compact="accordion">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Operations Admin</p>
@@ -674,7 +674,7 @@
       </div>
     </section>
 
-    <section id="infoSection" class="panel reveal">
+    <section id="infoSection" class="panel reveal" data-mobile-compact="accordion">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Information</p>
@@ -869,7 +869,7 @@
       </div>
     </section>
 
-    <section class="panel reveal">
+    <section id="facilityDashboardSection" class="panel reveal">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Facility</p>
@@ -919,7 +919,7 @@
       </div>
     </section>
 
-    <section class="panel reveal">
+    <section id="facilityAdminSection" class="panel reveal" data-mobile-compact="accordion">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Facility Admin</p>
@@ -1443,10 +1443,10 @@
       <button class="mobile-dock-btn" type="button" data-target="#kakaoSection" data-label="카톡 정리">
         <span>카톡</span>
       </button>
-      <button class="mobile-dock-btn" type="button" data-target="#facilitySection" data-label="시설 관리">
+      <button class="mobile-dock-btn" type="button" data-target="#facilityAdminSection" data-label="시설 관리">
         <span>시설</span>
       </button>
-      <button class="mobile-dock-btn" type="button" data-target="#operationsSection" data-label="행정 관리">
+      <button class="mobile-dock-btn" type="button" data-target="#facilitySection" data-label="행정 관리">
         <span>행정</span>
       </button>
       <button class="mobile-dock-btn" type="button" data-target="#infoSection" data-label="건물 정보">
@@ -1459,6 +1459,6 @@
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260410c1"></script>
+  <script src="/pwa/portal.js?v=20260411a1"></script>
 </body>
 </html>
