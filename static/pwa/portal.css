@@ -1282,7 +1282,7 @@ body {
   }
 
   body.mobile-workspace-mode .layout {
-    gap: 12px;
+    gap: 10px;
   }
 
   .hero,
@@ -1439,6 +1439,190 @@ body {
   .dashboard-grid.dashboard-grid-triplet {
     grid-template-columns: 1fr;
     margin-top: 14px;
+  }
+
+  #dashboardSection,
+  #reportSection,
+  #operationsSection,
+  #infoSection,
+  #facilityDashboardSection {
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  #dashboardSection .panel-head,
+  #reportSection .panel-head,
+  #operationsSection .panel-head,
+  #infoSection .panel-head,
+  #facilityDashboardSection .panel-head {
+    gap: 10px;
+  }
+
+  #dashboardSection .section-kicker,
+  #reportSection .section-kicker,
+  #operationsSection .section-kicker,
+  #infoSection .section-kicker,
+  #facilityDashboardSection .section-kicker {
+    margin-bottom: 6px;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+  }
+
+  #dashboardSection h2,
+  #reportSection h2,
+  #operationsSection h2,
+  #infoSection h2,
+  #facilityDashboardSection h2 {
+    font-size: 21px;
+    line-height: 1.08;
+  }
+
+  #dashboardSection .panel-copy,
+  #operationsSection .panel-copy,
+  #infoSection .panel-copy,
+  #facilityDashboardSection .panel-copy {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 1.42;
+  }
+
+  #dashboardSection .mobile-panel-switch,
+  #operationsSection .mobile-panel-switch,
+  #infoSection .mobile-panel-switch,
+  #facilityDashboardSection .mobile-panel-switch {
+    gap: 6px;
+    margin-top: 12px;
+  }
+
+  #dashboardSection .mobile-panel-chip,
+  #operationsSection .mobile-panel-chip,
+  #infoSection .mobile-panel-chip,
+  #facilityDashboardSection .mobile-panel-chip {
+    min-height: 34px;
+    padding: 6px 11px;
+    font-size: 11px;
+    box-shadow: 0 6px 14px rgba(29, 42, 40, 0.04);
+  }
+
+  #dashboardSection .ops-metrics,
+  #operationsSection .ops-metrics,
+  #infoSection .ops-metrics,
+  #facilityDashboardSection .ops-metrics {
+    margin-top: 12px;
+    gap: 8px;
+    grid-auto-columns: minmax(108px, 1fr);
+  }
+
+  #dashboardSection .metric-card,
+  #operationsSection .metric-card,
+  #infoSection .metric-card,
+  #facilityDashboardSection .metric-card {
+    min-width: 108px;
+    gap: 4px;
+    padding: 11px 12px;
+    border-radius: 16px;
+  }
+
+  #dashboardSection .metric-card span,
+  #operationsSection .metric-card span,
+  #infoSection .metric-card span,
+  #facilityDashboardSection .metric-card span {
+    font-size: 10px;
+  }
+
+  #dashboardSection .metric-card strong,
+  #operationsSection .metric-card strong,
+  #infoSection .metric-card strong,
+  #facilityDashboardSection .metric-card strong {
+    font-size: 22px;
+    line-height: 0.96;
+  }
+
+  #dashboardSection .dashboard-grid,
+  #operationsSection .dashboard-grid,
+  #infoSection .dashboard-grid,
+  #facilityDashboardSection .dashboard-grid,
+  #dashboardSection .mobile-panel-section,
+  #infoSection .mobile-panel-section {
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  #dashboardSection .detail-stack,
+  #operationsSection .detail-stack,
+  #infoSection .detail-stack,
+  #facilityDashboardSection .detail-stack {
+    gap: 10px;
+  }
+
+  #dashboardSection .subhead,
+  #operationsSection .subhead,
+  #infoSection .subhead,
+  #facilityDashboardSection .subhead {
+    font-size: 13px;
+  }
+
+  #dashboardSection .timeline-item,
+  #operationsSection .timeline-item,
+  #infoSection .timeline-item,
+  #facilityDashboardSection .timeline-item,
+  #reportSection .detail-block,
+  #operationsSection .detail-block,
+  #infoSection .detail-block,
+  #facilityDashboardSection .detail-block {
+    padding: 12px 13px;
+    border-radius: 16px;
+  }
+
+  #dashboardSection .timeline-item strong,
+  #operationsSection .timeline-item strong,
+  #infoSection .timeline-item strong,
+  #facilityDashboardSection .timeline-item strong {
+    margin-bottom: 4px;
+    font-size: 12px;
+  }
+
+  #dashboardSection .timeline-item p,
+  #operationsSection .timeline-item p,
+  #infoSection .timeline-item p,
+  #facilityDashboardSection .timeline-item p,
+  #reportSection .detail-block,
+  #operationsSection .detail-block,
+  #infoSection .detail-block,
+  #facilityDashboardSection .detail-block {
+    font-size: 12px;
+    line-height: 1.42;
+  }
+
+  #infoSection .record-card-list {
+    margin-top: 12px;
+    gap: 10px;
+  }
+
+  #infoSection .record-card {
+    gap: 8px;
+    padding: 12px 13px;
+    border-radius: 16px;
+  }
+
+  #infoSection .record-card strong {
+    font-size: 14px;
+  }
+
+  #infoSection .record-card p {
+    margin-top: 2px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  #infoSection .record-card-meta {
+    gap: 6px;
+  }
+
+  #infoSection .record-card-meta span {
+    min-height: 24px;
+    padding: 0 8px;
+    font-size: 10px;
   }
 
   .mobile-dock {
