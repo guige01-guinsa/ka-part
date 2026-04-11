@@ -92,6 +92,13 @@
     { step: 3, title: "3단계 / 사진 첨부" },
     { step: 4, title: "4단계 / 검토 후 저장" },
   ];
+  const MOBILE_PANEL_DEFAULTS = {
+    complaintOverview: "urgent",
+    opsOverview: "notice",
+    infoWorkspace: "overview",
+    facilityOverview: "due",
+  };
+  const mobilePanelState = { ...MOBILE_PANEL_DEFAULTS };
 
   function setMessage(selector, message, isError = false) {
     const el = $(selector);
@@ -2006,9 +2013,11 @@
         stacks.forEach((stack) => setMobileCompactStackExpanded(stack, true));
         return;
       }
-      const openStacks = stacks.filter((stack) => stack.dataset.mobileExpanded === "1");
-      const activeStack = openStacks[0] || stacks.find((stack) => stack.dataset.mobileDefaultOpen === "1") || stacks[0];
-      stacks.forEach((stack) => setMobileCompactStackExpanded(stack, stack === activeStack));
+      const visibleStacks = stacks.filter((stack) => stack.getClientRects().length > 0);
+      const candidateStacks = visibleStacks.length ? visibleStacks : stacks;
+      const openStacks = candidateStacks.filter((stack) => stack.dataset.mobileExpanded === "1");
+      const activeStack = openStacks[0] || candidateStacks.find((stack) => stack.dataset.mobileDefaultOpen === "1") || candidateStacks[0];
+      stacks.forEach((stack) => setMobileCompactStackExpanded(stack, candidateStacks.includes(stack) && stack === activeStack));
     });
   }
 
@@ -2064,6 +2073,90 @@
       });
     });
     syncMobileCompactStacks();
+  }
+
+  function normalizeMobilePanelGroup(value) {
+    return String(value || "").trim();
+  }
+
+  function normalizeMobilePanelValue(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function mobilePanelGroups() {
+    return Array.from(new Set(Array.from(document.querySelectorAll("[data-mobile-panel-group]"))
+      .map((el) => normalizeMobilePanelGroup(el.getAttribute("data-mobile-panel-group")))
+      .filter(Boolean)));
+  }
+
+  function mobilePanelButtons(group) {
+    const cleanGroup = normalizeMobilePanelGroup(group);
+    if (!cleanGroup) return [];
+    return Array.from(document.querySelectorAll(`[data-mobile-panel-group="${cleanGroup}"] [data-mobile-panel-target]`));
+  }
+
+  function mobilePanelItems(group) {
+    const cleanGroup = normalizeMobilePanelGroup(group);
+    if (!cleanGroup) return [];
+    return Array.from(document.querySelectorAll(`[data-mobile-panel-item="${cleanGroup}"]`));
+  }
+
+  function resolveMobilePanelValue(group) {
+    const cleanGroup = normalizeMobilePanelGroup(group);
+    const preferred = normalizeMobilePanelValue(mobilePanelState[cleanGroup] || MOBILE_PANEL_DEFAULTS[cleanGroup] || "");
+    const available = [
+      ...mobilePanelButtons(cleanGroup).map((button) => normalizeMobilePanelValue(button.getAttribute("data-mobile-panel-target"))),
+      ...mobilePanelItems(cleanGroup).map((item) => normalizeMobilePanelValue(item.getAttribute("data-mobile-panel-name"))),
+    ].filter(Boolean);
+    if (available.includes(preferred)) return preferred;
+    return available[0] || preferred;
+  }
+
+  function applyMobilePanelGroup(group) {
+    const cleanGroup = normalizeMobilePanelGroup(group);
+    if (!cleanGroup) return;
+    const activeValue = resolveMobilePanelValue(cleanGroup);
+    mobilePanelState[cleanGroup] = activeValue;
+    const buttons = mobilePanelButtons(cleanGroup);
+    const items = mobilePanelItems(cleanGroup);
+    buttons.forEach((button) => {
+      const isActive = normalizeMobilePanelValue(button.getAttribute("data-mobile-panel-target")) === activeValue;
+      button.classList.toggle("is-active", isActive);
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+    if (!isMobileViewport()) {
+      items.forEach((item) => item.classList.remove("mobile-panel-hidden"));
+      return;
+    }
+    items.forEach((item) => {
+      const itemValue = normalizeMobilePanelValue(item.getAttribute("data-mobile-panel-name"));
+      item.classList.toggle("mobile-panel-hidden", itemValue !== activeValue);
+    });
+  }
+
+  function applyAllMobilePanelGroups() {
+    mobilePanelGroups().forEach((group) => applyMobilePanelGroup(group));
+  }
+
+  function setMobilePanel(group, value) {
+    const cleanGroup = normalizeMobilePanelGroup(group);
+    if (!cleanGroup) return;
+    mobilePanelState[cleanGroup] = normalizeMobilePanelValue(value);
+    applyMobilePanelGroup(cleanGroup);
+    syncMobileCompactStacks();
+  }
+
+  function wireMobilePanels() {
+    document.querySelectorAll("[data-mobile-panel-group] [data-mobile-panel-target]").forEach((button) => {
+      if (button.dataset.mobilePanelBound === "1") return;
+      button.dataset.mobilePanelBound = "1";
+      button.addEventListener("click", () => {
+        const group = button.closest("[data-mobile-panel-group]")?.getAttribute("data-mobile-panel-group") || "";
+        const value = button.getAttribute("data-mobile-panel-target") || "";
+        setMobilePanel(group, value);
+      });
+    });
+    applyAllMobilePanelGroups();
   }
 
   function mobileWorkspaceSections() {
@@ -2295,6 +2388,7 @@
     $("#infoBuildingHouseholdCount").value = "";
     $("#infoBuildingNote").value = "";
     $("#infoBuildingDetail").textContent = "건물정보를 선택하거나 새로 등록하세요.";
+    syncSelectableCollection(".info-building-row, .info-building-card", selectedInfoBuildingId);
   }
 
   function clearInfoRegistrationForm() {
@@ -2308,6 +2402,66 @@
     $("#infoRegistrationExpiresOn").value = "";
     $("#infoRegistrationNote").value = "";
     $("#infoRegistrationDetail").textContent = "등록정보를 선택하거나 새로 등록하세요.";
+    syncSelectableCollection(".info-registration-row, .info-registration-card", selectedInfoRegistrationId);
+  }
+
+  function syncSelectableCollection(selector, selectedId) {
+    document.querySelectorAll(selector).forEach((el) => {
+      const currentId = Number(el.getAttribute("data-id") || 0);
+      el.classList.toggle("active", currentId > 0 && currentId === Number(selectedId || 0));
+    });
+  }
+
+  function renderInfoBuildingCards() {
+    const list = $("#infoBuildingsCardList");
+    if (!list) return;
+    list.innerHTML = infoBuildings.length
+      ? infoBuildings.map((item) => `
+        <article class="record-card info-building-card" data-id="${Number(item.id || 0)}">
+          <div>
+            <strong>${escapeHtml(item.building_name || "-")}</strong>
+            <p>${escapeHtml(item.building_code || "-")} / ${escapeHtml(item.usage_type || "-")}</p>
+          </div>
+          <div class="record-card-meta">
+            <span>${escapeHtml(item.status || "-")}</span>
+            <span>세대 ${escapeHtml(item.household_count == null ? "-" : String(item.household_count))}</span>
+          </div>
+        </article>
+      `).join("")
+      : '<div class="empty-state">등록된 건물정보가 없습니다.</div>';
+    list.querySelectorAll(".info-building-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        const item = infoBuildings.find((row) => Number(row.id || 0) === Number(card.getAttribute("data-id") || 0));
+        if (item) renderInfoBuildingDetail(item);
+      });
+    });
+    syncSelectableCollection(".info-building-row, .info-building-card", selectedInfoBuildingId);
+  }
+
+  function renderInfoRegistrationCards() {
+    const list = $("#infoRegistrationsCardList");
+    if (!list) return;
+    list.innerHTML = infoRegistrations.length
+      ? infoRegistrations.map((item) => `
+        <article class="record-card info-registration-card" data-id="${Number(item.id || 0)}">
+          <div>
+            <strong>${escapeHtml(item.title || "-")}</strong>
+            <p>${escapeHtml(item.record_type || "-")} / ${escapeHtml(item.reference_no || "-")}</p>
+          </div>
+          <div class="record-card-meta">
+            <span>${escapeHtml(item.status || "-")}</span>
+            <span>${escapeHtml(formatDate(item.expires_on))}</span>
+          </div>
+        </article>
+      `).join("")
+      : '<div class="empty-state">등록된 등록정보가 없습니다.</div>';
+    list.querySelectorAll(".info-registration-card").forEach((card) => {
+      card.addEventListener("click", () => {
+        const item = infoRegistrations.find((row) => Number(row.id || 0) === Number(card.getAttribute("data-id") || 0));
+        if (item) renderInfoRegistrationDetail(item);
+      });
+    });
+    syncSelectableCollection(".info-registration-row, .info-registration-card", selectedInfoRegistrationId);
   }
 
   function renderInfoBuildingDetail(item) {
@@ -2328,6 +2482,7 @@
       `층수: 지상 ${escapeHtml(item.floors_above == null ? "-" : String(item.floors_above))} / 지하 ${escapeHtml(item.floors_below == null ? "-" : String(item.floors_below))}`,
       `세대/호실 수: ${escapeHtml(item.household_count == null ? "-" : String(item.household_count))}`,
     ].join("<br>");
+    syncSelectableCollection(".info-building-row, .info-building-card", selectedInfoBuildingId);
   }
 
   function renderInfoRegistrationDetail(item) {
@@ -2348,6 +2503,7 @@
       `발행처: ${escapeHtml(item.issuer_name || "-")}`,
       `유효기간: ${escapeHtml([formatDate(item.issued_on), formatDate(item.expires_on)].filter((value) => value && value !== "-").join(" ~ ") || "-")}`,
     ].join("<br>");
+    syncSelectableCollection(".info-registration-row, .info-registration-card", selectedInfoRegistrationId);
   }
 
   function infoBuildingPayloadFromForm() {
@@ -2719,9 +2875,12 @@
         if (item) renderInfoBuildingDetail(item);
       });
     });
+    renderInfoBuildingCards();
     if (selectedInfoBuildingId) {
       const found = infoBuildings.find((item) => Number(item.id || 0) === selectedInfoBuildingId);
       if (found) renderInfoBuildingDetail(found); else clearInfoBuildingForm();
+    } else {
+      syncSelectableCollection(".info-building-row, .info-building-card", selectedInfoBuildingId);
     }
     return infoBuildings;
   }
@@ -2750,9 +2909,12 @@
         if (item) renderInfoRegistrationDetail(item);
       });
     });
+    renderInfoRegistrationCards();
     if (selectedInfoRegistrationId) {
       const found = infoRegistrations.find((item) => Number(item.id || 0) === selectedInfoRegistrationId);
       if (found) renderInfoRegistrationDetail(found); else clearInfoRegistrationForm();
+    } else {
+      syncSelectableCollection(".info-registration-row, .info-registration-card", selectedInfoRegistrationId);
     }
     return infoRegistrations;
   }
@@ -3768,6 +3930,7 @@
   }
 
   function wire() {
+    wireMobilePanels();
     document.querySelectorAll(".mobile-intake-step").forEach((button) => {
       button.addEventListener("click", () => setCurrentIntakeStep(button.getAttribute("data-step") || 1));
     });
@@ -3800,6 +3963,7 @@
     window.addEventListener("scroll", syncMobileDockState, { passive: true });
     window.addEventListener("resize", () => {
       applyMobileWorkspace(false);
+      applyAllMobilePanelGroups();
       syncMobileDockState();
       syncMobileIntakeStep();
       syncMobileCompactStacks();
@@ -4024,6 +4188,7 @@
     }
     await reloadAll();
     setMobileWorkspace(currentMobileWorkspace, false);
+    applyAllMobilePanelGroups();
     syncMobileDockState();
   }
 

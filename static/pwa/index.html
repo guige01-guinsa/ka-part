@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=4" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260411c1" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260411d1" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -129,19 +129,30 @@
         <div>
           <p class="section-kicker">Dashboard</p>
           <h2>실시간 대시보드</h2>
+          <p class="panel-copy">휴대폰에서는 현재 필요한 묶음만 보고 넘길 수 있도록 민원 흐름을 네 개 카드로 분리했습니다.</p>
         </div>
         <button id="btnRefreshDashboard" class="ghost-btn" type="button">대시보드 새로고침</button>
       </div>
-      <div class="stage-grid">
-        <div class="detail-stack">
+      <div class="mobile-panel-switch" data-mobile-panel-group="complaintOverview" aria-label="실시간 대시보드 보기 전환">
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="urgent">긴급</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="repeat">반복</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="type">유형</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="manager">담당</button>
+      </div>
+      <div class="dashboard-grid dashboard-grid-quad">
+        <div class="detail-stack" data-mobile-panel-item="complaintOverview" data-mobile-panel-name="urgent">
           <div class="subhead">긴급 민원</div>
           <div id="urgentList" class="timeline"></div>
+        </div>
+        <div class="detail-stack" data-mobile-panel-item="complaintOverview" data-mobile-panel-name="repeat">
           <div class="subhead">반복 민원</div>
           <div id="repeatList" class="timeline"></div>
         </div>
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="complaintOverview" data-mobile-panel-name="type">
           <div class="subhead">유형별 현황</div>
           <div id="typeSummary" class="timeline"></div>
+        </div>
+        <div class="detail-stack" data-mobile-panel-item="complaintOverview" data-mobile-panel-name="manager">
           <div class="subhead">담당자 부하</div>
           <div id="managerSummary" class="timeline"></div>
         </div>
@@ -313,22 +324,26 @@
           <strong id="opsMetricVendors">0</strong>
         </article>
       </div>
-      <div class="stage-grid">
-        <div class="detail-stack">
+      <div class="mobile-panel-switch" data-mobile-panel-group="opsOverview" aria-label="행정업무 대시보드 보기 전환">
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="notice">공지</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="document">문서</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="schedule">일정</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="guide">안내</button>
+      </div>
+      <div class="dashboard-grid dashboard-grid-quad">
+        <div class="detail-stack" data-mobile-panel-item="opsOverview" data-mobile-panel-name="notice">
           <div class="subhead">최근 공지</div>
           <div id="opsRecentNotices" class="timeline"></div>
         </div>
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="opsOverview" data-mobile-panel-name="document">
           <div class="subhead">기한 임박/지연 문서</div>
           <div id="opsOverdueDocuments" class="timeline"></div>
         </div>
-      </div>
-      <div class="stage-grid">
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="opsOverview" data-mobile-panel-name="schedule">
           <div class="subhead">다가오는 일정</div>
           <div id="opsUpcomingSchedules" class="timeline"></div>
         </div>
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="opsOverview" data-mobile-panel-name="guide">
           <div class="subhead">운영 안내</div>
           <div id="opsReadOnlyHint" class="detail-block">행정업무 권한을 확인하는 중입니다.</div>
         </div>
@@ -683,49 +698,51 @@
         </div>
         <button id="btnLoadInfoDashboard" class="ghost-btn" type="button">정보관리 새로고침</button>
       </div>
-      <div class="ops-metrics">
-        <article class="metric-card">
-          <span>업체정보</span>
-          <strong id="infoMetricVendors">0</strong>
-        </article>
-        <article class="metric-card">
-          <span>직원정보</span>
-          <strong id="infoMetricStaff">0</strong>
-        </article>
-        <article class="metric-card">
-          <span>시설설비정보</span>
-          <strong id="infoMetricAssets">0</strong>
-        </article>
-        <article class="metric-card">
-          <span>건물정보</span>
-          <strong id="infoMetricBuildings">0</strong>
-        </article>
-        <article class="metric-card">
-          <span>등록정보</span>
-          <strong id="infoMetricRegistrations">0</strong>
-        </article>
+      <div class="mobile-panel-switch" data-mobile-panel-group="infoWorkspace" aria-label="정보관리 보기 전환">
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="overview">요약</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="building">건물</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="registration">등록</button>
       </div>
-      <div class="stage-grid">
-        <div class="detail-stack">
-          <div class="subhead">업체정보</div>
-          <div id="infoVendorList" class="timeline"></div>
+      <div class="mobile-panel-section" data-mobile-panel-item="infoWorkspace" data-mobile-panel-name="overview">
+        <div class="ops-metrics">
+          <article class="metric-card">
+            <span>업체정보</span>
+            <strong id="infoMetricVendors">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>직원정보</span>
+            <strong id="infoMetricStaff">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>시설설비정보</span>
+            <strong id="infoMetricAssets">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>건물정보</span>
+            <strong id="infoMetricBuildings">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>등록정보</span>
+            <strong id="infoMetricRegistrations">0</strong>
+          </article>
         </div>
-        <div class="detail-stack">
-          <div class="subhead">직원정보</div>
-          <div id="infoStaffList" class="timeline"></div>
+        <div class="dashboard-grid dashboard-grid-triplet">
+          <div class="detail-stack">
+            <div class="subhead">업체정보</div>
+            <div id="infoVendorList" class="timeline"></div>
+          </div>
+          <div class="detail-stack">
+            <div class="subhead">직원정보</div>
+            <div id="infoStaffList" class="timeline"></div>
+          </div>
+          <div class="detail-stack">
+            <div class="subhead">시설설비정보</div>
+            <div id="infoAssetList" class="timeline"></div>
+          </div>
         </div>
+        <div id="infoExpansionGuide" class="detail-block">기존 업체관리, 사용자관리, 시설자산을 정보관리에서 묶어 보고, 건물정보와 등록정보는 별도 CRUD로 확장합니다.</div>
       </div>
-      <div class="stage-grid">
-        <div class="detail-stack">
-          <div class="subhead">시설설비정보</div>
-          <div id="infoAssetList" class="timeline"></div>
-        </div>
-        <div class="detail-stack">
-          <div class="subhead">확장 메모</div>
-          <div id="infoExpansionGuide" class="detail-block">기존 업체관리, 사용자관리, 시설자산을 정보관리에서 묶어 보고, 건물정보와 등록정보는 별도 CRUD로 확장합니다.</div>
-        </div>
-      </div>
-      <div class="stage-grid">
+      <div class="mobile-panel-section" data-mobile-panel-item="infoWorkspace" data-mobile-panel-name="building">
         <div class="detail-stack">
           <div class="subhead">건물정보</div>
           <div id="infoBuildingDetail" class="detail-block">건물정보를 선택하거나 새로 등록하세요.</div>
@@ -780,7 +797,8 @@
             <button id="btnClearInfoBuilding" class="ghost-btn" type="button">입력 초기화</button>
           </div>
           <div id="infoBuildingMsg" class="inline-message" aria-live="polite"></div>
-          <div class="table-wrap">
+          <div id="infoBuildingsCardList" class="record-card-list"></div>
+          <div class="table-wrap mobile-record-table">
             <table class="data-table">
               <thead>
                 <tr>
@@ -795,6 +813,8 @@
             </table>
           </div>
         </div>
+      </div>
+      <div class="mobile-panel-section" data-mobile-panel-item="infoWorkspace" data-mobile-panel-name="registration">
         <div class="detail-stack">
           <div class="subhead">등록정보</div>
           <div id="infoRegistrationDetail" class="detail-block">등록정보를 선택하거나 새로 등록하세요.</div>
@@ -851,7 +871,8 @@
             <button id="btnClearInfoRegistration" class="ghost-btn" type="button">입력 초기화</button>
           </div>
           <div id="infoRegistrationMsg" class="inline-message" aria-live="polite"></div>
-          <div class="table-wrap">
+          <div id="infoRegistrationsCardList" class="record-card-list"></div>
+          <div class="table-wrap mobile-record-table">
             <table class="data-table">
               <thead>
                 <tr>
@@ -896,22 +917,26 @@
           <strong id="facilityMetricInspections">0</strong>
         </article>
       </div>
-      <div class="stage-grid">
-        <div class="detail-stack">
+      <div class="mobile-panel-switch" data-mobile-panel-group="facilityOverview" aria-label="시설운영 대시보드 보기 전환">
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="due">예정</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="work">작업</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="inspection">점검</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="checklist">점검표</button>
+      </div>
+      <div class="dashboard-grid dashboard-grid-quad">
+        <div class="detail-stack" data-mobile-panel-item="facilityOverview" data-mobile-panel-name="due">
           <div class="subhead">점검 예정 자산</div>
           <div id="facilityDueAssets" class="timeline"></div>
         </div>
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="facilityOverview" data-mobile-panel-name="work">
           <div class="subhead">긴급 작업지시</div>
           <div id="facilityUrgentWorkOrders" class="timeline"></div>
         </div>
-      </div>
-      <div class="stage-grid">
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="facilityOverview" data-mobile-panel-name="inspection">
           <div class="subhead">최근 점검</div>
           <div id="facilityRecentInspections" class="timeline"></div>
         </div>
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="facilityOverview" data-mobile-panel-name="checklist">
           <div class="subhead">최근 점검표</div>
           <div id="facilityRecentChecklists" class="timeline"></div>
           <div id="facilityReadOnlyHint" class="detail-block">시설운영 권한을 확인하는 중입니다.</div>
@@ -1459,6 +1484,6 @@
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260411c1"></script>
+  <script src="/pwa/portal.js?v=20260411d1"></script>
 </body>
 </html>

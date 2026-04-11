@@ -440,6 +440,71 @@ body {
     0 12px 24px rgba(13, 106, 103, 0.1);
 }
 
+.mobile-panel-hidden {
+  display: none !important;
+}
+
+.mobile-panel-switch {
+  display: none;
+}
+
+.mobile-panel-section {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.mobile-panel-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(13, 106, 103, 0.08);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(29, 42, 40, 0.04);
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease, box-shadow 140ms ease, color 140ms ease;
+}
+
+.mobile-panel-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(13, 106, 103, 0.22);
+  background: rgba(237, 247, 245, 0.92);
+  color: var(--accent-strong);
+}
+
+.mobile-panel-chip.is-active {
+  border-color: rgba(13, 106, 103, 0.28);
+  background: rgba(13, 106, 103, 0.16);
+  color: var(--accent-strong);
+  box-shadow:
+    0 0 0 3px rgba(13, 106, 103, 0.08),
+    0 12px 24px rgba(13, 106, 103, 0.1);
+}
+
+.dashboard-grid {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.dashboard-grid.dashboard-grid-quad {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-grid.dashboard-grid-triplet {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .form-grid,
 .feed-grid,
 .stage-grid {
@@ -901,6 +966,66 @@ body {
   margin-top: 18px;
 }
 
+.record-card-list {
+  display: none;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.record-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(23, 38, 37, 0.1);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 10px 22px rgba(29, 42, 40, 0.06);
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.record-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(29, 42, 40, 0.08);
+}
+
+.record-card.active {
+  border-color: rgba(13, 106, 103, 0.32);
+  box-shadow: 0 0 0 3px rgba(13, 106, 103, 0.08);
+}
+
+.record-card strong {
+  display: block;
+  font-size: 15px;
+  line-height: 1.35;
+  word-break: keep-all;
+}
+
+.record-card p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.record-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.record-card-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(19, 57, 54, 0.06);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
 .complaint-card {
   display: grid;
   gap: 10px;
@@ -1116,7 +1241,8 @@ body {
   .hero,
   .ops-metrics,
   .feed-grid,
-  .stage-grid {
+  .stage-grid,
+  .dashboard-grid.dashboard-grid-triplet {
     grid-template-columns: 1fr;
   }
 
@@ -1216,6 +1342,25 @@ body {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
+  .mobile-panel-switch {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    gap: 8px;
+    overflow-x: auto;
+    margin-top: 16px;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .mobile-panel-switch::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-panel-section {
+    margin-top: 14px;
+  }
+
   .mobile-intake-nav {
     display: flex;
   }
@@ -1271,6 +1416,29 @@ body {
 
   .complaint-card-list {
     display: grid;
+  }
+
+  .ops-metrics {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(138px, 1fr);
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+
+  .ops-metrics::-webkit-scrollbar {
+    display: none;
+  }
+
+  .ops-metrics .metric-card {
+    min-width: 138px;
+  }
+
+  .dashboard-grid,
+  .dashboard-grid.dashboard-grid-quad,
+  .dashboard-grid.dashboard-grid-triplet {
+    grid-template-columns: 1fr;
+    margin-top: 14px;
   }
 
   .mobile-dock {
@@ -1410,6 +1578,14 @@ body {
     width: auto;
     min-width: 112px;
     flex: 0 0 auto;
+  }
+
+  .record-card-list {
+    display: grid;
+  }
+
+  .mobile-record-table {
+    display: none;
   }
 
 .attachment-actions {
