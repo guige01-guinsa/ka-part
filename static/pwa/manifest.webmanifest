@@ -1,7 +1,8 @@
 {
   "name": "KA-PART 민원처리시스템",
   "short_name": "민원처리",
-  "start_url": "/pwa/",
+  "start_url": "/pwa/index.html",
+  "scope": "/pwa/",
   "display": "standalone",
   "background_color": "#133936",
   "theme_color": "#133936",

@@ -20,6 +20,16 @@ from .routes.voice import router as voice_router
 from .voice_db import init_voice_db
 
 logger = logging.getLogger("ka-part")
+PWA_NO_CACHE_PATHS = {
+    "/pwa",
+    "/pwa/",
+    "/pwa/index.html",
+    "/pwa/login.html",
+    "/pwa/public.html",
+    "/pwa/manifest.webmanifest",
+    "/pwa/sw.js",
+}
+PWA_VERSIONED_ASSET_SUFFIXES = (".css", ".js", ".png", ".svg", ".woff", ".woff2", ".ttf")
 
 
 @asynccontextmanager
@@ -57,6 +67,21 @@ def _is_https(request: Request) -> bool:
     return proto == "https"
 
 
+def _apply_pwa_cache_headers(request: Request, response) -> None:
+    path = str(request.url.path or "").strip() or "/"
+    if path in PWA_NO_CACHE_PATHS:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return
+
+    if path.startswith("/pwa/") and path.endswith(PWA_VERSIONED_ASSET_SUFFIXES):
+        if str(request.url.query or "").strip():
+            response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            response.headers.setdefault("Cache-Control", "public, max-age=300")
+
+
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
     resp = await call_next(request)
@@ -65,6 +90,7 @@ async def _security_headers(request: Request, call_next):
     resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     if _env_truthy("KA_HSTS_ENABLED", True) and _is_https(request):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    _apply_pwa_cache_headers(request, resp)
     return resp
 
 
