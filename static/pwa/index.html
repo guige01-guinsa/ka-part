@@ -9,8 +9,8 @@
     content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
   <meta name="theme-color" content="#133936" />
-  <link rel="manifest" href="/pwa/manifest.webmanifest?v=5" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260411e1" />
+  <link rel="manifest" href="/pwa/manifest.webmanifest?v=6" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260411f1" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -297,7 +297,7 @@
       <div id="chatDigestBox" class="detail-block">카톡 분석 결과가 여기에 표시됩니다.</div>
     </section>
 
-    <section id="operationsSection" class="panel reveal" data-mobile-workspace="admin">
+    <section id="operationsSection" class="panel reveal" data-mobile-workspace="admin" data-mobile-panel-item="adminWorkspaceSections" data-mobile-panel-name="dashboard">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Operations</p>
@@ -305,6 +305,10 @@
           <p class="panel-copy">공지, 문서, 일정, 업체 현황을 민원 시스템 안에서 함께 관리합니다.</p>
         </div>
         <button id="btnLoadOpsDashboard" class="ghost-btn" type="button">행정업무 새로고침</button>
+      </div>
+      <div class="mobile-panel-switch" data-mobile-panel-group="adminWorkspaceSections" aria-label="행정 작업 화면 전환">
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="dashboard">대시</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="manage">관리</button>
       </div>
       <div class="ops-metrics">
         <article class="metric-card">
@@ -350,16 +354,26 @@
       </div>
     </section>
 
-    <section id="facilitySection" class="panel reveal" data-mobile-compact="accordion" data-mobile-workspace="admin">
+    <section id="facilitySection" class="panel reveal" data-mobile-compact="accordion" data-mobile-workspace="admin" data-mobile-panel-item="adminWorkspaceSections" data-mobile-panel-name="manage">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Operations Admin</p>
           <h2>행정업무 관리</h2>
         </div>
       </div>
+      <div class="mobile-panel-switch" data-mobile-panel-group="adminWorkspaceSections" aria-label="행정 작업 화면 전환">
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="dashboard">대시</button>
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="manage">관리</button>
+      </div>
+      <div class="mobile-panel-switch" data-mobile-panel-group="adminManagePanels" aria-label="행정 관리 항목 전환">
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="notice">공지</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="document">문서</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="schedule">일정</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="vendor">업체</button>
+      </div>
 
       <div class="stage-grid">
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="adminManagePanels" data-mobile-panel-name="notice">
           <div class="subhead">공지 관리</div>
           <div id="opsNoticeDetail" class="detail-block">공지를 선택하거나 새로 등록하세요.</div>
           <div class="form-grid compact-grid">
@@ -421,7 +435,7 @@
           </div>
         </div>
 
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="adminManagePanels" data-mobile-panel-name="document">
           <div class="subhead">행정문서 관리</div>
           <div id="opsDocumentDetail" class="detail-block">문서를 선택하거나 새로 등록하세요.</div>
           <div id="documentCategoryGuide" class="detail-block">문서 유형을 불러오는 중입니다.</div>
@@ -557,7 +571,7 @@
       </div>
 
       <div class="stage-grid">
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="adminManagePanels" data-mobile-panel-name="schedule">
           <div class="subhead">일정 / 점검 관리</div>
           <div id="opsScheduleDetail" class="detail-block">일정을 선택하거나 새로 등록하세요.</div>
           <div class="form-grid compact-grid">
@@ -627,7 +641,7 @@
           </div>
         </div>
 
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="adminManagePanels" data-mobile-panel-name="vendor">
           <div class="subhead">업체 관리</div>
           <div id="opsVendorDetail" class="detail-block">협력업체를 선택하거나 새로 등록하세요.</div>
           <div class="form-grid compact-grid">
@@ -689,7 +703,7 @@
       </div>
     </section>
 
-    <section id="infoSection" class="panel reveal" data-mobile-compact="accordion" data-mobile-workspace="info">
+    <section id="infoSection" class="panel reveal" data-mobile-compact="accordion" data-mobile-workspace="info" data-mobile-panel-item="infoWorkspaceSections" data-mobile-panel-name="info">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Information</p>
@@ -697,6 +711,11 @@
           <p class="panel-copy">업체정보, 직원정보, 시설설비정보, 건물정보, 등록정보를 확장 가능한 구조로 묶어 관리합니다.</p>
         </div>
         <button id="btnLoadInfoDashboard" class="ghost-btn" type="button">정보관리 새로고침</button>
+      </div>
+      <div class="mobile-panel-switch" data-mobile-panel-group="infoWorkspaceSections" aria-label="정보 작업 화면 전환">
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="info">정보</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="users">사용자</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="admin">테넌트</button>
       </div>
       <div class="mobile-panel-switch" data-mobile-panel-group="infoWorkspace" aria-label="정보관리 보기 전환">
         <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="overview">요약</button>
@@ -890,7 +909,7 @@
       </div>
     </section>
 
-    <section id="facilityDashboardSection" class="panel reveal" data-mobile-workspace="facility">
+    <section id="facilityDashboardSection" class="panel reveal" data-mobile-workspace="facility" data-mobile-panel-item="facilityWorkspaceSections" data-mobile-panel-name="dashboard">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Facility</p>
@@ -898,6 +917,10 @@
           <p class="panel-copy">자산, 점검표, 점검이력, 작업지시를 기존보다 단순하고 안정적인 구조로 관리합니다.</p>
         </div>
         <button id="btnLoadFacilityDashboard" class="ghost-btn" type="button">시설 새로고침</button>
+      </div>
+      <div class="mobile-panel-switch" data-mobile-panel-group="facilityWorkspaceSections" aria-label="시설 작업 화면 전환">
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="dashboard">대시</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="manage">관리</button>
       </div>
       <div class="ops-metrics">
         <article class="metric-card">
@@ -944,15 +967,25 @@
       </div>
     </section>
 
-    <section id="facilityAdminSection" class="panel reveal" data-mobile-compact="accordion" data-mobile-workspace="facility">
+    <section id="facilityAdminSection" class="panel reveal" data-mobile-compact="accordion" data-mobile-workspace="facility" data-mobile-panel-item="facilityWorkspaceSections" data-mobile-panel-name="manage">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Facility Admin</p>
           <h2>시설 자산 및 점검표 관리</h2>
         </div>
       </div>
+      <div class="mobile-panel-switch" data-mobile-panel-group="facilityWorkspaceSections" aria-label="시설 작업 화면 전환">
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="dashboard">대시</button>
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="manage">관리</button>
+      </div>
+      <div class="mobile-panel-switch" data-mobile-panel-group="facilityManagePanels" aria-label="시설 관리 항목 전환">
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="asset">자산</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="checklist">점검표</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="inspection">점검</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="workorder">작업</button>
+      </div>
       <div class="stage-grid">
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="facilityManagePanels" data-mobile-panel-name="asset">
           <div class="subhead">자산 관리</div>
           <div id="facilityAssetDetail" class="detail-block">자산을 선택하거나 새로 등록하세요.</div>
           <div class="form-grid compact-grid">
@@ -1055,7 +1088,7 @@
           </div>
         </div>
 
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="facilityManagePanels" data-mobile-panel-name="checklist">
           <div class="subhead">점검표 관리</div>
           <div id="facilityChecklistDetail" class="detail-block">점검표를 선택하거나 새로 등록하세요.</div>
           <div class="form-grid compact-grid">
@@ -1121,7 +1154,7 @@
         </div>
       </div>
       <div class="stage-grid">
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="facilityManagePanels" data-mobile-panel-name="inspection">
           <div class="subhead">점검 기록</div>
           <div id="facilityInspectionDetail" class="detail-block">점검 기록을 선택하거나 새로 등록하세요.</div>
           <div class="form-grid compact-grid">
@@ -1184,7 +1217,7 @@
           </div>
         </div>
 
-        <div class="detail-stack">
+        <div class="detail-stack" data-mobile-panel-item="facilityManagePanels" data-mobile-panel-name="workorder">
           <div class="subhead">작업지시 관리</div>
           <div id="facilityWorkOrderDetail" class="detail-block">작업지시를 선택하거나 새로 등록하세요.</div>
           <div class="form-grid compact-grid">
@@ -1286,7 +1319,7 @@
       </div>
     </section>
 
-    <section id="userPanel" class="panel reveal hidden" data-mobile-workspace="info">
+    <section id="userPanel" class="panel reveal hidden" data-mobile-workspace="info" data-mobile-panel-item="infoWorkspaceSections" data-mobile-panel-name="users">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Users</p>
@@ -1294,6 +1327,11 @@
           <p id="pendingUsersHint" class="panel-copy">승인대기 회원이 있으면 여기서 바로 승인할 수 있습니다.</p>
         </div>
         <button id="btnLoadUsers" class="ghost-btn" type="button">사용자 새로고침</button>
+      </div>
+      <div class="mobile-panel-switch" data-mobile-panel-group="infoWorkspaceSections" aria-label="정보 작업 화면 전환">
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="info">정보</button>
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="users">사용자</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="admin">테넌트</button>
       </div>
       <div class="form-grid compact-grid">
         <label class="field">
@@ -1404,12 +1442,17 @@
       </div>
     </section>
 
-    <section id="adminPanel" class="panel reveal hidden" data-mobile-workspace="info">
+    <section id="adminPanel" class="panel reveal hidden" data-mobile-workspace="info" data-mobile-panel-item="infoWorkspaceSections" data-mobile-panel-name="admin">
       <div class="panel-head">
         <div>
           <p class="section-kicker">Admin</p>
           <h2>테넌트 관리</h2>
         </div>
+      </div>
+      <div class="mobile-panel-switch" data-mobile-panel-group="infoWorkspaceSections" aria-label="정보 작업 화면 전환">
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="info">정보</button>
+        <button class="mobile-panel-chip" type="button" data-mobile-panel-target="users">사용자</button>
+        <button class="mobile-panel-chip is-active" type="button" data-mobile-panel-target="admin">테넌트</button>
       </div>
       <div class="form-grid">
         <label class="field">
@@ -1484,6 +1527,6 @@
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260411e1"></script>
+  <script src="/pwa/portal.js?v=20260411f1"></script>
 </body>
 </html>

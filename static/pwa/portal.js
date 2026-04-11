@@ -97,6 +97,11 @@
     opsOverview: "notice",
     infoWorkspace: "overview",
     facilityOverview: "due",
+    adminWorkspaceSections: "dashboard",
+    facilityWorkspaceSections: "dashboard",
+    infoWorkspaceSections: "info",
+    adminManagePanels: "notice",
+    facilityManagePanels: "asset",
   };
   const mobilePanelState = { ...MOBILE_PANEL_DEFAULTS };
 
@@ -2101,12 +2106,18 @@
     return Array.from(document.querySelectorAll(`[data-mobile-panel-item="${cleanGroup}"]`));
   }
 
+  function isAvailableMobilePanelItem(item) {
+    return item instanceof HTMLElement && !item.classList.contains("hidden") && !item.hidden;
+  }
+
   function resolveMobilePanelValue(group) {
     const cleanGroup = normalizeMobilePanelGroup(group);
     const preferred = normalizeMobilePanelValue(mobilePanelState[cleanGroup] || MOBILE_PANEL_DEFAULTS[cleanGroup] || "");
     const available = [
+      ...mobilePanelItems(cleanGroup)
+        .filter((item) => isAvailableMobilePanelItem(item))
+        .map((item) => normalizeMobilePanelValue(item.getAttribute("data-mobile-panel-name"))),
       ...mobilePanelButtons(cleanGroup).map((button) => normalizeMobilePanelValue(button.getAttribute("data-mobile-panel-target"))),
-      ...mobilePanelItems(cleanGroup).map((item) => normalizeMobilePanelValue(item.getAttribute("data-mobile-panel-name"))),
     ].filter(Boolean);
     if (available.includes(preferred)) return preferred;
     return available[0] || preferred;
@@ -2119,8 +2130,15 @@
     mobilePanelState[cleanGroup] = activeValue;
     const buttons = mobilePanelButtons(cleanGroup);
     const items = mobilePanelItems(cleanGroup);
+    const availableValues = new Set(items
+      .filter((item) => isAvailableMobilePanelItem(item))
+      .map((item) => normalizeMobilePanelValue(item.getAttribute("data-mobile-panel-name")))
+      .filter(Boolean));
     buttons.forEach((button) => {
-      const isActive = normalizeMobilePanelValue(button.getAttribute("data-mobile-panel-target")) === activeValue;
+      const buttonValue = normalizeMobilePanelValue(button.getAttribute("data-mobile-panel-target"));
+      const isAvailable = !availableValues.size || availableValues.has(buttonValue);
+      const isActive = isAvailable && buttonValue === activeValue;
+      button.classList.toggle("hidden", !isAvailable);
       button.classList.toggle("is-active", isActive);
       button.setAttribute("aria-pressed", isActive ? "true" : "false");
     });
@@ -2129,6 +2147,10 @@
       return;
     }
     items.forEach((item) => {
+      if (!isAvailableMobilePanelItem(item)) {
+        item.classList.add("mobile-panel-hidden");
+        return;
+      }
       const itemValue = normalizeMobilePanelValue(item.getAttribute("data-mobile-panel-name"));
       item.classList.toggle("mobile-panel-hidden", itemValue !== activeValue);
     });
