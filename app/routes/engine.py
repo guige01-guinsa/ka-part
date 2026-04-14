@@ -43,6 +43,7 @@ AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").st
 UPLOAD_ROOT = (STORAGE_ROOT / "uploads" / "complaints").resolve()
 DIGEST_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 WORK_REPORT_FILE_MAX_BYTES = 15 * 1024 * 1024
+WORK_REPORT_SAMPLE_MAX_BYTES = 30 * 1024 * 1024
 
 
 def _access_token(request: Request) -> str:
@@ -252,8 +253,8 @@ async def _read_work_report_sample(upload: Optional[UploadFile]) -> Dict[str, An
     raw_name = str(upload.filename or "").strip() or "sample"
     file_bytes = await upload.read()
     try:
-        if len(file_bytes) > WORK_REPORT_FILE_MAX_BYTES:
-            raise HTTPException(status_code=400, detail="샘플 양식 파일은 15MB 이하여야 합니다.")
+        if len(file_bytes) > WORK_REPORT_SAMPLE_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="샘플 양식 파일은 30MB 이하여야 합니다.")
         try:
             sample = extract_document_sample(raw_name, file_bytes)
         except ValueError as exc:
