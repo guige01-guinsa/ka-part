@@ -172,6 +172,17 @@ python scripts/migrate_legacy_data.py \
 
 `deploy_render.ps1`는 API 키가 있을 때 `guige01-guinsa/ka-part` 저장소에 연결된 `ka-part` 서비스를 자동으로 찾아 잘못된 서비스에 배포하지 않도록 되어 있습니다.
 
+권장 릴리스 절차:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\release-render.ps1
+```
+
+- 기본 동작: `compileall -> pytest -> origin/main push -> Render 배포 완료 대기`
+- 로컬 워킹트리가 dirty 상태면 중단합니다. 먼저 필요한 변경만 커밋한 뒤 실행하세요.
+- 전역 Ruff 부채가 남아 있어 린트는 기본값에서 제외했습니다. 필요하면 `-WithLint`를 추가하세요.
+- Render 서비스 ID가 바뀌어도 `origin` 원격 URL 기준으로 서비스를 다시 찾아 배포합니다.
+
 ## Test
 
 ```bash
