@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
 param(
   [string]$TargetBranch = "main",
   [string]$RenderServiceName = "ka-part",
@@ -11,8 +8,11 @@ param(
   [int]$PollSec = 10
 )
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
 function Normalize-GitUrl([string]$Url) {
-  $value = [string]($Url ?? "")
+  $value = [string]$Url
   if ($value.EndsWith(".git")) {
     return $value.Substring(0, $value.Length - 4)
   }
