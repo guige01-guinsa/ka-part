@@ -19,6 +19,14 @@ function Normalize-GitUrl([string]$Url) {
   return $value
 }
 
+function Get-PreferredEnvValue([string]$Name) {
+  $userValue = [string][Environment]::GetEnvironmentVariable($Name, "User")
+  if ($userValue) {
+    return $userValue
+  }
+  return [string][Environment]::GetEnvironmentVariable($Name, "Process")
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $venvPython = Join-Path $root ".venv\Scripts\python.exe"
 $deployScript = Join-Path $root "deploy_render.ps1"
@@ -67,6 +75,12 @@ try {
   }
 
   if (-not $SkipDeploy) {
+    foreach ($envName in @("RENDER_SERVICE_ID", "RENDER_API_KEY", "RENDER_DEPLOY_HOOK_URL")) {
+      $preferredValue = Get-PreferredEnvValue $envName
+      if ($preferredValue) {
+        Set-Item -Path ("Env:{0}" -f $envName) -Value $preferredValue
+      }
+    }
     & powershell -ExecutionPolicy Bypass -File $deployScript `
       -ExpectedServiceName $RenderServiceName `
       -ExpectedRepo $originUrl `
