@@ -84,6 +84,7 @@
   let lastDigestResult = null;
   let lastDigestImported = false;
   let lastDigestSelectedKeys = new Set();
+  let lastWorkReportResult = null;
   let currentIntakeStep = 1;
   let currentMobileWorkspace = "intake";
 
@@ -311,6 +312,24 @@
       return;
     }
     el.textContent = `선택 ${files.length}장 / 최대 ${limit}장: ${files.map((file) => file.name).join(", ")}`;
+  }
+
+  function updateGenericFileHint(inputSelector, targetSelector, emptyMessage = "선택된 파일이 없습니다.") {
+    const files = selectedFiles(inputSelector);
+    const el = $(targetSelector);
+    if (!el) return;
+    if (!files.length) {
+      el.textContent = emptyMessage;
+      return;
+    }
+    el.textContent = `선택 ${files.length}건: ${files.map((file) => file.name).join(", ")}`;
+  }
+
+  function updateSingleFileHint(inputSelector, targetSelector, emptyMessage) {
+    const file = selectedSingleFile(inputSelector);
+    const el = $(targetSelector);
+    if (!el) return;
+    el.textContent = file ? `선택된 샘플: ${file.name}` : emptyMessage;
   }
 
   function fileSignature(file) {
@@ -3703,6 +3722,79 @@
     return sections.join("");
   }
 
+  function renderWorkReportResult(item) {
+    const report = item || {};
+    const items = Array.isArray(report.items) ? report.items : [];
+    const unmatchedImages = Array.isArray(report.unmatched_images) ? report.unmatched_images : [];
+    const unmatchedAttachments = Array.isArray(report.unmatched_attachments) ? report.unmatched_attachments : [];
+    const sections = [
+      [
+        "<div class=\"subhead\">보고 개요</div>",
+        `<div class="work-report-meta">`,
+        `<span>${escapeHtml(String(report.report_title || "시설팀 주요 업무 보고"))}</span>`,
+        `<span>기간 ${escapeHtml(String(report.period_label || "-"))}</span>`,
+        `<span>작업 ${escapeHtml(String(report.item_count || items.length || 0))}건</span>`,
+        `<span>모델 ${escapeHtml(String(report.analysis_model || "-"))}</span>`,
+        report.template_source_name ? `<span>양식 ${escapeHtml(String(report.template_source_name || ""))}</span>` : "",
+        `</div>`,
+      ].join(""),
+    ];
+    if (report.analysis_notice) {
+      sections.push(`<div class="detail-block">${escapeHtml(String(report.analysis_notice || ""))}</div>`);
+    }
+    if (items.length) {
+      sections.push("<div class=\"subhead\">자동 매칭 작업 항목</div>");
+      sections.push(
+        `<div class="work-report-match-list">${items.map((row, index) => [
+          '<article class="work-report-match-card">',
+          `<strong>${escapeHtml(`${index + 1}. ${String(row.title || "-")}`)}</strong>`,
+          `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 업체: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
+          row.summary && String(row.summary || "").trim() !== String(row.title || "").trim() ? `<p>${escapeHtml(String(row.summary || ""))}</p>` : "",
+          Array.isArray(row.images) && row.images.length ? `<div class="work-report-chip-list">${row.images.map((image) => `<span>${escapeHtml(`${String(image.stage_label || "현장 이미지")} · ${String(image.filename || "-")}`)}</span>`).join("")}</div>` : '<p>매칭된 이미지 없음</p>',
+          Array.isArray(row.attachments) && row.attachments.length ? `<div class="work-report-chip-list">${row.attachments.map((file) => `<span>${escapeHtml(`파일 · ${String(file.filename || "-")}`)}</span>`).join("")}</div>` : "",
+          "</article>",
+        ].join("")).join("")}</div>`
+      );
+    }
+    if (unmatchedImages.length || unmatchedAttachments.length) {
+      sections.push("<div class=\"subhead\">미매칭 자료</div>");
+      sections.push(
+        `<div class="work-report-chip-list">${
+          [
+            ...unmatchedImages.map((row) => `<span>${escapeHtml(`이미지 · ${String(row.filename || "-")}`)}</span>`),
+            ...unmatchedAttachments.map((row) => `<span>${escapeHtml(`파일 · ${String(row.filename || "-")}`)}</span>`),
+          ].join("")
+        }</div>`
+      );
+    }
+    if (report.report_text) {
+      sections.push("<div class=\"subhead\">자동 생성 보고 요약</div>");
+      sections.push(`<div class="detail-block">${escapeHtml(String(report.report_text || ""))}</div>`);
+    }
+    return sections.join("");
+  }
+
+  function workReportFormData() {
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const text = String($("#chatInput")?.value || "").trim();
+    const images = selectedFiles("#chatImageInput");
+    const attachments = selectedFiles("#workReportFileInput");
+    const sampleFile = selectedSingleFile("#workReportSampleInput");
+    if (!text && !images.length && !attachments.length) {
+      throw new Error("카톡 대화, 이미지, 첨부파일 중 하나 이상을 입력하세요.");
+    }
+    const fd = new FormData();
+    fd.append("tenant_id", tenantId);
+    fd.append("text", text);
+    images.forEach((file) => fd.append("images", file, file.name || "work-image"));
+    attachments.forEach((file) => fd.append("attachments", file, file.name || "attachment"));
+    if (sampleFile) {
+      fd.append("sample_file", sampleFile, sampleFile.name || "sample");
+    }
+    return fd;
+  }
+
   async function digestChat() {
     const tenantId = currentTenantId();
     const text = String($("#chatInput").value || "").trim();
@@ -3769,6 +3861,26 @@
     if (autogenerated && files.length) {
       setMessage("#intakeMsg", `카톡 원문을 PNG ${files.length}장으로 자동 저장한 뒤 PDF를 생성했습니다.`);
     }
+  }
+
+  async function analyzeWorkReport() {
+    $("#workReportBox").textContent = "주요업무보고 매칭 분석 중입니다...";
+    const data = await authFetchJson("/api/ai/work_report", {
+      method: "POST",
+      body: workReportFormData(),
+    });
+    lastWorkReportResult = data.item || null;
+    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
+    setMessage("#intakeMsg", `작업 항목 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`);
+  }
+
+  async function downloadWorkReportPdf() {
+    const response = await authFetchBlob("/api/ai/work_report/pdf", {
+      method: "POST",
+      body: workReportFormData(),
+    });
+    downloadBlob(response.blob, response.filename || "work-report.pdf");
+    setMessage("#intakeMsg", "주요업무보고 PDF를 생성했습니다.");
   }
 
   async function createTenant() {
@@ -4065,6 +4177,8 @@
     $("#btnPreviewDigestSource")?.addEventListener("click", () => previewChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDownloadDigestSource")?.addEventListener("click", () => downloadChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnPasteDigestImage")?.addEventListener("click", () => importClipboardImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
+    $("#btnAnalyzeWorkReport")?.addEventListener("click", () => analyzeWorkReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
+    $("#btnWorkReportPdf")?.addEventListener("click", () => downloadWorkReportPdf().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnLoadFacilityDashboard")?.addEventListener("click", () => loadFacilityDashboard().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnLoadFacilityAssets")?.addEventListener("click", () => loadFacilityAssets().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnResetFacilityAssetFilters")?.addEventListener("click", () => resetFacilityAssetFilters().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
@@ -4190,6 +4304,8 @@
       resetDigestImportState();
       updateChatDigestHint();
     });
+    $("#workReportFileInput")?.addEventListener("change", () => updateGenericFileHint("#workReportFileInput", "#workReportFileHint", "선택된 첨부파일이 없습니다."));
+    $("#workReportSampleInput")?.addEventListener("change", () => updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "주요업무보고 HWP/TXT/MD 샘플을 넣으면 제목과 양식 표현을 참고합니다. 비워두면 기본 양식으로 생성합니다."));
     $("#chatInput")?.addEventListener("input", () => {
       clearChatSourcePreview();
       resetDigestImportState();
@@ -4246,7 +4362,10 @@
     clearChatDigestImagePreview();
     clearChatSourcePreview();
     resetDigestImportState();
+    lastWorkReportResult = null;
     updateChatDigestHint();
+    updateGenericFileHint("#workReportFileInput", "#workReportFileHint", "선택된 첨부파일이 없습니다.");
+    updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "주요업무보고 HWP/TXT/MD 샘플을 넣으면 제목과 양식 표현을 참고합니다. 비워두면 기본 양식으로 생성합니다.");
     clearNoticeForm();
     clearComplaintDetail();
     updateIntakeReview();

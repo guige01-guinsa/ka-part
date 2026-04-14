@@ -367,7 +367,7 @@ def _migrate_legacy_asset_images(con: sqlite3.Connection) -> None:
             continue
         touched_assets.add((tenant_id, asset_id))
         ts = str(row["updated_at"] or row["created_at"] or now_iso())
-        cur = con.execute(
+        con.execute(
             """
             INSERT INTO facility_asset_images(
               tenant_id, asset_id, file_url, mime_type, size_bytes, is_primary, sort_order, created_at, updated_at
@@ -883,7 +883,7 @@ def set_asset_image(
         elif len(images) >= MAX_ASSET_IMAGE_COUNT:
             raise ValueError(f"자산 이미지는 대표 이미지를 포함해 최대 {MAX_ASSET_IMAGE_COUNT}장까지 등록할 수 있습니다.")
         ts = now_iso()
-        cur = con.execute(
+        con.execute(
             """
             INSERT INTO facility_asset_images(
               tenant_id, asset_id, file_url, mime_type, size_bytes, is_primary, sort_order, created_at, updated_at

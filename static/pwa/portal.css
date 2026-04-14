@@ -925,6 +925,58 @@ body {
   border: 1px solid rgba(23, 38, 37, 0.08);
 }
 
+.work-report-meta,
+.work-report-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.work-report-meta {
+  margin-top: 10px;
+}
+
+.work-report-meta span,
+.work-report-chip-list span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(13, 106, 103, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.work-report-match-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.work-report-match-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 10px 24px rgba(29, 42, 40, 0.06);
+}
+
+.work-report-match-card strong {
+  font-size: 14px;
+}
+
+.work-report-match-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .attachment-top,
 .check-all {
   display: flex;

@@ -296,6 +296,77 @@ def test_kakao_digest_pdf_supports_text_and_images(app_client) -> None:
     assert response.content.startswith(b"%PDF")
 
 
+def test_work_report_analysis_matches_chat_images_and_files(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    sample_text = "\n".join(
+        [
+            "시설팀 주요 업무 보고",
+            "보고기간 : 7월01일~7월31일",
+            "<작업내용 :><커뮤니티 헬스장 44번 사이클 손잡이 교체>",
+            "<작업일자 :><7월 2일><업 체 :><관리실>",
+        ]
+    )
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={
+            "tenant_id": "ys_thesharp",
+            "text": "\n".join(
+                [
+                    "2026년 7월 2일 오전 9:00, 관리실 : 커뮤니티 헬스장 44번 사이클 손잡이 교체",
+                    "2026년 7월 3일 오전 10:00, 관리실 : 110동 4/5라인 지하1층 방화문 기판 교체",
+                ]
+            ),
+        },
+        files=[
+            ("images", ("7월2일-사이클-교체전.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+            ("images", ("7월2일-사이클-교체후.jpg", io.BytesIO(b"fake-image-2"), "image/jpeg")),
+            ("images", ("7월3일-방화문-교체전.jpg", io.BytesIO(b"fake-image-3"), "image/jpeg")),
+            ("images", ("7월3일-방화문-교체후.jpg", io.BytesIO(b"fake-image-4"), "image/jpeg")),
+            ("attachments", ("7월2일-사이클-작업내역서.txt", io.BytesIO("사이클 손잡이 교체 작업내역".encode("utf-8")), "text/plain")),
+            ("sample_file", ("major-work-report.txt", io.BytesIO(sample_text.encode("utf-8")), "text/plain")),
+        ],
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    assert item["report_title"] == "시설팀 주요 업무 보고"
+    assert item["period_label"] == "7월01일~7월31일"
+    assert item["item_count"] >= 2
+    assert any("사이클" in str(row["title"]) for row in item["items"])
+    cycle_item = next(row for row in item["items"] if "사이클" in str(row["title"]))
+    assert len(cycle_item["images"]) >= 2
+    assert any("작업 전" == str(image["stage_label"]) for image in cycle_item["images"])
+    assert any("작업 후" == str(image["stage_label"]) for image in cycle_item["images"])
+    assert any("작업내역서" in str(file["filename"]) for file in cycle_item["attachments"])
+
+
+def test_work_report_pdf_supports_sample_and_uploads(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    response = client.post(
+        "/api/ai/work_report/pdf",
+        headers=headers,
+        data={
+            "tenant_id": "ys_thesharp",
+            "text": "2026년 7월 4일 오전 9:00, 관리실 : 어린이 수영장 청소",
+        },
+        files=[
+            ("images", ("7월4일-수영장-작업전.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+            ("images", ("7월4일-수영장-작업후.jpg", io.BytesIO(b"fake-image-2"), "image/jpeg")),
+            ("sample_file", ("major-work-report.txt", io.BytesIO("시설팀 주요 업무 보고\n보고기간 : 7월01일~7월31일".encode("utf-8")), "text/plain")),
+        ],
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert "attachment;" in response.headers.get("content-disposition", "")
+    assert response.content.startswith(b"%PDF")
+
+
 def test_kakao_digest_import_creates_complaints(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)

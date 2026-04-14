@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from io import BytesIO
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Sequence
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -294,6 +294,193 @@ def build_kakao_digest_pdf(
                 story.append(Paragraph("이미지 원본을 읽지 못했습니다.", styles["caption"]))
             story.append(Paragraph(_escape(caption), styles["caption"]))
             story.append(Spacer(1, 6 * mm))
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def _work_report_detail_table(item: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> Table:
+    rows = [
+        [Paragraph("작업내용", styles["small"]), Paragraph(_escape(item.get("title") or "-"), styles["body"])],
+        [Paragraph("작업일자", styles["small"]), Paragraph(_escape(item.get("work_date_label") or item.get("work_date") or "-"), styles["small"])],
+        [Paragraph("업체", styles["small"]), Paragraph(_escape(item.get("vendor_name") or "-"), styles["small"])],
+        [Paragraph("위치", styles["small"]), Paragraph(_escape(item.get("location_name") or "-"), styles["small"])],
+    ]
+    summary = _collapse(item.get("summary") or "")
+    if summary and summary != _collapse(item.get("title") or ""):
+        rows.append([Paragraph("비고", styles["small"]), Paragraph(_escape(summary), styles["small"])])
+    table = Table(rows, colWidths=[24 * mm, 146 * mm])
+    table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.55, colors.HexColor("#C8D3CE")),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F0F5F2")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    return table
+
+
+def _work_report_image_lookup(image_inputs: Sequence[Dict[str, Any]] | None = None) -> Dict[int, Dict[str, Any]]:
+    return {index: row for index, row in enumerate(list(image_inputs or []), start=1)}
+
+
+def _work_report_image_grid(item: Dict[str, Any], image_inputs: Sequence[Dict[str, Any]] | None, styles: Dict[str, ParagraphStyle]) -> Table | None:
+    image_lookup = _work_report_image_lookup(image_inputs)
+    matches = list(item.get("images") or [])
+    if not matches:
+        return None
+    cells: List[List[Any]] = []
+    row_cells: List[Any] = []
+    for match in matches:
+        image_index = int(match.get("index") or 0)
+        image_item = image_lookup.get(image_index) or {}
+        raw = image_item.get("bytes")
+        flowables: List[Any] = [
+            Paragraph(_escape(match.get("stage_label") or "현장 이미지"), styles["small"]),
+        ]
+        if isinstance(raw, (bytes, bytearray)) and raw:
+            try:
+                flowables.append(_scaled_image(bytes(raw), max_width=78 * mm, max_height=62 * mm))
+            except Exception:
+                flowables.append(Paragraph("이미지를 렌더링하지 못했습니다.", styles["caption"]))
+        else:
+            flowables.append(Paragraph("이미지 원본 없음", styles["caption"]))
+        flowables.append(Paragraph(_escape(match.get("filename") or image_item.get("filename") or f"image-{image_index}"), styles["caption"]))
+        row_cells.append(flowables)
+        if len(row_cells) == 2:
+            cells.append(row_cells)
+            row_cells = []
+    if row_cells:
+        row_cells.append(Paragraph("", styles["caption"]))
+        cells.append(row_cells)
+    table = Table(cells, colWidths=[84 * mm, 84 * mm])
+    table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D5DFDA")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FBFDFC")),
+            ]
+        )
+    )
+    return table
+
+
+def build_work_report_pdf(
+    *,
+    report: Dict[str, Any],
+    tenant_label: str,
+    source_text: str,
+    image_inputs: Sequence[Dict[str, Any]] | None = None,
+    attachment_inputs: Sequence[Dict[str, Any]] | None = None,
+    template_source_name: str = "",
+) -> bytes:
+    styles = _styles()
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=16 * mm,
+        rightMargin=16 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        title=_collapse(report.get("report_title") or "주요 업무 보고"),
+        author="KA-PART AI 민원처리 엔진",
+    )
+    story: List[Any] = []
+    report_title = _collapse(report.get("report_title") or "시설팀 주요 업무 보고")
+    period_label = _collapse(report.get("period_label") or "-")
+    story.append(Paragraph(_escape(report_title), styles["title"]))
+    story.append(Paragraph(_escape(f"대상 단지: {tenant_label or '-'}"), styles["meta"]))
+    story.append(Paragraph(_escape(f"보고기간: {period_label}"), styles["meta"]))
+    story.append(Paragraph(_escape(f"생성시각: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}"), styles["meta"]))
+    if template_source_name:
+        story.append(Paragraph(_escape(f"참조 양식: {template_source_name}"), styles["meta"]))
+    story.append(Spacer(1, 4 * mm))
+
+    overview = Table(
+        [
+            [Paragraph("작업 항목", styles["small"]), Paragraph(str(int(report.get("item_count") or len(report.get("items") or []))), styles["small"]), Paragraph("미매칭 이미지", styles["small"]), Paragraph(str(len(report.get("unmatched_images") or [])), styles["small"])],
+            [Paragraph("미매칭 파일", styles["small"]), Paragraph(str(len(report.get("unmatched_attachments") or [])), styles["small"]), Paragraph("분석모델", styles["small"]), Paragraph(_escape(report.get("analysis_model") or "-"), styles["small"])],
+        ],
+        colWidths=[24 * mm, 58 * mm, 24 * mm, 58 * mm],
+    )
+    overview.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.55, colors.HexColor("#C8D3CE")),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F0F5F2")),
+                ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#F0F5F2")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    story.append(overview)
+    notice = _collapse(report.get("analysis_notice") or "")
+    if notice:
+        story.append(Spacer(1, 3 * mm))
+        story.append(Paragraph(_escape(notice), styles["caption"]))
+
+    items = list(report.get("items") or [])
+    if items:
+        for position, item in enumerate(items, start=1):
+            story.append(Spacer(1, 6 * mm))
+            story.append(Paragraph(_escape(f"{position}. 주요 작업"), styles["heading"]))
+            story.append(_work_report_detail_table(item, styles))
+            image_grid = _work_report_image_grid(item, image_inputs, styles)
+            if image_grid:
+                story.append(Spacer(1, 3 * mm))
+                story.append(image_grid)
+            attachments = list(item.get("attachments") or [])
+            if attachments:
+                story.append(Spacer(1, 2 * mm))
+                story.append(Paragraph("첨부파일", styles["small"]))
+                for attachment in attachments:
+                    preview = _collapse(attachment.get("preview_text") or "")
+                    label = _collapse(attachment.get("filename") or "-")
+                    text = label if not preview else f"{label} / {preview}"
+                    story.append(Paragraph(f"- {_escape(text)}", styles["caption"]))
+            if position < len(items):
+                story.append(Spacer(1, 4 * mm))
+    else:
+        story.append(Spacer(1, 5 * mm))
+        story.append(Paragraph("자동 분류된 작업 항목이 없습니다.", styles["body"]))
+
+    unmatched_images = list(report.get("unmatched_images") or [])
+    unmatched_attachments = list(report.get("unmatched_attachments") or [])
+    if unmatched_images or unmatched_attachments:
+        story.append(PageBreak())
+        story.append(Paragraph("미매칭 자료", styles["heading"]))
+        if unmatched_images:
+            story.append(Paragraph("미매칭 이미지", styles["small"]))
+            for row in unmatched_images:
+                story.append(Paragraph(f"- {_escape(row.get('filename') or '-')}", styles["caption"]))
+        if unmatched_attachments:
+            story.append(Spacer(1, 2 * mm))
+            story.append(Paragraph("미매칭 첨부파일", styles["small"]))
+            for row in unmatched_attachments:
+                story.append(Paragraph(f"- {_escape(row.get('filename') or '-')}", styles["caption"]))
+
+    source_preview = [line for line in report.get("source_text_preview") or [] if _collapse(line)]
+    if source_preview:
+        story.append(Spacer(1, 5 * mm))
+        story.append(Paragraph("원문 미리보기", styles["heading"]))
+        for line in source_preview[:16]:
+            story.append(Paragraph(_escape(line), styles["caption"]))
 
     doc.build(story)
     return buffer.getvalue()

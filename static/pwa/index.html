@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=6" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260411f1" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260415b" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -295,6 +295,22 @@
       <div id="chatSourcePreviewMeta" class="inline-note">원문 이미지 미리보기를 열면 자동 저장될 PNG를 여기서 확인할 수 있습니다.</div>
       <div id="chatSourcePreview" class="chat-source-preview hidden"></div>
       <div id="chatDigestBox" class="detail-block">카톡 분석 결과가 여기에 표시됩니다.</div>
+      <div class="subhead">주요업무보고서 자동 생성</div>
+      <div class="cta-row">
+        <button id="btnAnalyzeWorkReport" class="action-btn action-secondary" type="button">업무보고 매칭 분석</button>
+        <button id="btnWorkReportPdf" class="action-btn" type="button">주요업무보고 PDF</button>
+      </div>
+      <label class="field">
+        <span>샘플 양식 파일</span>
+        <input id="workReportSampleInput" type="file" accept=".hwp,.txt,.md" />
+      </label>
+      <div id="workReportSampleHint" class="inline-note">주요업무보고 HWP/TXT/MD 샘플을 넣으면 제목과 양식 표현을 참고합니다. 비워두면 기본 양식으로 생성합니다.</div>
+      <label class="field">
+        <span>추가 첨부파일 (작업내역서, 견적서 등)</span>
+        <input id="workReportFileInput" type="file" multiple />
+      </label>
+      <div id="workReportFileHint" class="inline-note">선택된 첨부파일이 없습니다.</div>
+      <div id="workReportBox" class="detail-block">카톡 대화, 이미지, 첨부파일을 함께 넣고 업무보고 매칭 분석을 실행하세요.</div>
     </section>
 
     <section id="operationsSection" class="panel reveal" data-mobile-workspace="admin" data-mobile-panel-item="adminWorkspaceSections" data-mobile-panel-name="dashboard">
@@ -1561,6 +1577,6 @@
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260415a"></script>
+  <script src="/pwa/portal.js?v=20260415b"></script>
 </body>
 </html>

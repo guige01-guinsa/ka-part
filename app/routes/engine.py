@@ -19,6 +19,7 @@ from ..db import (
     log_usage,
     mark_tenant_used,
 )
+from ..document_sample_service import extract_document_sample
 from ..engine_db import (
     add_attachment,
     create_complaint,
@@ -30,12 +31,18 @@ from ..engine_db import (
     list_complaints,
     update_complaint,
 )
-from ..report_pdf import build_kakao_digest_pdf
+from ..report_pdf import build_kakao_digest_pdf, build_work_report_pdf
+from ..work_report_service import (
+    MAX_WORK_REPORT_ATTACHMENTS,
+    MAX_WORK_REPORT_IMAGES,
+    analyze_work_report,
+)
 
 router = APIRouter()
 AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
 UPLOAD_ROOT = (STORAGE_ROOT / "uploads" / "complaints").resolve()
 DIGEST_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+WORK_REPORT_FILE_MAX_BYTES = 15 * 1024 * 1024
 
 
 def _access_token(request: Request) -> str:
@@ -173,6 +180,93 @@ async def _read_digest_images(files: List[UploadFile]) -> List[Dict[str, Any]]:
     return items
 
 
+async def _read_work_report_images(files: List[UploadFile]) -> List[Dict[str, Any]]:
+    uploads = list(files or [])
+    if len(uploads) > MAX_WORK_REPORT_IMAGES:
+        raise HTTPException(status_code=400, detail=f"업무보고 이미지는 최대 {MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.")
+    items: List[Dict[str, Any]] = []
+    for upload in uploads:
+        content_type = str(upload.content_type or "").strip().lower()
+        if not content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="업무보고 이미지는 이미지 파일만 업로드할 수 있습니다.")
+        raw = await upload.read()
+        try:
+            if len(raw) > WORK_REPORT_FILE_MAX_BYTES:
+                raise HTTPException(status_code=400, detail="업무보고 이미지 한 장은 15MB 이하여야 합니다.")
+            items.append(
+                {
+                    "filename": str(upload.filename or "work-report-image").strip() or "work-report-image",
+                    "content_type": content_type or "image/jpeg",
+                    "size_bytes": len(raw),
+                    "bytes": raw,
+                }
+            )
+        finally:
+            try:
+                await upload.close()
+            except Exception:
+                pass
+    return items
+
+
+async def _read_work_report_attachments(files: List[UploadFile]) -> List[Dict[str, Any]]:
+    uploads = list(files or [])
+    if len(uploads) > MAX_WORK_REPORT_ATTACHMENTS:
+        raise HTTPException(status_code=400, detail=f"업무보고 첨부파일은 최대 {MAX_WORK_REPORT_ATTACHMENTS}건까지 업로드할 수 있습니다.")
+    items: List[Dict[str, Any]] = []
+    for upload in uploads:
+        raw = await upload.read()
+        filename = str(upload.filename or "attachment").strip() or "attachment"
+        content_type = str(upload.content_type or "application/octet-stream").strip() or "application/octet-stream"
+        preview_text = ""
+        try:
+            if len(raw) > WORK_REPORT_FILE_MAX_BYTES:
+                raise HTTPException(status_code=400, detail="업무보고 첨부파일 한 건은 15MB 이하여야 합니다.")
+            suffix = Path(filename).suffix.lower()
+            if suffix in {".hwp", ".txt", ".md"}:
+                try:
+                    preview = extract_document_sample(filename, raw)
+                    preview_text = "\n".join(str(line or "") for line in (preview.get("lines") or [])[:8])
+                except Exception:
+                    preview_text = ""
+            items.append(
+                {
+                    "filename": filename,
+                    "content_type": content_type,
+                    "size_bytes": len(raw),
+                    "bytes": raw,
+                    "preview_text": preview_text,
+                }
+            )
+        finally:
+            try:
+                await upload.close()
+            except Exception:
+                pass
+    return items
+
+
+async def _read_work_report_sample(upload: Optional[UploadFile]) -> Dict[str, Any]:
+    if not upload:
+        return {}
+    raw_name = str(upload.filename or "").strip() or "sample"
+    file_bytes = await upload.read()
+    try:
+        if len(file_bytes) > WORK_REPORT_FILE_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="샘플 양식 파일은 15MB 이하여야 합니다.")
+        try:
+            sample = extract_document_sample(raw_name, file_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        sample["source_name"] = raw_name
+        return sample
+    finally:
+        try:
+            await upload.close()
+        except Exception:
+            pass
+
+
 @router.post("/ai/classify")
 def ai_classify(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     tenant_id, user, tenant = _tenant_id_from_request(request, payload)
@@ -260,6 +354,102 @@ async def ai_kakao_digest_pdf(
         {"lines": len(source_text.splitlines()), "images": len(image_inputs)},
     )
     file_name = f"kakao-digest-{_download_name(resolved_tenant_id)}.pdf"
+    headers = {"Content-Disposition": f'attachment; filename="{file_name}"'}
+    return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers=headers)
+
+
+@router.post("/ai/work_report")
+async def ai_work_report(
+    request: Request,
+    tenant_id: str = Form(default=""),
+    text: str = Form(default=""),
+    images: List[UploadFile] = File(default=[]),
+    attachments: List[UploadFile] = File(default=[]),
+    sample_file: UploadFile | None = File(default=None),
+) -> Dict[str, Any]:
+    payload = {"tenant_id": tenant_id}
+    resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
+    source_text = str(text or "").strip()
+    image_inputs = await _read_work_report_images(list(images or []))
+    attachment_inputs = await _read_work_report_attachments(list(attachments or []))
+    sample = await _read_work_report_sample(sample_file)
+    if not source_text and not image_inputs and not attachment_inputs:
+        raise HTTPException(status_code=400, detail="text, image, or attachment is required")
+    try:
+        item = analyze_work_report(
+            source_text,
+            image_inputs=image_inputs,
+            attachment_inputs=attachment_inputs,
+            sample_title=str(sample.get("title") or "").strip(),
+            sample_lines=[str(line or "") for line in sample.get("lines") or []],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    item["template_source_name"] = str(sample.get("source_name") or "").strip()
+    item["template_kind"] = str(sample.get("kind") or "").strip()
+    log_usage(resolved_tenant_id, "ai.work_report")
+    append_audit_log(
+        resolved_tenant_id,
+        "ai_work_report",
+        _actor_label(user, tenant),
+        {
+            "lines": len(source_text.splitlines()),
+            "images": len(image_inputs),
+            "attachments": len(attachment_inputs),
+            "sample": str(sample.get("source_name") or ""),
+        },
+    )
+    return {"ok": True, "item": item}
+
+
+@router.post("/ai/work_report/pdf")
+async def ai_work_report_pdf(
+    request: Request,
+    tenant_id: str = Form(default=""),
+    text: str = Form(default=""),
+    images: List[UploadFile] = File(default=[]),
+    attachments: List[UploadFile] = File(default=[]),
+    sample_file: UploadFile | None = File(default=None),
+) -> StreamingResponse:
+    payload = {"tenant_id": tenant_id}
+    resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
+    source_text = str(text or "").strip()
+    image_inputs = await _read_work_report_images(list(images or []))
+    attachment_inputs = await _read_work_report_attachments(list(attachments or []))
+    sample = await _read_work_report_sample(sample_file)
+    if not source_text and not image_inputs and not attachment_inputs:
+        raise HTTPException(status_code=400, detail="text, image, or attachment is required")
+    try:
+        report = analyze_work_report(
+            source_text,
+            image_inputs=image_inputs,
+            attachment_inputs=attachment_inputs,
+            sample_title=str(sample.get("title") or "").strip(),
+            sample_lines=[str(line or "") for line in sample.get("lines") or []],
+        )
+        pdf_bytes = build_work_report_pdf(
+            report=report,
+            tenant_label=_tenant_label(resolved_tenant_id, tenant),
+            source_text=source_text,
+            image_inputs=image_inputs,
+            attachment_inputs=attachment_inputs,
+            template_source_name=str(sample.get("source_name") or "").strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log_usage(resolved_tenant_id, "ai.work_report.pdf")
+    append_audit_log(
+        resolved_tenant_id,
+        "ai_work_report_pdf",
+        _actor_label(user, tenant),
+        {
+            "lines": len(source_text.splitlines()),
+            "images": len(image_inputs),
+            "attachments": len(attachment_inputs),
+            "sample": str(sample.get("source_name") or ""),
+        },
+    )
+    file_name = f"work-report-{_download_name(resolved_tenant_id)}.pdf"
     headers = {"Content-Disposition": f'attachment; filename="{file_name}"'}
     return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers=headers)
 
