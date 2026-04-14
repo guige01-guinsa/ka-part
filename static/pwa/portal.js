@@ -57,6 +57,7 @@
   let selectedInfoBuildingId = 0;
   let selectedInfoRegistrationId = 0;
   let facilityAssets = [];
+  let facilityAssetCatalog = [];
   let facilityChecklists = [];
   let facilityInspections = [];
   let facilityWorkOrders = [];
@@ -1014,7 +1015,7 @@
       const current = String(selected || el.value || "");
       el.innerHTML = [
         '<option value="">자산 미지정</option>',
-        ...facilityAssets.map((item) => `<option value="${Number(item.id || 0)}"${String(item.id) === current ? " selected" : ""}>${escapeHtml(item.asset_code || "-")} / ${escapeHtml(item.asset_name || "-")}</option>`),
+        ...facilityAssetCatalog.map((item) => `<option value="${Number(item.id || 0)}"${String(item.id) === current ? " selected" : ""}>${escapeHtml(item.asset_code || "-")} / ${escapeHtml(item.asset_name || "-")}</option>`),
       ].join("");
     });
   }
@@ -1596,6 +1597,38 @@
     };
   }
 
+  function facilityAssetListFilters() {
+    return {
+      query: String($("#facilityAssetSearchQuery")?.value || "").trim(),
+      category: String($("#facilityAssetFilterCategory")?.value || "").trim(),
+      lifecycle_state: String($("#facilityAssetFilterState")?.value || "").trim(),
+    };
+  }
+
+  function updateFacilityAssetListSummary(total) {
+    const target = $("#facilityAssetListSummary");
+    if (!target) return;
+    const filters = facilityAssetListFilters();
+    const labels = [];
+    if (filters.query) labels.push(`검색어: ${filters.query}`);
+    if (filters.category) labels.push(`분류: ${filters.category}`);
+    if (filters.lifecycle_state) labels.push(`상태: ${filters.lifecycle_state}`);
+    if (!labels.length) {
+      target.textContent = total ? `전체 자산 ${total}건` : "등록된 자산이 없습니다.";
+      return;
+    }
+    target.textContent = total
+      ? `${labels.join(" / ")} · ${total}건`
+      : `${labels.join(" / ")} · 검색 결과가 없습니다.`;
+  }
+
+  async function resetFacilityAssetFilters() {
+    if ($("#facilityAssetSearchQuery")) $("#facilityAssetSearchQuery").value = "";
+    if ($("#facilityAssetFilterCategory")) $("#facilityAssetFilterCategory").value = "";
+    if ($("#facilityAssetFilterState")) $("#facilityAssetFilterState").value = "";
+    return loadFacilityAssets();
+  }
+
   async function loadFacilityDashboard() {
     const tenantId = currentTenantId();
     if (!tenantId) return;
@@ -1621,14 +1654,33 @@
 
   async function loadFacilityAssets() {
     const tenantId = currentTenantId();
-    if (!tenantId) return [];
-    const data = await api(`/api/facility/assets?tenant_id=${encodeURIComponent(tenantId)}`);
+    if (!tenantId) {
+      facilityAssets = [];
+      facilityAssetCatalog = [];
+      renderFacilityAssetOptions($("#facilityInspectionAssetId")?.value || $("#facilityWorkOrderAssetId")?.value || "");
+      updateFacilityAssetListSummary(0);
+      return [];
+    }
+    const filters = facilityAssetListFilters();
+    const hasFilters = !!(filters.query || filters.category || filters.lifecycle_state);
+    const params = new URLSearchParams({ tenant_id: tenantId });
+    if (filters.query) params.set("query", filters.query);
+    if (filters.category) params.set("category", filters.category);
+    if (filters.lifecycle_state) params.set("lifecycle_state", filters.lifecycle_state);
+    const [data, catalogData] = await Promise.all([
+      api(`/api/facility/assets?${params.toString()}`),
+      hasFilters ? api(`/api/facility/assets?tenant_id=${encodeURIComponent(tenantId)}`) : Promise.resolve(null),
+    ]);
     facilityAssets = Array.isArray(data.items) ? data.items : [];
+    facilityAssetCatalog = hasFilters
+      ? (Array.isArray(catalogData?.items) ? catalogData.items : [])
+      : [...facilityAssets];
     renderFacilityAssetOptions($("#facilityInspectionAssetId")?.value || $("#facilityWorkOrderAssetId")?.value || "");
+    updateFacilityAssetListSummary(facilityAssets.length);
     const body = $("#facilityAssetsTableBody");
     body.innerHTML = facilityAssets.length
       ? facilityAssets.map((item) => `<tr class="facility-asset-row" data-id="${Number(item.id || 0)}"><td>${escapeHtml(item.asset_code || "-")}</td><td>${escapeHtml(item.asset_name || "-")}</td><td>${escapeHtml(item.category || "-")}</td><td>${escapeHtml(item.location_name || "-")}</td><td>${escapeHtml(item.lifecycle_state || "-")}</td></tr>`).join("")
-      : '<tr><td colspan="5" class="empty-state">등록된 자산이 없습니다.</td></tr>';
+      : `<tr><td colspan="5" class="empty-state">${hasFilters ? "검색 결과가 없습니다." : "등록된 자산이 없습니다."}</td></tr>`;
     body.querySelectorAll(".facility-asset-row").forEach((rowEl) => {
       rowEl.addEventListener("click", () => {
         const item = facilityAssets.find((row) => Number(row.id || 0) === Number(rowEl.getAttribute("data-id") || 0));
@@ -4014,6 +4066,8 @@
     $("#btnDownloadDigestSource")?.addEventListener("click", () => downloadChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnPasteDigestImage")?.addEventListener("click", () => importClipboardImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnLoadFacilityDashboard")?.addEventListener("click", () => loadFacilityDashboard().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#btnLoadFacilityAssets")?.addEventListener("click", () => loadFacilityAssets().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#btnResetFacilityAssetFilters")?.addEventListener("click", () => resetFacilityAssetFilters().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnLoadInfoDashboard")?.addEventListener("click", () => loadInfoDashboard().catch((error) => setMessage("#infoBuildingMsg", error.message || String(error), true)));
     $("#btnCreateInfoBuilding")?.addEventListener("click", () => createInfoBuilding().catch((error) => setMessage("#infoBuildingMsg", error.message || String(error), true)));
     $("#btnUpdateInfoBuilding")?.addEventListener("click", () => updateInfoBuilding().catch((error) => setMessage("#infoBuildingMsg", error.message || String(error), true)));
@@ -4031,6 +4085,8 @@
     $("#btnFacilityAssetFile")?.addEventListener("click", () => $("#facilityAssetFileInput")?.click());
     $("#btnFacilityAssetClearImageSelection")?.addEventListener("click", () => clearPendingFacilityAssetImages());
     $("#facilityAssetImagePreview")?.addEventListener("click", (event) => handleFacilityAssetPreviewAction(event).catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#facilityAssetFilterCategory")?.addEventListener("change", () => loadFacilityAssets().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
+    $("#facilityAssetFilterState")?.addEventListener("change", () => loadFacilityAssets().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
     $("#btnCreateFacilityChecklist")?.addEventListener("click", () => createFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
     $("#btnUpdateFacilityChecklist")?.addEventListener("click", () => updateFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
     $("#btnDeleteFacilityChecklist")?.addEventListener("click", () => deleteFacilityChecklist().catch((error) => setMessage("#facilityChecklistMsg", error.message || String(error), true)));
@@ -4067,6 +4123,12 @@
       if (event.key === "Enter") {
         event.preventDefault();
         loadComplaints().catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
+      }
+    });
+    $("#facilityAssetSearchQuery")?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        loadFacilityAssets().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true));
       }
     });
     $("#btnCreateVendor")?.addEventListener("click", () => createVendor().catch((error) => setMessage("#opsVendorMsg", error.message || String(error), true)));

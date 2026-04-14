@@ -57,6 +57,10 @@ def _clean_int(value: Any, *, field: str, default: int, minimum: int = 1, maximu
     return parsed
 
 
+def _escape_like(value: str) -> str:
+    return str(value or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _clean_date(value: Any, *, field: str, required: bool = False) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -718,7 +722,14 @@ def create_asset(
         con.close()
 
 
-def list_assets(*, tenant_id: str, category: str = "", lifecycle_state: str = "", limit: int = 200) -> List[Dict[str, Any]]:
+def list_assets(
+    *,
+    tenant_id: str,
+    category: str = "",
+    lifecycle_state: str = "",
+    query: str = "",
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
     clean_tenant_id = _clean_text(tenant_id, field="tenant_id", required=True, max_len=32).lower()
     clauses = ["tenant_id=?"]
     params: List[Any] = [clean_tenant_id]
@@ -728,6 +739,21 @@ def list_assets(*, tenant_id: str, category: str = "", lifecycle_state: str = ""
     if lifecycle_state:
         clauses.append("lifecycle_state=?")
         params.append(_clean_choice(lifecycle_state, ASSET_LIFECYCLE_VALUES, field="lifecycle_state", default="운영중"))
+    clean_query = _clean_text(query, field="query", max_len=160)
+    if clean_query:
+        escaped_query = f"%{_escape_like(clean_query)}%"
+        clauses.append(
+            """(
+              COALESCE(asset_code, '') LIKE ? ESCAPE '\\'
+              OR COALESCE(asset_name, '') LIKE ? ESCAPE '\\'
+              OR COALESCE(location_name, '') LIKE ? ESCAPE '\\'
+              OR COALESCE(vendor_name, '') LIKE ? ESCAPE '\\'
+              OR COALESCE(qr_id, '') LIKE ? ESCAPE '\\'
+              OR COALESCE(checklist_key, '') LIKE ? ESCAPE '\\'
+              OR COALESCE(note, '') LIKE ? ESCAPE '\\'
+            )"""
+        )
+        params.extend([escaped_query] * 7)
     params.append(max(1, min(int(limit), 500)))
     con = _connect()
     try:

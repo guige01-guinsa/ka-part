@@ -1072,6 +1072,40 @@
             <button id="btnClearFacilityAsset" class="ghost-btn" type="button">입력 초기화</button>
           </div>
           <div id="facilityAssetMsg" class="inline-message" aria-live="polite"></div>
+          <div class="filter-row">
+            <label class="field filter-field">
+              <span>자산 검색</span>
+              <input id="facilityAssetSearchQuery" type="text" maxlength="160" placeholder="코드, 자산명, 위치, 업체명, QR, 메모" />
+            </label>
+            <label class="field filter-field">
+              <span>목록 분류</span>
+              <select id="facilityAssetFilterCategory">
+                <option value="">전체</option>
+                <option value="승강기">승강기</option>
+                <option value="전기">전기</option>
+                <option value="기계">기계</option>
+                <option value="소방">소방</option>
+                <option value="건축">건축</option>
+                <option value="미화">미화</option>
+                <option value="보안">보안</option>
+                <option value="공용부">공용부</option>
+                <option value="기타">기타</option>
+              </select>
+            </label>
+            <label class="field filter-field">
+              <span>목록 상태</span>
+              <select id="facilityAssetFilterState">
+                <option value="">전체</option>
+                <option value="운영중">운영중</option>
+                <option value="점검중">점검중</option>
+                <option value="중지">중지</option>
+                <option value="폐기">폐기</option>
+              </select>
+            </label>
+            <button id="btnLoadFacilityAssets" class="ghost-btn" type="button">조회</button>
+            <button id="btnResetFacilityAssetFilters" class="ghost-btn" type="button">필터 초기화</button>
+          </div>
+          <div id="facilityAssetListSummary" class="inline-note">전체 자산을 조회합니다.</div>
           <div class="table-wrap">
             <table class="data-table">
               <thead>
@@ -1527,6 +1561,6 @@
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260411f1"></script>
+  <script src="/pwa/portal.js?v=20260415a"></script>
 </body>
 </html>

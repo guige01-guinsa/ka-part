@@ -206,11 +206,17 @@ def facility_assets_list(
     tenant_id: str = Query(default=""),
     category: str = Query(default=""),
     lifecycle_state: str = Query(default=""),
+    query: str = Query(default=""),
 ) -> Dict[str, Any]:
     _user, resolved_tenant_id = _resolve_facility_context(request, {"tenant_id": tenant_id})
     return {
         "ok": True,
-        "items": list_assets(tenant_id=resolved_tenant_id, category=category, lifecycle_state=lifecycle_state),
+        "items": list_assets(
+            tenant_id=resolved_tenant_id,
+            category=category,
+            lifecycle_state=lifecycle_state,
+            query=query,
+        ),
     }
 
 

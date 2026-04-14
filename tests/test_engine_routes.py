@@ -940,6 +940,55 @@ def test_facility_ops_module_supports_crud_and_dashboard(app_client) -> None:
     assert deleted_qr.status_code == 200
 
 
+def test_facility_asset_list_supports_keyword_search_and_filters(app_client) -> None:
+    client = app_client
+    _bootstrap_admin_and_tenant(client)
+
+    first = client.post(
+        "/api/facility/assets",
+        json={
+            "tenant_id": "ys_thesharp",
+            "asset_code": "ELV-A-25",
+            "asset_name": "상가A동 25호기 승강기",
+            "category": "승강기",
+            "location_name": "상가A동 1층",
+            "vendor_name": "오티스",
+            "lifecycle_state": "운영중",
+            "qr_id": "QR-ELV-A-25",
+            "note": "메인 출입구 쪽",
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/api/facility/assets",
+        json={
+            "tenant_id": "ys_thesharp",
+            "asset_code": "PUMP-B1-01",
+            "asset_name": "지하1층 급수펌프",
+            "category": "기계",
+            "location_name": "지하1층 기계실",
+            "vendor_name": "효성",
+            "lifecycle_state": "점검중",
+            "checklist_key": "PUMP-MONTHLY",
+            "note": "베어링 소음 점검 필요",
+        },
+    )
+    assert second.status_code == 200
+
+    by_vendor = client.get("/api/facility/assets?tenant_id=ys_thesharp&query=오티스")
+    assert by_vendor.status_code == 200
+    assert [item["asset_code"] for item in by_vendor.json()["items"]] == ["ELV-A-25"]
+
+    by_keyword_and_state = client.get("/api/facility/assets?tenant_id=ys_thesharp&query=소음&lifecycle_state=점검중")
+    assert by_keyword_and_state.status_code == 200
+    assert [item["asset_code"] for item in by_keyword_and_state.json()["items"]] == ["PUMP-B1-01"]
+
+    by_qr = client.get("/api/facility/assets?tenant_id=ys_thesharp&query=QR-ELV-A-25&category=승강기")
+    assert by_qr.status_code == 200
+    assert [item["asset_code"] for item in by_qr.json()["items"]] == ["ELV-A-25"]
+
+
 def test_document_numbering_config_is_tenant_configurable(app_client) -> None:
     client = app_client
     _bootstrap_admin_and_tenant(client)
