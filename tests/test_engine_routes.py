@@ -333,7 +333,7 @@ def test_work_report_analysis_matches_chat_images_and_files(app_client) -> None:
     assert response.status_code == 200
     item = response.json()["item"]
     assert item["report_title"] == "시설팀 주요 업무 보고"
-    assert item["period_label"] == "7월01일~7월31일"
+    assert item["period_label"] == "7월 2일 ~ 7월 3일"
     assert item["item_count"] >= 2
     assert any("사이클" in str(row["title"]) for row in item["items"])
     cycle_item = next(row for row in item["items"] if "사이클" in str(row["title"]))
@@ -341,6 +341,78 @@ def test_work_report_analysis_matches_chat_images_and_files(app_client) -> None:
     assert any("작업 전" == str(image["stage_label"]) for image in cycle_item["images"])
     assert any("작업 후" == str(image["stage_label"]) for image in cycle_item["images"])
     assert any("작업내역서" in str(file["filename"]) for file in cycle_item["attachments"])
+
+
+def test_work_report_analysis_supports_kakao_export_headers_and_notice_counts(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={
+            "tenant_id": "ys_thesharp",
+            "text": "\n".join(
+                [
+                    "2026년 7월 2일 수요일",
+                    "[관리실] [오전 9:00] 커뮤니티 헬스장 44번 사이클 손잡이 교체",
+                    "[관리실] [오전 9:05] 사진 1장",
+                    "[관리실] [오전 9:06] 작업내역서.pdf",
+                    "2026년 7월 3일 목요일",
+                    "[관리실] [오전 10:00] 110동 4/5라인 지하1층 방화문 기판 교체",
+                    "[관리실] [오전 10:05] 사진 3장",
+                ]
+            ),
+        },
+        files=[
+            ("images", ("IMG_0001.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+            ("images", ("IMG_0002.jpg", io.BytesIO(b"fake-image-2"), "image/jpeg")),
+            ("images", ("IMG_0003.jpg", io.BytesIO(b"fake-image-3"), "image/jpeg")),
+            ("images", ("IMG_0004.jpg", io.BytesIO(b"fake-image-4"), "image/jpeg")),
+            ("attachments", ("FILE_0001.pdf", io.BytesIO(b"fake-pdf"), "application/pdf")),
+        ],
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    cycle_item = next(row for row in item["items"] if "사이클" in str(row["title"]))
+    door_item = next(row for row in item["items"] if "방화문" in str(row["title"]))
+    assert cycle_item["work_date"] == "2026-07-02"
+    assert door_item["work_date"] == "2026-07-03"
+    assert len(cycle_item["images"]) == 1
+    assert len(door_item["images"]) == 3
+    assert any(str(file["filename"]) == "FILE_0001.pdf" for file in cycle_item["attachments"])
+
+
+def test_work_report_analysis_extracts_metadata_from_attachment_preview(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    preview_text = "\n".join(
+        [
+            "<제목><승강기 부품 교체의 건>",
+            "<수리업체><한국미쓰비시엘리베이터(주)>",
+            "<수리일시><2026.04.07>",
+            "<대상><상가A동 25호기>",
+        ]
+    )
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": ""},
+        files=[
+            ("attachments", ("repair-note.txt", io.BytesIO(preview_text.encode("utf-8")), "text/plain")),
+        ],
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    assert item["item_count"] == 1
+    first_item = item["items"][0]
+    assert first_item["title"] == "승강기 부품 교체의 건"
+    assert first_item["vendor_name"] == "한국미쓰비시엘리베이터(주)"
+    assert first_item["work_date"] == "2026-04-07"
+    assert first_item["location_name"] == "상가A동 25호기"
 
 
 def test_work_report_pdf_supports_sample_and_uploads(app_client) -> None:

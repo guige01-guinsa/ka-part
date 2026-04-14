@@ -26,6 +26,11 @@ WORK_REPORT_ACTION_KEYWORDS = (
     "세척",
     "개선",
     "정리",
+    "조정",
+    "변경",
+    "회수",
+    "급수",
+    "구입",
 )
 WORK_REPORT_VENDOR_HINTS = ("업체", "업 체", "시공사", "협력업체", "담당", "작업자")
 WORK_REPORT_STAGE_HINTS = {
@@ -35,10 +40,63 @@ WORK_REPORT_STAGE_HINTS = {
 }
 MAX_WORK_REPORT_IMAGES = 24
 MAX_WORK_REPORT_ATTACHMENTS = 30
+WORK_REPORT_FILE_EXTENSIONS = (
+    ".pdf",
+    ".hwp",
+    ".hwpx",
+    ".txt",
+    ".md",
+    ".xlsx",
+    ".xls",
+    ".doc",
+    ".docx",
+    ".ppt",
+    ".pptx",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".zip",
+)
+KAKAO_DATE_HEADER_RE = re.compile(
+    r"^(?:-+\s*)?(?P<y>\d{4})년\s*(?P<m>\d{1,2})월\s*(?P<d>\d{1,2})일(?:\s*[가-힣]+요일)?(?:\s*-+)?$"
+)
+KAKAO_INLINE_MESSAGE_RE = re.compile(
+    r"^(?P<y>\d{4})년\s*(?P<m>\d{1,2})월\s*(?P<d>\d{1,2})일\s*(?:오전|오후)?\s*\d{1,2}:\d{2},\s*(?P<sender>[^:]{1,40})\s*:\s*(?P<body>.+)$"
+)
+KAKAO_BRACKET_MESSAGE_RE = re.compile(r"^\[(?P<sender>[^\]]+)\]\s*\[(?P<time>[^\]]+)\]\s*(?P<body>.+)$")
+KAKAO_SHORT_MESSAGE_RE = re.compile(r"^(?P<time>(?:오전|오후)\s*\d{1,2}:\d{2}),?\s*(?P<sender>[^:]{1,40})\s*:\s*(?P<body>.+)$")
 
 
 def _collapse(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").replace("\u0000", " ")).strip()
+
+
+def _safe_date_value(year: int, month: int, day: int) -> str:
+    try:
+        return date(int(year), int(month), int(day)).isoformat()
+    except Exception:
+        return ""
+
+
+def _date_label(value: str) -> str:
+    raw = _collapse(value)
+    if not raw:
+        return ""
+    try:
+        parsed = date.fromisoformat(raw[:10])
+    except Exception:
+        return ""
+    return f"{parsed.month}월 {parsed.day}일"
+
+
+def _time_minutes(text: str) -> int:
+    match = re.search(r"(오전|오후)\s*(\d{1,2}):(\d{2})", str(text or ""))
+    if not match:
+        return -1
+    hour = int(match.group(2)) % 12
+    if match.group(1) == "오후":
+        hour += 12
+    return (hour * 60) + int(match.group(3))
 
 
 def _openai_client(default_model: str = "gpt-5") -> Tuple[Any | None, str]:
@@ -75,15 +133,21 @@ def _extract_date(text: str) -> Tuple[str, str]:
     raw = _collapse(text)
     if not raw:
         return "", ""
+    m = re.search(r"(?P<y>\d{4})\s*년\s*(?P<m>\d{1,2})\s*월\s*(?P<d>\d{1,2})\s*일", raw)
+    if m:
+        value = _safe_date_value(int(m.group("y")), int(m.group("m")), int(m.group("d")))
+        month = int(m.group("m"))
+        day = int(m.group("d"))
+        return value, f"{month}월 {day}일"
     m = re.search(r"(?P<y>\d{4})[./-]\s*(?P<m>\d{1,2})[./-]\s*(?P<d>\d{1,2})", raw)
     if m:
-        value = date(int(m.group("y")), int(m.group("m")), int(m.group("d"))).isoformat()
+        value = _safe_date_value(int(m.group("y")), int(m.group("m")), int(m.group("d")))
         month = int(m.group("m"))
         day = int(m.group("d"))
         return value, f"{month}월 {day}일"
     m = re.search(r"(?P<m>\d{1,2})\s*월\s*(?P<d>\d{1,2})\s*일", raw)
     if m:
-        value = date(datetime.now().year, int(m.group("m")), int(m.group("d"))).isoformat()
+        value = _safe_date_value(datetime.now().year, int(m.group("m")), int(m.group("d")))
         month = int(m.group("m"))
         day = int(m.group("d"))
         return value, f"{month}월 {day}일"
@@ -120,9 +184,47 @@ def _looks_like_work_item(text: str) -> bool:
     normalized = _collapse(text)
     if len(normalized) < 4:
         return False
+    if re.search(r"\d{2,4}-\d{3,4}\s*/\s*010-\d{4}-\d{4}", normalized):
+        return False
+    if any(
+        phrase in normalized
+        for phrase in (
+            "방문요청하심",
+            "통화원하심",
+            "전화드렸는데",
+            "모르겠습니다",
+            "주중에 방문하기로",
+            "구매처 문의",
+        )
+    ):
+        return False
     if "작업내용" in normalized:
         return True
+    if any(pattern in normalized for pattern in ("AS요청", "요청함", "교체예정", "타이머조정", "변경 완료", "회수함")):
+        return True
     return any(keyword in normalized for keyword in WORK_REPORT_ACTION_KEYWORDS)
+
+
+def _should_skip_context_line(text: str) -> bool:
+    normalized = _collapse(text)
+    if not normalized:
+        return True
+    if re.match(r"^\[[^\]]+\]\s*\[[^\]]*$", normalized):
+        return True
+    if re.search(r"\d{2,4}-\d{3,4}\s*/\s*010-\d{4}-\d{4}", normalized):
+        return True
+    return any(
+        phrase in normalized
+        for phrase in (
+            "방문요청하심",
+            "통화원하심",
+            "전화드렸는데",
+            "모르겠습니다",
+            "주중에 방문하기로",
+            "구매처 문의",
+            "세대인계",
+        )
+    )
 
 
 def _extract_tagged_pairs(text: str) -> Dict[str, str]:
@@ -140,7 +242,9 @@ def _guess_vendor(text: str, sender: str = "") -> str:
     normalized = _collapse(text)
     m = re.search(r"(업체|업\s*체|시공사|협력업체|담당)\s*[:：]?\s*([가-힣A-Za-z0-9().\- ]{2,30})", normalized)
     if m:
-        return _collapse(m.group(2))
+        candidate = _collapse(m.group(2))
+        if candidate and not any(token in candidate for token in ("요청", "접수", "확인", "완료", "예정")):
+            return candidate
     if sender and sender not in {"회원", "관리실 알림"}:
         return sender
     return ""
@@ -166,6 +270,202 @@ def _clean_item_title(text: str) -> str:
     return normalized[:120]
 
 
+def _tagged_value(tagged: Dict[str, str], *labels: str) -> str:
+    normalized_labels = [re.sub(r"[\s:]+", "", label) for label in labels if _collapse(label)]
+    for key, value in tagged.items():
+        normalized_key = re.sub(r"[\s:]+", "", key)
+        if any(label in normalized_key for label in normalized_labels):
+            return _collapse(value)
+    return ""
+
+
+def _message_kind(text: str) -> str:
+    normalized = _collapse(text)
+    lower = normalized.lower()
+    if not normalized:
+        return "message"
+    if "사진을 보냈" in normalized or "이미지를 보냈" in normalized:
+        return "photo_notice"
+    if re.fullmatch(r"(사진|이미지|원본사진)(\s*\d+\s*장)?", normalized):
+        return "photo_notice"
+    if re.search(r"(사진|이미지)\s*\d+\s*장$", normalized):
+        return "photo_notice"
+    if "파일을 보냈" in normalized or normalized.startswith("파일 ") or normalized.startswith("파일:"):
+        return "file_notice"
+    if any(ext in lower for ext in WORK_REPORT_FILE_EXTENSIONS):
+        return "file_notice"
+    if any(keyword in normalized for keyword in ("견적서", "작업내역서", "세금계산서", "확인서")):
+        return "file_notice"
+    return "message"
+
+
+def _notice_count(text: str) -> int:
+    normalized = _collapse(text)
+    m = re.search(r"(\d+)\s*(장|건|개)", normalized)
+    if m:
+        return max(1, int(m.group(1)))
+    return 1
+
+
+def _parse_kakao_events(text: str) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    current_date = ""
+    for index, line in enumerate(str(text or "").splitlines(), start=1):
+        raw = _collapse(line)
+        if not raw:
+            continue
+        header = KAKAO_DATE_HEADER_RE.match(raw)
+        if header:
+            current_date = _safe_date_value(header.group("y"), header.group("m"), header.group("d"))
+            continue
+        message_match = KAKAO_INLINE_MESSAGE_RE.match(raw)
+        sender = ""
+        body = raw
+        date_value = ""
+        if message_match:
+            sender = _collapse(message_match.group("sender"))
+            body = _collapse(message_match.group("body"))
+            date_value = _safe_date_value(message_match.group("y"), message_match.group("m"), message_match.group("d"))
+            current_date = date_value or current_date
+        else:
+            bracket_match = KAKAO_BRACKET_MESSAGE_RE.match(raw)
+            short_match = KAKAO_SHORT_MESSAGE_RE.match(raw)
+            if bracket_match:
+                sender = _collapse(bracket_match.group("sender"))
+                body = _collapse(bracket_match.group("body"))
+                date_value = current_date
+            elif short_match:
+                sender = _collapse(short_match.group("sender"))
+                body = _collapse(short_match.group("body"))
+                date_value = current_date
+        if not date_value:
+            date_value, _ = _extract_date(body)
+            if not date_value:
+                date_value = current_date
+        events.append(
+            {
+                "index": index,
+                "date": date_value,
+                "date_label": _date_label(date_value),
+                "sender": sender,
+                "text": body,
+                "kind": _message_kind(body),
+                "minute_of_day": _time_minutes(raw),
+            }
+        )
+    return events
+
+
+def _new_item(title: str, event: Dict[str, Any], *, confidence: str) -> Dict[str, Any]:
+    clean_title = _clean_item_title(title)
+    work_date = _collapse(event.get("date") or "")
+    return {
+        "index": 0,
+        "title": clean_title,
+        "summary": clean_title,
+        "work_date": work_date,
+        "work_date_label": _collapse(event.get("date_label") or _date_label(work_date)),
+        "vendor_name": _guess_vendor(clean_title, sender=str(event.get("sender") or "")),
+        "location_name": _guess_location(clean_title),
+        "confidence": confidence,
+        "images": [],
+        "attachments": [],
+        "_expected_image_count": 0,
+        "_expected_attachment_count": 0,
+        "_attachment_notice_texts": [],
+        "_minute_of_day": int(event.get("minute_of_day") or -1),
+    }
+
+
+def _append_summary(item: Dict[str, Any], text: str) -> None:
+    addition = _collapse(text)
+    if not addition:
+        return
+    title = _collapse(item.get("title") or "")
+    current_summary = _collapse(item.get("summary") or "")
+    if addition == title or addition == current_summary or addition in current_summary:
+        return
+    if current_summary and current_summary != title:
+        item["summary"] = f"{current_summary} / {addition}"[:240]
+    else:
+        item["summary"] = addition[:240]
+
+
+def _apply_tagged_fields(item: Dict[str, Any], tagged: Dict[str, str], event: Dict[str, Any] | None = None) -> None:
+    title = _tagged_value(tagged, "작업내용", "제목", "건명")
+    if title:
+        clean_title = _clean_item_title(title)
+        item["title"] = clean_title
+        if not _collapse(item.get("summary") or "") or _collapse(item.get("summary") or "") == _collapse(item.get("title") or ""):
+            item["summary"] = clean_title
+    date_text = _tagged_value(tagged, "작업일자", "작업일시", "보고일자", "수리일시", "일시", "일자")
+    if date_text:
+        work_date, work_date_label = _extract_date(date_text)
+        if work_date:
+            item["work_date"] = work_date
+            item["work_date_label"] = work_date_label
+    elif event and not item.get("work_date"):
+        event_date = _collapse(event.get("date") or "")
+        if event_date:
+            item["work_date"] = event_date
+            item["work_date_label"] = _collapse(event.get("date_label") or _date_label(event_date))
+    vendor = _tagged_value(tagged, "수리업체", "업체명", "업체", "시공사", "협력업체", "담당")
+    if vendor:
+        item["vendor_name"] = vendor
+    location = _tagged_value(tagged, "위치", "장소", "현장", "대상")
+    if location:
+        item["location_name"] = location
+    elif item.get("title") and not item.get("location_name"):
+        item["location_name"] = _guess_location(item.get("title") or "")
+
+
+def _attachment_metadata(entry: Dict[str, Any]) -> Dict[str, str]:
+    preview_text = str(entry.get("preview_text") or "")
+    preview = _collapse(preview_text)
+    tagged = _extract_tagged_pairs(preview_text)
+
+    def line_value(pattern: str) -> str:
+        match = re.search(rf"(?mi)^\s*(?:{pattern})\s*[:：]?\s*(.+?)\s*$", preview_text)
+        return _collapse(match.group(1)) if match else ""
+
+    title = _tagged_value(tagged, "작업내용", "제목", "건명") or line_value("작업내용|제목|건명")
+    vendor = _tagged_value(tagged, "수리업체", "업체명", "업체", "시공사", "협력업체") or line_value("수리업체|업체명|시공사|협력업체|업체")
+    date_text = _tagged_value(tagged, "작업일자", "작업일시", "보고일자", "수리일시", "일시", "일자") or line_value("작업일자|작업일시|보고일자|수리일시|일시|일자")
+    location = _tagged_value(tagged, "위치", "장소", "현장", "대상") or line_value("위치|장소|현장|대상")
+    work_date, work_date_label = _extract_date(date_text)
+    summary = preview[:160]
+    if not title:
+        title = _collapse(Path(str(entry.get("filename") or "attachment")).stem)
+    if not location:
+        location = _guess_location(title or preview)
+    return {
+        "title": _clean_item_title(title),
+        "vendor_name": vendor,
+        "work_date": work_date,
+        "work_date_label": work_date_label,
+        "location_name": location,
+        "summary": summary,
+    }
+
+
+def _apply_attachment_metadata(item: Dict[str, Any], matches: Sequence[Dict[str, Any]]) -> None:
+    for match in matches:
+        metadata = match.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            continue
+        if not item.get("work_date") and _collapse(metadata.get("work_date") or ""):
+            item["work_date"] = _collapse(metadata.get("work_date") or "")
+            item["work_date_label"] = _collapse(metadata.get("work_date_label") or _date_label(item["work_date"]))
+        if not item.get("vendor_name") and _collapse(metadata.get("vendor_name") or ""):
+            item["vendor_name"] = _collapse(metadata.get("vendor_name") or "")
+        if not item.get("location_name") and _collapse(metadata.get("location_name") or ""):
+            item["location_name"] = _collapse(metadata.get("location_name") or "")
+        if not item.get("title") and _collapse(metadata.get("title") or ""):
+            item["title"] = _clean_item_title(metadata.get("title") or "")
+        if (_collapse(item.get("summary") or "") == _collapse(item.get("title") or "") or not _collapse(item.get("summary") or "")) and _collapse(metadata.get("summary") or ""):
+            _append_summary(item, metadata.get("summary") or "")
+
+
 def _tokenize(value: Any) -> List[str]:
     text = _collapse(value).lower()
     tokens = re.findall(r"[a-z]+|\d{1,4}|[가-힣]{2,}", text)
@@ -189,6 +489,7 @@ def _item_tokens(item: Dict[str, Any]) -> set[str]:
         item.get("work_date"),
         item.get("work_date_label"),
     ]
+    fields.extend(item.get("_attachment_notice_texts") or [])
     tokens: set[str] = set()
     for field in fields:
         tokens.update(_tokenize(field))
@@ -200,6 +501,16 @@ def _entry_tokens(entry: Dict[str, Any]) -> set[str]:
     preview_text = _collapse(entry.get("preview_text") or "")
     if preview_text:
         tokens.update(_tokenize(preview_text[:200]))
+    metadata = entry.get("metadata") or {}
+    if isinstance(metadata, dict):
+        for field in (
+            metadata.get("title"),
+            metadata.get("vendor_name"),
+            metadata.get("location_name"),
+            metadata.get("work_date"),
+            metadata.get("summary"),
+        ):
+            tokens.update(_tokenize(field))
     return tokens
 
 
@@ -253,6 +564,25 @@ def _assign_entries(items: List[Dict[str, Any]], entries: List[Dict[str, Any]]) 
         for item_index, rows in fallback.items():
             assigned[item_index].extend(rows)
     return assigned
+
+
+def _assign_entries_by_expected_counts(
+    items: Sequence[Dict[str, Any]], entries: Sequence[Dict[str, Any]], expected_key: str
+) -> Tuple[Dict[int, List[Dict[str, Any]]], List[Dict[str, Any]]]:
+    assigned: Dict[int, List[Dict[str, Any]]] = {int(item["index"]): [] for item in items}
+    remaining = list(entries)
+    if not items or not remaining:
+        return assigned, remaining
+    cursor = 0
+    for item in items:
+        expected = max(0, int(item.get(expected_key) or 0))
+        if expected <= 0 or cursor >= len(remaining):
+            continue
+        take = min(expected, len(remaining) - cursor)
+        if take > 0:
+            assigned[int(item["index"])].extend(remaining[cursor : cursor + take])
+            cursor += take
+    return assigned, remaining[cursor:]
 
 
 def _finalize_image_stages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -503,63 +833,104 @@ def analyze_work_report(
         report_title = _collapse(ai_result.get("report_title") or _sample_heading(sample_title, sample_lines))
         period_label = _collapse(ai_result.get("period_label") or _sample_period(sample_lines))
     else:
-        messages = [_normalize_message_line(line) for line in normalized_text.splitlines()]
+        events = _parse_kakao_events(normalized_text)
         explicit_items: List[Dict[str, Any]] = []
         current_item: Optional[Dict[str, Any]] = None
+        pending_image_count = 0
+        pending_attachment_count = 0
+        pending_attachment_texts: List[str] = []
 
-        for message in messages:
-            text_line = _collapse(message.get("text") or "")
+        def apply_pending(item: Dict[str, Any]) -> None:
+            nonlocal pending_image_count, pending_attachment_count, pending_attachment_texts
+            if pending_image_count > 0:
+                item["_expected_image_count"] = int(item.get("_expected_image_count") or 0) + pending_image_count
+                pending_image_count = 0
+            if pending_attachment_count > 0:
+                item["_expected_attachment_count"] = int(item.get("_expected_attachment_count") or 0) + pending_attachment_count
+                pending_attachment_count = 0
+            if pending_attachment_texts:
+                item["_attachment_notice_texts"].extend(pending_attachment_texts)
+                pending_attachment_texts = []
+
+        def hold_notice_for_next_item(item: Dict[str, Any] | None, event: Dict[str, Any]) -> bool:
+            if not item:
+                return True
+            item_minute = int(item.get("_minute_of_day") or -1)
+            event_minute = int(event.get("minute_of_day") or -1)
+            if item_minute >= 0 and event_minute >= 0 and event_minute - item_minute >= 20:
+                return True
+            return False
+
+        def flush_current() -> None:
+            nonlocal current_item
+            if current_item and current_item.get("title"):
+                current_item["index"] = len(explicit_items) + 1
+                explicit_items.append(current_item)
+            current_item = None
+
+        for event in events:
+            text_line = _collapse(event.get("text") or "")
             if not text_line:
                 continue
             tagged = _extract_tagged_pairs(text_line)
-            if tagged.get("작업내용"):
-                if current_item and current_item.get("title"):
-                    explicit_items.append(current_item)
-                current_item = {
-                    "index": len(explicit_items) + 1,
-                    "title": _clean_item_title(tagged.get("작업내용") or ""),
-                    "summary": _clean_item_title(tagged.get("작업내용") or ""),
-                    "work_date": "",
-                    "work_date_label": "",
-                    "vendor_name": "",
-                    "location_name": _guess_location(tagged.get("작업내용") or ""),
-                    "confidence": "structured",
-                    "images": [],
-                    "attachments": [],
-                }
+            if _tagged_value(tagged, "작업내용", "제목", "건명"):
+                flush_current()
+                current_item = _new_item(_tagged_value(tagged, "작업내용", "제목", "건명"), event, confidence="structured")
+                apply_pending(current_item)
+                _apply_tagged_fields(current_item, tagged, event)
                 continue
             if current_item and tagged:
-                if tagged.get("작업일자"):
-                    current_item["work_date"], current_item["work_date_label"] = _extract_date(tagged.get("작업일자") or "")
-                if tagged.get("업체") or tagged.get("업체") or tagged.get("업체"):
-                    current_item["vendor_name"] = _collapse(tagged.get("업체") or "")
-                if tagged.get("업체") == "" and "업체" in "".join(tagged.keys()):
-                    for key, value in tagged.items():
-                        if "업체" in key:
-                            current_item["vendor_name"] = _collapse(value)
+                _apply_tagged_fields(current_item, tagged, event)
+                continue
+            if event.get("kind") == "photo_notice":
+                target_item = None if hold_notice_for_next_item(current_item, event) else current_item
+                if target_item:
+                    target_item["_expected_image_count"] = int(target_item.get("_expected_image_count") or 0) + _notice_count(text_line)
+                else:
+                    pending_image_count += _notice_count(text_line)
+                continue
+            if event.get("kind") == "file_notice":
+                target_item = None if hold_notice_for_next_item(current_item, event) else current_item
+                if target_item:
+                    target_item["_expected_attachment_count"] = int(target_item.get("_expected_attachment_count") or 0) + _notice_count(text_line)
+                    target_item["_attachment_notice_texts"].append(text_line)
+                else:
+                    pending_attachment_count += _notice_count(text_line)
+                    pending_attachment_texts.append(text_line)
                 continue
             if _looks_like_work_item(text_line):
-                work_date, work_date_label = _extract_date(text_line)
-                if not work_date:
-                    work_date = str(message.get("date") or "")
-                    work_date_label = str(message.get("date_label") or "")
-                explicit_items.append(
-                    {
-                        "index": len(explicit_items) + 1,
-                        "title": _clean_item_title(text_line),
-                        "summary": _clean_item_title(text_line),
-                        "work_date": work_date,
-                        "work_date_label": work_date_label,
-                        "vendor_name": _guess_vendor(text_line, sender=str(message.get("sender") or "")),
-                        "location_name": _guess_location(text_line),
-                        "confidence": "heuristic",
-                        "images": [],
-                        "attachments": [],
-                    }
-                )
+                flush_current()
+                current_item = _new_item(text_line, event, confidence="heuristic")
+                apply_pending(current_item)
+                continue
+            if current_item:
+                current_tagged = _extract_tagged_pairs(text_line)
+                if current_tagged:
+                    _apply_tagged_fields(current_item, current_tagged, event)
+                    continue
+                if not current_item.get("work_date"):
+                    event_date = _collapse(event.get("date") or "")
+                    if event_date:
+                        current_item["work_date"] = event_date
+                        current_item["work_date_label"] = _collapse(event.get("date_label") or _date_label(event_date))
+                if not current_item.get("vendor_name"):
+                    guessed_vendor = _guess_vendor(text_line, sender=str(event.get("sender") or ""))
+                    if guessed_vendor:
+                        current_item["vendor_name"] = guessed_vendor
+                if not current_item.get("location_name"):
+                    guessed_location = _guess_location(text_line)
+                    if guessed_location:
+                        current_item["location_name"] = guessed_location
+                if any(keyword in text_line for keyword in ("업체", "시공사", "작업일자", "작업일시", "대상", "위치", "현장", "장소")):
+                    if not _should_skip_context_line(text_line):
+                        _append_summary(current_item, text_line)
+                    continue
+                if len(text_line) >= 8 and not _should_skip_context_line(text_line):
+                    _append_summary(current_item, text_line)
 
-        if current_item and current_item.get("title"):
-            explicit_items.append(current_item)
+        if current_item and (pending_image_count > 0 or pending_attachment_count > 0 or pending_attachment_texts):
+            apply_pending(current_item)
+        flush_current()
 
         deduped: List[Dict[str, Any]] = []
         seen_titles = set()
@@ -574,7 +945,8 @@ def analyze_work_report(
         items = deduped
         if not items and attachments:
             for entry in attachments:
-                title = _collapse(entry.get("preview_text") or Path(str(entry.get("filename") or "")).stem)
+                metadata = _attachment_metadata(entry)
+                title = _collapse(metadata.get("title") or "")
                 if not title:
                     continue
                 items.append(
@@ -582,13 +954,16 @@ def analyze_work_report(
                         "index": len(items) + 1,
                         "title": title,
                         "summary": title,
-                        "work_date": "",
-                        "work_date_label": "",
-                        "vendor_name": "",
-                        "location_name": "",
+                        "work_date": _collapse(metadata.get("work_date") or ""),
+                        "work_date_label": _collapse(metadata.get("work_date_label") or ""),
+                        "vendor_name": _collapse(metadata.get("vendor_name") or ""),
+                        "location_name": _collapse(metadata.get("location_name") or ""),
                         "confidence": "attachment-fallback",
                         "images": [],
                         "attachments": [],
+                        "_expected_image_count": 0,
+                        "_expected_attachment_count": 1,
+                        "_attachment_notice_texts": [],
                     }
                 )
 
@@ -610,33 +985,54 @@ def analyze_work_report(
                 "index": index,
                 "filename": row.get("filename"),
                 "preview_text": _collapse(row.get("preview_text") or ""),
+                "metadata": _attachment_metadata(row),
             }
             for index, row in enumerate(attachments, start=1)
         ]
 
         if items:
-            image_matches = _assign_entries(items, image_entries)
-            attachment_matches = _assign_entries(items, attachment_entries)
+            image_matches, remaining_images = _assign_entries_by_expected_counts(items, image_entries, "_expected_image_count")
+            attachment_matches, remaining_attachments = _assign_entries_by_expected_counts(items, attachment_entries, "_expected_attachment_count")
+            if remaining_images:
+                score_matches = _assign_entries(items, remaining_images)
+                for item_index, rows in score_matches.items():
+                    image_matches[item_index].extend(rows)
+            if remaining_attachments:
+                score_matches = _assign_entries(items, remaining_attachments)
+                for item_index, rows in score_matches.items():
+                    attachment_matches[item_index].extend(rows)
             for item in items:
                 item["images"] = _finalize_image_stages(image_matches.get(int(item["index"]), []))
-                item["attachments"] = sorted(attachment_matches.get(int(item["index"]), []), key=lambda row: int(row.get("index") or 0))
+                raw_attachments = sorted(attachment_matches.get(int(item["index"]), []), key=lambda row: int(row.get("index") or 0))
+                _apply_attachment_metadata(item, raw_attachments)
+                item["attachments"] = [
+                    {
+                        "index": int(row.get("index") or 0),
+                        "filename": row.get("filename"),
+                        "preview_text": _collapse(row.get("preview_text") or ""),
+                    }
+                    for row in raw_attachments
+                ]
+                item.pop("_expected_image_count", None)
+                item.pop("_expected_attachment_count", None)
+                item.pop("_attachment_notice_texts", None)
+                item.pop("_minute_of_day", None)
         unmatched_image_indexes = []
         unmatched_attachment_indexes = []
 
-    if not period_label:
-        dated_items = [item for item in items if item.get("work_date")]
-        if dated_items:
-            dates = sorted(item["work_date"] for item in dated_items)
-            if len(dates) == 1:
-                month = int(dates[0][5:7])
-                day = int(dates[0][8:10])
-                period_label = f"{month}월 {day}일"
-            else:
-                start_month = int(dates[0][5:7])
-                start_day = int(dates[0][8:10])
-                end_month = int(dates[-1][5:7])
-                end_day = int(dates[-1][8:10])
-                period_label = f"{start_month}월 {start_day}일 ~ {end_month}월 {end_day}일"
+    dated_items = [item for item in items if item.get("work_date")]
+    if dated_items:
+        dates = sorted(item["work_date"] for item in dated_items)
+        if len(dates) == 1:
+            month = int(dates[0][5:7])
+            day = int(dates[0][8:10])
+            period_label = f"{month}월 {day}일"
+        else:
+            start_month = int(dates[0][5:7])
+            start_day = int(dates[0][8:10])
+            end_month = int(dates[-1][5:7])
+            end_day = int(dates[-1][8:10])
+            period_label = f"{start_month}월 {start_day}일 ~ {end_month}월 {end_day}일"
 
     unmatched_images = [
         {"index": index, "filename": images[index - 1].get("filename")}
