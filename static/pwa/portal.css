@@ -977,6 +977,17 @@ body {
   line-height: 1.5;
 }
 
+.work-report-advanced {
+  margin-top: 14px;
+}
+
+.work-report-advanced p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .attachment-top,
 .check-all {
   display: flex;

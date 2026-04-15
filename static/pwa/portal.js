@@ -620,18 +620,17 @@
     if (imageHint) {
       if (files.length) {
         imageHint.textContent = `선택 ${files.length}장 / 최대 ${MAX_CHAT_DIGEST_IMAGES}장: ${files.map((file) => file.name).join(", ")}`;
-      } else if (text) {
-        const plan = chatTextImagePlan(text, MAX_CHAT_DIGEST_IMAGES);
-        imageHint.textContent = `선택된 이미지는 없지만, 분석 시 카톡 원문을 PNG ${Math.max(plan.pageCount, 1)}장으로 자동 저장합니다.`;
+      } else if (text || selectedSingleFile("#workReportSourceInput")) {
+        imageHint.textContent = "선택된 사진이 없습니다. 사진이 없으면 텍스트 전용 작업 목록으로만 정리됩니다.";
       } else {
-        imageHint.textContent = "선택된 이미지가 없습니다.";
+        imageHint.textContent = "선택된 사진이 없습니다.";
       }
     }
     if (modeHint) {
       if (files.length) {
-        modeHint.textContent = "현재 선택한 이미지와 입력한 원문을 함께 분석합니다. 위 붙여넣기 영역, 클립보드 불러오기 버튼, 파일 선택을 모두 사용할 수 있습니다.";
+        modeHint.textContent = "현재 입력한 원문과 선택한 현장 사진으로 주요업무보고를 생성합니다.";
       } else {
-        modeHint.textContent = "텍스트만 입력한 경우 원문을 PNG 이미지로 자동 저장해 함께 분석합니다. 위 붙여넣기 영역이나 클립보드 불러오기 버튼으로 카톡 캡처 이미지를 추가할 수 있습니다.";
+        modeHint.textContent = "카톡 원문이나 원문 파일만으로도 보고서는 만들 수 있지만, 사진이 있으면 작업 전/후 구분이 더 정확해집니다.";
       }
     }
   }
@@ -3885,14 +3884,15 @@
   }
 
   async function analyzeWorkReport() {
-    $("#workReportBox").textContent = "주요업무보고 매칭 분석 중입니다...";
+    $("#workReportBox").classList.remove("hidden");
+    $("#workReportBox").textContent = "주요업무보고 미리보기를 만드는 중입니다...";
     const data = await authFetchJson("/api/ai/work_report", {
       method: "POST",
       body: workReportFormData(),
     });
     lastWorkReportResult = data.item || null;
     $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
-    setMessage("#intakeMsg", `작업 항목 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`);
+    setMessage("#intakeMsg", `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`);
   }
 
   async function downloadWorkReportPdf() {
@@ -3901,7 +3901,7 @@
       body: workReportFormData(),
     });
     downloadBlob(response.blob, response.filename || "work-report.pdf");
-    setMessage("#intakeMsg", "주요업무보고 PDF를 생성했습니다.");
+    setMessage("#intakeMsg", "주요업무보고 PDF를 생성했습니다. 이 버튼만 사용하면 됩니다.");
   }
 
   async function createTenant() {
@@ -4326,8 +4326,8 @@
       updateChatDigestHint();
     });
     $("#workReportFileInput")?.addEventListener("change", () => updateGenericFileHint("#workReportFileInput", "#workReportFileHint", "선택된 첨부파일이 없습니다."));
-    $("#workReportSourceInput")?.addEventListener("change", () => updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "카톡 대화 HWP/TXT/MD를 넣으면 본문을 직접 읽어 분석합니다. 텍스트를 함께 입력하면 두 내용을 합쳐서 사용합니다."));
-    $("#workReportSampleInput")?.addEventListener("change", () => updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "주요업무보고 HWP/TXT/MD 샘플을 넣으면 제목과 양식 표현을 참고합니다. 비워두면 기본 양식으로 생성합니다."));
+    $("#workReportSourceInput")?.addEventListener("change", () => updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "원문 파일은 선택 입력입니다. 텍스트를 함께 넣으면 합쳐서 사용합니다."));
+    $("#workReportSampleInput")?.addEventListener("change", () => updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "양식을 맞출 때만 사용합니다. 비워두면 기본 양식으로 생성합니다."));
     $("#chatInput")?.addEventListener("input", () => {
       clearChatSourcePreview();
       resetDigestImportState();
@@ -4387,8 +4387,8 @@
     lastWorkReportResult = null;
     updateChatDigestHint();
     updateGenericFileHint("#workReportFileInput", "#workReportFileHint", "선택된 첨부파일이 없습니다.");
-    updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "카톡 대화 HWP/TXT/MD를 넣으면 본문을 직접 읽어 분석합니다. 텍스트를 함께 입력하면 두 내용을 합쳐서 사용합니다.");
-    updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "주요업무보고 HWP/TXT/MD 샘플을 넣으면 제목과 양식 표현을 참고합니다. 비워두면 기본 양식으로 생성합니다.");
+    updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "원문 파일은 선택 입력입니다. 텍스트를 함께 넣으면 합쳐서 사용합니다.");
+    updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "양식을 맞출 때만 사용합니다. 비워두면 기본 양식으로 생성합니다.");
     clearNoticeForm();
     clearComplaintDetail();
     updateIntakeReview();
