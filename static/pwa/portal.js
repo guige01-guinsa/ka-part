@@ -114,6 +114,13 @@
     el.classList.toggle("error", !!isError);
   }
 
+  function formatElapsedMinSec(value) {
+    const totalSeconds = Math.max(0, Math.floor(Number(value || 0)));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}분 ${String(seconds).padStart(2, "0")}초`;
+  }
+
   function renderWorkReportProgress(state) {
     const modeLabel = state?.mode === "pdf" ? "주요업무보고 PDF" : "주요업무보고 미리보기";
     const elapsed = Math.max(0, Number(state?.elapsedSec || 0));
@@ -122,7 +129,8 @@
     const hint = String(state?.hint || "").trim();
     return [
       '<div class="work-report-progress">',
-      `<div class="work-report-progress-head"><strong>${escapeHtml(modeLabel)}</strong><span>${escapeHtml(`${elapsed}초 경과`)}</span></div>`,
+      `<div class="work-report-progress-head"><strong>${escapeHtml(modeLabel)}</strong><span>${escapeHtml(`${formatElapsedMinSec(elapsed)} 경과`)}</span></div>`,
+      '<div class="work-report-progress-visual" aria-hidden="true"><div class="work-report-progress-ring"></div><div class="work-report-progress-core"></div><div class="work-report-progress-dot dot-a"></div><div class="work-report-progress-dot dot-b"></div><div class="work-report-progress-dot dot-c"></div></div>',
       `<div class="work-report-progress-note">${escapeHtml(state?.summary || "처리 중입니다.")}</div>`,
       `<div class="work-report-progress-steps">${steps.map((step, index) => {
         const status = index < currentStep ? "done" : index === currentStep ? "active" : "pending";
