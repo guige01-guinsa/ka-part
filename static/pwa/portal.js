@@ -5,6 +5,7 @@
   const STATUS_VALUES = ["접수", "처리중", "완료", "이월"];
   const MAX_CHAT_DIGEST_IMAGES = 30;
   const MAX_WORK_REPORT_IMAGES = 100;
+  const MAX_WORK_REPORT_SOURCE_FILES = 20;
   const MAX_FACILITY_ASSET_IMAGES = 3;
   const DEFAULT_DOCUMENT_CATEGORY_VALUES = [
     "기안지(10만원 이상)",
@@ -554,8 +555,12 @@
   }
 
   function syncWorkReportSourceSelection() {
-    updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "원문 파일은 선택 입력입니다. 텍스트를 함께 넣으면 합쳐서 사용합니다.");
-    renderSelectableFileList("#workReportSourceInput", "#workReportSourceList", "선택된 원문 파일이 없습니다.", "원문 파일");
+    updateGenericFileHint(
+      "#workReportSourceInput",
+      "#workReportSourceHint",
+      "텍스트/HWP와 카톡 캡처 이미지를 함께 넣을 수 있습니다. 텍스트는 원문으로 합치고, 이미지는 매칭용으로 함께 사용합니다."
+    );
+    renderSelectableFileList("#workReportSourceInput", "#workReportSourceList", "선택된 원문 파일이 없습니다.", "원문 자료");
   }
 
   function syncWorkReportSampleSelection() {
@@ -859,7 +864,7 @@
     if (imageHint) {
       if (files.length) {
         imageHint.textContent = `선택 ${files.length}장 / 최대 ${MAX_WORK_REPORT_IMAGES}장`;
-      } else if (text || selectedSingleFile("#workReportSourceInput")) {
+      } else if (text || selectedFiles("#workReportSourceInput").length) {
         imageHint.textContent = "선택된 사진이 없습니다. 사진이 없으면 텍스트 전용 작업 목록으로만 정리됩니다.";
       } else {
         imageHint.textContent = "선택된 사진이 없습니다.";
@@ -4040,17 +4045,15 @@
     const text = String($("#chatInput")?.value || "").trim();
     const images = selectedFiles("#chatImageInput");
     const attachments = selectedFiles("#workReportFileInput");
-    const sourceFile = selectedSingleFile("#workReportSourceInput");
+    const sourceFiles = selectedFiles("#workReportSourceInput");
     const sampleFile = selectedSingleFile("#workReportSampleInput");
-    if (!text && !sourceFile && !images.length && !attachments.length) {
+    if (!text && !sourceFiles.length && !images.length && !attachments.length) {
       throw new Error("카톡 대화, 원문 파일, 이미지, 첨부파일 중 하나 이상을 입력하세요.");
     }
     const fd = new FormData();
     fd.append("tenant_id", tenantId);
     fd.append("text", text);
-    if (sourceFile) {
-      fd.append("source_file", sourceFile, sourceFile.name || "source");
-    }
+    sourceFiles.forEach((file) => fd.append("source_files", file, file.name || "source"));
     images.forEach((file) => fd.append("images", file, file.name || "work-image"));
     attachments.forEach((file) => fd.append("attachments", file, file.name || "attachment"));
     if (sampleFile) {
@@ -4600,6 +4603,11 @@
       syncWorkReportAttachmentSelection();
     });
     $("#workReportSourceInput")?.addEventListener("change", () => {
+      const files = selectedFiles("#workReportSourceInput");
+      if (files.length > MAX_WORK_REPORT_SOURCE_FILES) {
+        setInputFiles("#workReportSourceInput", files.slice(0, MAX_WORK_REPORT_SOURCE_FILES));
+        setMessage("#intakeMsg", `카톡 원문 파일은 최대 ${MAX_WORK_REPORT_SOURCE_FILES}개까지 선택할 수 있습니다. 초과분은 제외했습니다.`, true);
+      }
       invalidateWorkReportCache();
       syncWorkReportSourceSelection();
       updateChatDigestHint();

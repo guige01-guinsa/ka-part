@@ -445,6 +445,54 @@ def test_work_report_analysis_accepts_source_file_without_text(app_client) -> No
     assert len(first_item["images"]) == 1
 
 
+def test_work_report_analysis_accepts_multiple_source_files_with_text_and_images(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    source_text = "\n".join(
+        [
+            "2026년 4월 14일 화요일",
+            "[김종훈(시설계장)] [오전 10:47] 사진",
+            "[김종훈(시설계장)] [오전 10:48] 109동 놀이터 방치 자전거 및 스케이트 보드 회수함.",
+        ]
+    )
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": ""},
+        files=[
+            ("source_files", ("kakao-source.txt", io.BytesIO(source_text.encode("utf-8")), "text/plain")),
+            ("source_files", ("bike.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    assert item["item_count"] >= 1
+    first_item = item["items"][0]
+    assert "자전거" in str(first_item["title"])
+    assert len(first_item["images"]) == 1
+
+
+def test_work_report_analysis_rejects_more_than_twenty_source_files(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    files = [
+        ("source_files", (f"source-{index}.txt", io.BytesIO(f"line-{index}".encode("utf-8")), "text/plain"))
+        for index in range(21)
+    ]
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": ""},
+        files=files,
+    )
+    assert response.status_code == 400
+    assert "최대 20개" in response.json()["detail"]
+
+
 def test_work_report_analysis_separates_text_only_items(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)

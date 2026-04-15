@@ -45,6 +45,7 @@ UPLOAD_ROOT = (STORAGE_ROOT / "uploads" / "complaints").resolve()
 DIGEST_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 WORK_REPORT_FILE_MAX_BYTES = 15 * 1024 * 1024
 WORK_REPORT_SAMPLE_MAX_BYTES = 30 * 1024 * 1024
+MAX_WORK_REPORT_SOURCE_FILES = 20
 
 
 def _access_token(request: Request) -> str:
@@ -269,26 +270,58 @@ async def _read_work_report_sample(upload: Optional[UploadFile]) -> Dict[str, An
             pass
 
 
-async def _read_work_report_source(upload: Optional[UploadFile]) -> Dict[str, Any]:
-    if not upload:
+def _is_work_report_image_upload(upload: UploadFile, file_name: str) -> bool:
+    content_type = str(upload.content_type or "").lower()
+    if content_type.startswith("image/"):
+        return True
+    return Path(str(file_name or "")).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+
+
+async def _read_work_report_sources(uploads: List[UploadFile]) -> Dict[str, Any]:
+    if not uploads:
         return {}
-    raw_name = str(upload.filename or "").strip() or "source"
-    file_bytes = await upload.read()
-    try:
-        if len(file_bytes) > WORK_REPORT_SAMPLE_MAX_BYTES:
-            raise HTTPException(status_code=400, detail="카톡 원문 파일은 30MB 이하여야 합니다.")
+    if len(uploads) > MAX_WORK_REPORT_SOURCE_FILES:
+        raise HTTPException(status_code=400, detail=f"카톡 원문 파일은 최대 {MAX_WORK_REPORT_SOURCE_FILES}개까지 업로드할 수 있습니다.")
+    source_texts: List[str] = []
+    source_names: List[str] = []
+    source_images: List[Dict[str, Any]] = []
+    for upload in uploads:
+        raw_name = str(upload.filename or "").strip() or "source"
+        file_bytes = await upload.read()
         try:
-            source = extract_document_sample(raw_name, file_bytes)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        source["source_name"] = raw_name
-        source["source_text"] = "\n".join(str(line or "") for line in (source.get("lines") or []))
-        return source
-    finally:
-        try:
-            await upload.close()
-        except Exception:
-            pass
+            if _is_work_report_image_upload(upload, raw_name):
+                if len(file_bytes) > WORK_REPORT_FILE_MAX_BYTES:
+                    raise HTTPException(status_code=400, detail="카톡 캡처 이미지는 15MB 이하여야 합니다.")
+                source_images.append(
+                    {
+                        "filename": raw_name,
+                        "content_type": str(upload.content_type or "image/jpeg") or "image/jpeg",
+                        "bytes": file_bytes,
+                    }
+                )
+                source_names.append(raw_name)
+                continue
+            if len(file_bytes) > WORK_REPORT_SAMPLE_MAX_BYTES:
+                raise HTTPException(status_code=400, detail="카톡 원문 파일은 30MB 이하여야 합니다.")
+            try:
+                source = extract_document_sample(raw_name, file_bytes)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            source_names.append(raw_name)
+            source_text = "\n".join(str(line or "") for line in (source.get("lines") or []))
+            if source_text:
+                source_texts.append(source_text)
+        finally:
+            try:
+                await upload.close()
+            except Exception:
+                pass
+    return {
+        "source_name": ", ".join(source_names[:3]) if source_names else "",
+        "source_names": source_names,
+        "source_text": "\n".join(part for part in source_texts if str(part or "").strip()),
+        "source_images": source_images,
+    }
 
 
 @router.post("/ai/classify")
@@ -388,16 +421,21 @@ async def ai_work_report(
     tenant_id: str = Form(default=""),
     text: str = Form(default=""),
     source_file: UploadFile | None = File(default=None),
+    source_files: List[UploadFile] = File(default=[]),
     images: List[UploadFile] = File(default=[]),
     attachments: List[UploadFile] = File(default=[]),
     sample_file: UploadFile | None = File(default=None),
 ) -> Dict[str, Any]:
     payload = {"tenant_id": tenant_id}
     resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
-    source = await _read_work_report_source(source_file)
+    merged_source_files = ([source_file] if source_file else []) + list(source_files or [])
+    source = await _read_work_report_sources(merged_source_files)
     source_text_parts = [str(text or "").strip(), str(source.get("source_text") or "").strip()]
     source_text = "\n".join(part for part in source_text_parts if part)
     image_inputs = await _read_work_report_images(list(images or []))
+    image_inputs = list(source.get("source_images") or []) + image_inputs
+    if len(image_inputs) > MAX_WORK_REPORT_IMAGES:
+        raise HTTPException(status_code=400, detail=f"카톡 캡처 이미지와 현장 사진을 합쳐 최대 {MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.")
     attachment_inputs = await _read_work_report_attachments(list(attachments or []))
     sample = await _read_work_report_sample(sample_file)
     if not source_text and not image_inputs and not attachment_inputs:
@@ -425,6 +463,7 @@ async def ai_work_report(
             "images": len(image_inputs),
             "attachments": len(attachment_inputs),
             "source_file": str(source.get("source_name") or ""),
+            "source_file_count": len(source.get("source_names") or []),
             "sample": str(sample.get("source_name") or ""),
         },
     )
@@ -437,6 +476,7 @@ async def ai_work_report_pdf(
     tenant_id: str = Form(default=""),
     text: str = Form(default=""),
     source_file: UploadFile | None = File(default=None),
+    source_files: List[UploadFile] = File(default=[]),
     images: List[UploadFile] = File(default=[]),
     attachments: List[UploadFile] = File(default=[]),
     sample_file: UploadFile | None = File(default=None),
@@ -444,10 +484,14 @@ async def ai_work_report_pdf(
 ) -> StreamingResponse:
     payload = {"tenant_id": tenant_id}
     resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
-    source = await _read_work_report_source(source_file)
+    merged_source_files = ([source_file] if source_file else []) + list(source_files or [])
+    source = await _read_work_report_sources(merged_source_files)
     source_text_parts = [str(text or "").strip(), str(source.get("source_text") or "").strip()]
     source_text = "\n".join(part for part in source_text_parts if part)
     image_inputs = await _read_work_report_images(list(images or []))
+    image_inputs = list(source.get("source_images") or []) + image_inputs
+    if len(image_inputs) > MAX_WORK_REPORT_IMAGES:
+        raise HTTPException(status_code=400, detail=f"카톡 캡처 이미지와 현장 사진을 합쳐 최대 {MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.")
     attachment_inputs = await _read_work_report_attachments(list(attachments or []))
     sample = await _read_work_report_sample(sample_file)
     if not source_text and not image_inputs and not attachment_inputs:
@@ -493,6 +537,7 @@ async def ai_work_report_pdf(
             "images": len(image_inputs),
             "attachments": len(attachment_inputs),
             "source_file": str(source.get("source_name") or ""),
+            "source_file_count": len(source.get("source_names") or []),
             "sample": str(sample.get("source_name") or ""),
         },
     )
