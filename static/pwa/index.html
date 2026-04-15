@@ -9,8 +9,8 @@
     content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
   />
   <meta name="theme-color" content="#133936" />
-  <link rel="manifest" href="/pwa/manifest.webmanifest?v=12" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260415i" />
+  <link rel="manifest" href="/pwa/manifest.webmanifest?v=13" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260416a" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -280,8 +280,9 @@
         <input id="workReportSourceInput" type="file" accept=".hwp,.txt,.md" />
       </label>
       <div id="workReportSourceHint" class="inline-note">원문 파일은 선택 입력입니다. 텍스트를 함께 넣으면 합쳐서 사용합니다.</div>
+      <div id="workReportSourceList" class="work-report-file-list hidden"></div>
       <label class="field">
-        <span>3. 현장 사진 (최대 30장)</span>
+        <span>3. 현장 사진 (최대 100장)</span>
         <input id="chatImageInput" type="file" accept="image/*" multiple />
       </label>
       <div id="chatDigestModeHint" class="inline-note">보고서에는 현재 입력한 원문과 선택한 현장 사진이 사용됩니다.</div>
@@ -295,11 +296,13 @@
           <input id="workReportSampleInput" type="file" accept=".hwp,.txt,.md" />
         </label>
         <div id="workReportSampleHint" class="inline-note">양식을 맞출 때만 사용합니다. 비워두면 기본 양식으로 생성합니다.</div>
+        <div id="workReportSampleList" class="work-report-file-list hidden"></div>
         <label class="field">
           <span>추가 첨부파일 (작업내역서, 견적서 등)</span>
           <input id="workReportFileInput" type="file" multiple />
         </label>
         <div id="workReportFileHint" class="inline-note">선택된 첨부파일이 없습니다.</div>
+        <div id="workReportFileList" class="work-report-file-list hidden"></div>
       </details>
       <div id="workReportBox" class="detail-block hidden">미리보기를 실행하면 결과가 여기에 표시됩니다.</div>
     </section>
@@ -1568,6 +1571,6 @@
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260415i"></script>
+  <script src="/pwa/portal.js?v=20260416a"></script>
 </body>
 </html>

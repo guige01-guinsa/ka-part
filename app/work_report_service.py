@@ -38,9 +38,10 @@ WORK_REPORT_STAGE_HINTS = {
     "during": ("during", "중", "작업중", "교체중", "시공중", "진행중"),
     "after": ("after", "후", "작업후", "교체후", "시공후", "조치후", "완료"),
 }
-MAX_WORK_REPORT_IMAGES = 24
+MAX_WORK_REPORT_IMAGES = 100
 MAX_WORK_REPORT_ATTACHMENTS = 30
-DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 45.0
+MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES = 24
+DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 120.0
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
     ".hwp",
@@ -77,6 +78,65 @@ def _float_env(name: str, default: float) -> float:
         return max(1.0, float(str(os.getenv(name) or "").strip() or default))
     except Exception:
         return float(default)
+
+
+def _extract_json_text(raw_text: Any) -> str:
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.IGNORECASE | re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return text[start : end + 1].strip()
+    return text
+
+
+def _normalize_ai_work_report_payload(data: Any) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    items = data.get("items")
+    if isinstance(items, list):
+        return dict(data)
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list):
+        return dict(data)
+    normalized_items: List[Dict[str, Any]] = []
+    for row in tasks:
+        if not isinstance(row, dict):
+            continue
+        description = _clean_item_title(row.get("description") or row.get("title") or "")
+        if not description:
+            continue
+        assignee = _collapse(row.get("assignee") or "")
+        status = _collapse(row.get("status") or "")
+        summary_parts = [description]
+        if status:
+            summary_parts.append(status)
+        if assignee:
+            summary_parts.append(f"담당 {assignee}")
+        normalized_items.append(
+            {
+                "title": description,
+                "work_date": _collapse(row.get("date") or ""),
+                "work_date_label": "",
+                "vendor_name": "",
+                "location_name": "",
+                "summary": " / ".join(part for part in summary_parts if part),
+                "before_image_indexes": [int(value) for value in row.get("before_image_indexes") or [] if str(value).isdigit()],
+                "during_image_indexes": [int(value) for value in row.get("during_image_indexes") or [] if str(value).isdigit()],
+                "after_image_indexes": [int(value) for value in row.get("after_image_indexes") or [] if str(value).isdigit()],
+                "attachment_indexes": [int(value) for value in row.get("attachment_indexes") or [] if str(value).isdigit()],
+                "confidence": _collapse(row.get("confidence") or "ai"),
+            }
+        )
+    normalized = dict(data)
+    normalized["items"] = normalized_items
+    if normalized_items and not _collapse(normalized.get("analysis_notice") or ""):
+        normalized["analysis_notice"] = "AI 응답 형식을 보정해 적용했습니다."
+    return normalized
 
 
 def _safe_date_value(year: int, month: int, day: int) -> str:
@@ -980,7 +1040,7 @@ def _openai_work_report(
                 "text": "이미지 목록:\n" + "\n".join(image_descriptions),
             }
         )
-        for index, item in enumerate(image_inputs, start=1):
+        for index, item in enumerate(image_inputs[:MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES], start=1):
             data_url = _openai_image_url(item)
             content.append({"type": "input_text", "text": f"이미지 I{index}: {item.get('filename')}"})
             if data_url:
@@ -997,10 +1057,10 @@ def _openai_work_report(
             input=[{"role": "user", "content": content}],
             timeout=timeout_sec,
         )
-        raw = _collapse(getattr(response, "output_text", "") or "")
+        raw = _extract_json_text(getattr(response, "output_text", "") or "")
         if not raw:
             return None
-        data = json.loads(raw)
+        data = _normalize_ai_work_report_payload(json.loads(raw))
     except Exception:
         return None
     items: List[Dict[str, Any]] = []

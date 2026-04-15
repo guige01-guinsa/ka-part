@@ -893,6 +893,13 @@ body {
   background: rgba(255, 255, 255, 0.84);
 }
 
+.chat-source-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .chat-source-card strong {
   font-size: 13px;
 }
@@ -907,6 +914,52 @@ body {
 }
 
 .chat-source-card .meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(198, 68, 68, 0.18);
+  background: rgba(255, 255, 255, 0.92);
+  color: #a63a3a;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.file-remove-btn:hover {
+  background: rgba(198, 68, 68, 0.08);
+}
+
+.work-report-file-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.work-report-file-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.work-report-file-card strong {
+  display: block;
+  font-size: 13px;
+}
+
+.work-report-file-card .meta {
   color: var(--muted);
   font-size: 12px;
 }

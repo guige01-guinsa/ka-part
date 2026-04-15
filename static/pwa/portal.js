@@ -4,6 +4,7 @@
   const $ = (sel) => document.querySelector(sel);
   const STATUS_VALUES = ["접수", "처리중", "완료", "이월"];
   const MAX_CHAT_DIGEST_IMAGES = 30;
+  const MAX_WORK_REPORT_IMAGES = 100;
   const MAX_FACILITY_ASSET_IMAGES = 3;
   const DEFAULT_DOCUMENT_CATEGORY_VALUES = [
     "기안지(10만원 이상)",
@@ -465,6 +466,64 @@
     return files ? Array.from(files) : [];
   }
 
+  function setInputFiles(inputSelector, files) {
+    const input = $(inputSelector);
+    if (!input) return;
+    if (typeof DataTransfer === "undefined") {
+      input.value = "";
+      return;
+    }
+    const dt = new DataTransfer();
+    for (const file of Array.isArray(files) ? files : []) {
+      if (file instanceof File) {
+        dt.items.add(file);
+      }
+    }
+    input.files = dt.files;
+  }
+
+  function removeInputFileAt(inputSelector, index) {
+    const files = selectedFiles(inputSelector);
+    if (index < 0 || index >= files.length) return;
+    files.splice(index, 1);
+    setInputFiles(inputSelector, files);
+  }
+
+  function clearInputFiles(inputSelector) {
+    setInputFiles(inputSelector, []);
+    const input = $(inputSelector);
+    if (input) input.value = "";
+  }
+
+  function formatInlineFileSize(file) {
+    const size = Number(file?.size || 0);
+    if (!Number.isFinite(size) || size <= 0) return "";
+    if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)}MB`;
+    if (size >= 1024) return `${Math.round(size / 1024)}KB`;
+    return `${size}B`;
+  }
+
+  function renderSelectableFileList(inputSelector, targetSelector, emptyMessage, kindLabel = "파일") {
+    const box = $(targetSelector);
+    if (!box) return;
+    const files = selectedFiles(inputSelector);
+    if (!files.length) {
+      box.innerHTML = "";
+      box.classList.add("hidden");
+      return;
+    }
+    box.innerHTML = files.map((file, index) => [
+      '<article class="work-report-file-card">',
+      '<div>',
+      `<strong>${escapeHtml(`${kindLabel} ${index + 1}`)}</strong>`,
+      `<div class="meta">${escapeHtml(file.name || `${kindLabel}-${index + 1}`)}${formatInlineFileSize(file) ? ` · ${escapeHtml(formatInlineFileSize(file))}` : ""}</div>`,
+      '</div>',
+      `<button class="file-remove-btn" type="button" data-input-selector="${escapeHtml(inputSelector)}" data-file-index="${index}">삭제</button>`,
+      '</article>',
+    ].join("")).join("");
+    box.classList.remove("hidden");
+  }
+
   function updatePhotoHint(inputSelector, targetSelector, limit = 6) {
     const files = selectedFiles(inputSelector);
     const el = $(targetSelector);
@@ -473,7 +532,7 @@
       el.textContent = "선택된 사진이 없습니다.";
       return;
     }
-    el.textContent = `선택 ${files.length}장 / 최대 ${limit}장: ${files.map((file) => file.name).join(", ")}`;
+    el.textContent = `선택 ${files.length}장 / 최대 ${limit}장`;
   }
 
   function updateGenericFileHint(inputSelector, targetSelector, emptyMessage = "선택된 파일이 없습니다.") {
@@ -484,14 +543,29 @@
       el.textContent = emptyMessage;
       return;
     }
-    el.textContent = `선택 ${files.length}건: ${files.map((file) => file.name).join(", ")}`;
+    el.textContent = `선택 ${files.length}건`;
   }
 
   function updateSingleFileHint(inputSelector, targetSelector, emptyMessage) {
     const file = selectedSingleFile(inputSelector);
     const el = $(targetSelector);
     if (!el) return;
-    el.textContent = file ? `선택된 샘플: ${file.name}` : emptyMessage;
+    el.textContent = file ? `선택된 파일 1건` : emptyMessage;
+  }
+
+  function syncWorkReportSourceSelection() {
+    updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "원문 파일은 선택 입력입니다. 텍스트를 함께 넣으면 합쳐서 사용합니다.");
+    renderSelectableFileList("#workReportSourceInput", "#workReportSourceList", "선택된 원문 파일이 없습니다.", "원문 파일");
+  }
+
+  function syncWorkReportSampleSelection() {
+    updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "양식을 맞출 때만 사용합니다. 비워두면 기본 양식으로 생성합니다.");
+    renderSelectableFileList("#workReportSampleInput", "#workReportSampleList", "선택된 샘플 파일이 없습니다.", "샘플 파일");
+  }
+
+  function syncWorkReportAttachmentSelection() {
+    updateGenericFileHint("#workReportFileInput", "#workReportFileHint", "선택된 첨부파일이 없습니다.");
+    renderSelectableFileList("#workReportFileInput", "#workReportFileList", "선택된 첨부파일이 없습니다.", "첨부파일");
   }
 
   function fileSignature(file) {
@@ -711,9 +785,12 @@
         chatDigestPreviewUrls.push(url);
         return [
           '<article class="chat-source-card">',
+          '<div class="chat-source-card-head">',
           `<strong>선택 이미지 ${index + 1}</strong>`,
+          `<button class="file-remove-btn" type="button" data-input-selector="#chatImageInput" data-file-index="${index}">삭제</button>`,
+          '</div>',
           `<img src="${escapeHtml(url)}" alt="카톡 분석 선택 이미지 ${index + 1}" loading="lazy" />`,
-          `<span class="meta">${escapeHtml(file.name || `image-${index + 1}`)}</span>`,
+          `<span class="meta">${escapeHtml(file.name || `image-${index + 1}`)}${formatInlineFileSize(file) ? ` · ${escapeHtml(formatInlineFileSize(file))}` : ""}</span>`,
           "</article>",
         ].join("");
       })
@@ -781,7 +858,7 @@
     renderSelectedChatImages(files);
     if (imageHint) {
       if (files.length) {
-        imageHint.textContent = `선택 ${files.length}장 / 최대 ${MAX_CHAT_DIGEST_IMAGES}장: ${files.map((file) => file.name).join(", ")}`;
+        imageHint.textContent = `선택 ${files.length}장 / 최대 ${MAX_WORK_REPORT_IMAGES}장`;
       } else if (text || selectedSingleFile("#workReportSourceInput")) {
         imageHint.textContent = "선택된 사진이 없습니다. 사진이 없으면 텍스트 전용 작업 목록으로만 정리됩니다.";
       } else {
@@ -799,8 +876,8 @@
 
   async function resolveChatDigestFiles(text) {
     const explicitFiles = selectedFiles("#chatImageInput");
-    if (explicitFiles.length > MAX_CHAT_DIGEST_IMAGES) {
-      throw new Error(`카톡 이미지는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 업로드할 수 있습니다.`);
+    if (explicitFiles.length > MAX_WORK_REPORT_IMAGES) {
+      throw new Error(`현장 사진은 최대 ${MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.`);
     }
     if (explicitFiles.length) {
       return { files: explicitFiles, autogenerated: false };
@@ -858,11 +935,11 @@
 
   function addChatDigestImages(files, sourceLabel = "카톡 캡처 이미지") {
     if (!files.length) return false;
-    const merged = mergeFilesIntoInput("#chatImageInput", files, MAX_CHAT_DIGEST_IMAGES);
+    const merged = mergeFilesIntoInput("#chatImageInput", files, MAX_WORK_REPORT_IMAGES);
     clearChatSourcePreview();
     updateChatDigestHint();
     if (merged.added < files.length) {
-      setMessage("#intakeMsg", `${sourceLabel}는 최대 ${MAX_CHAT_DIGEST_IMAGES}장까지 저장됩니다.`, true);
+      setMessage("#intakeMsg", `${sourceLabel}는 최대 ${MAX_WORK_REPORT_IMAGES}장까지 저장됩니다.`, true);
       return true;
     }
     setMessage("#intakeMsg", `${sourceLabel} ${merged.added}장을 불러왔습니다.`);
@@ -4500,13 +4577,21 @@
       el.addEventListener("change", () => updateIntakeReview());
     });
     $("#chatImageInput")?.addEventListener("change", () => {
+      const files = selectedFiles("#chatImageInput");
+      if (files.length > MAX_WORK_REPORT_IMAGES) {
+        setInputFiles("#chatImageInput", files.slice(0, MAX_WORK_REPORT_IMAGES));
+        setMessage("#intakeMsg", `현장 사진은 최대 ${MAX_WORK_REPORT_IMAGES}장까지 선택할 수 있습니다. 초과분은 제외했습니다.`, true);
+      }
       clearChatSourcePreview();
       resetDigestImportState();
       updateChatDigestHint();
     });
-    $("#workReportFileInput")?.addEventListener("change", () => updateGenericFileHint("#workReportFileInput", "#workReportFileHint", "선택된 첨부파일이 없습니다."));
-    $("#workReportSourceInput")?.addEventListener("change", () => updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "원문 파일은 선택 입력입니다. 텍스트를 함께 넣으면 합쳐서 사용합니다."));
-    $("#workReportSampleInput")?.addEventListener("change", () => updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "양식을 맞출 때만 사용합니다. 비워두면 기본 양식으로 생성합니다."));
+    $("#workReportFileInput")?.addEventListener("change", () => syncWorkReportAttachmentSelection());
+    $("#workReportSourceInput")?.addEventListener("change", () => {
+      syncWorkReportSourceSelection();
+      updateChatDigestHint();
+    });
+    $("#workReportSampleInput")?.addEventListener("change", () => syncWorkReportSampleSelection());
     $("#chatInput")?.addEventListener("input", () => {
       clearChatSourcePreview();
       resetDigestImportState();
@@ -4545,6 +4630,33 @@
         el.checked = checked;
       });
     });
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-input-selector][data-file-index]");
+      if (!button) return;
+      event.preventDefault();
+      const inputSelector = String(button.getAttribute("data-input-selector") || "").trim();
+      const index = Number(button.getAttribute("data-file-index") || -1);
+      if (!inputSelector || index < 0) return;
+      removeInputFileAt(inputSelector, index);
+      if (inputSelector === "#chatImageInput") {
+        clearChatSourcePreview();
+        resetDigestImportState();
+        updateChatDigestHint();
+        return;
+      }
+      if (inputSelector === "#workReportSourceInput") {
+        syncWorkReportSourceSelection();
+        updateChatDigestHint();
+        return;
+      }
+      if (inputSelector === "#workReportSampleInput") {
+        syncWorkReportSampleSelection();
+        return;
+      }
+      if (inputSelector === "#workReportFileInput") {
+        syncWorkReportAttachmentSelection();
+      }
+    });
   }
 
   async function init() {
@@ -4565,9 +4677,9 @@
     resetDigestImportState();
     lastWorkReportResult = null;
     updateChatDigestHint();
-    updateGenericFileHint("#workReportFileInput", "#workReportFileHint", "선택된 첨부파일이 없습니다.");
-    updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "원문 파일은 선택 입력입니다. 텍스트를 함께 넣으면 합쳐서 사용합니다.");
-    updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "양식을 맞출 때만 사용합니다. 비워두면 기본 양식으로 생성합니다.");
+    syncWorkReportAttachmentSelection();
+    syncWorkReportSourceSelection();
+    syncWorkReportSampleSelection();
     clearNoticeForm();
     clearComplaintDetail();
     updateIntakeReview();
