@@ -663,6 +663,8 @@ body {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid var(--line);
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 .inline-note {
@@ -675,6 +677,7 @@ body {
 .inline-message {
   white-space: pre-wrap;
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .inline-message {
@@ -993,6 +996,9 @@ body {
   gap: 12px;
   min-width: 0;
   max-width: 100%;
+  width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 .work-report-progress-head {
@@ -1015,6 +1021,9 @@ body {
   font-weight: 700;
   justify-self: end;
   text-align: right;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .work-report-progress-visual {
@@ -1085,11 +1094,13 @@ body {
   color: var(--ink);
   font-size: 14px;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .work-report-progress-steps {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .work-report-progress-step {
@@ -1115,6 +1126,9 @@ body {
   font-weight: 700;
   justify-self: end;
   text-align: right;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .work-report-progress-step.done {
@@ -1143,6 +1157,22 @@ body {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.work-report-progress.is-error .work-report-progress-note {
+  color: var(--danger);
+  background: rgba(198, 68, 68, 0.08);
+  border-color: rgba(198, 68, 68, 0.18);
+}
+
+.work-report-progress.is-error .work-report-progress-head span {
+  color: var(--danger);
+}
+
+#workReportBox {
+  overflow-x: hidden;
+  max-width: 100%;
 }
 
 @keyframes work-report-spin {

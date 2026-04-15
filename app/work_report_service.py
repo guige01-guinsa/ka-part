@@ -40,6 +40,7 @@ WORK_REPORT_STAGE_HINTS = {
 }
 MAX_WORK_REPORT_IMAGES = 24
 MAX_WORK_REPORT_ATTACHMENTS = 30
+DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 25.0
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
     ".hwp",
@@ -69,6 +70,13 @@ KAKAO_SHORT_MESSAGE_RE = re.compile(r"^(?P<time>(?:오전|오후)\s*\d{1,2}:\d{2
 
 def _collapse(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").replace("\u0000", " ")).strip()
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return max(1.0, float(str(os.getenv(name) or "").strip() or default))
+    except Exception:
+        return float(default)
 
 
 def _safe_date_value(year: int, month: int, day: int) -> str:
@@ -882,6 +890,8 @@ def _openai_work_report(
     client, model = _openai_client()
     if not client:
         return None
+    timeout_sec = _float_env("WORK_REPORT_OPENAI_TIMEOUT_SEC", DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC)
+    client = client.with_options(timeout=timeout_sec, max_retries=0)
     candidate_lines: List[str] = []
     for event in _parse_kakao_events(text):
         candidate_text = _collapse(event.get("text") or "")
@@ -966,7 +976,11 @@ def _openai_work_report(
             attachment_text.append(f"[A{index}] {item.get('filename')} / {preview or '본문 미리보기 없음'}")
         content.append({"type": "input_text", "text": "\n".join(attachment_text)})
     try:
-        response = client.responses.create(model=model, input=[{"role": "user", "content": content}])
+        response = client.responses.create(
+            model=model,
+            input=[{"role": "user", "content": content}],
+            timeout=timeout_sec,
+        )
         raw = _collapse(getattr(response, "output_text", "") or "")
         if not raw:
             return None

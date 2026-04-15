@@ -15,6 +15,11 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+try:
+    from PIL import Image as PILImage
+except Exception:  # pragma: no cover - pillow optional at runtime
+    PILImage = None
+
 DEFAULT_FONT_NAME = "Helvetica"
 _REGISTERED_FONT_NAME = ""
 
@@ -170,16 +175,38 @@ def _digest_table_rows(digest: Dict[str, Any], styles: Dict[str, ParagraphStyle]
 
 
 def _scaled_image(image_bytes: bytes, max_width: float, max_height: float) -> Image:
-    reader = ImageReader(BytesIO(image_bytes))
+    payload = _optimized_pdf_image_bytes(image_bytes, max_width=max_width, max_height=max_height)
+    reader = ImageReader(BytesIO(payload))
     width, height = reader.getSize()
     if width <= 0 or height <= 0:
         raise ValueError("invalid image size")
     ratio = min(max_width / float(width), max_height / float(height))
     ratio = min(ratio, 1.0)
-    image = Image(BytesIO(image_bytes))
+    image = Image(BytesIO(payload))
     image.drawWidth = float(width) * ratio
     image.drawHeight = float(height) * ratio
     return image
+
+
+def _optimized_pdf_image_bytes(image_bytes: bytes, *, max_width: float, max_height: float) -> bytes:
+    if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes or PILImage is None:
+        return bytes(image_bytes or b"")
+    try:
+        image = PILImage.open(BytesIO(bytes(image_bytes)))
+        image.load()
+        image = image.convert("RGB")
+        max_width_px = max(320, int(float(max_width) * 2.0))
+        max_height_px = max(240, int(float(max_height) * 2.0))
+        if image.width > max_width_px or image.height > max_height_px:
+            image.thumbnail((max_width_px, max_height_px), PILImage.Resampling.LANCZOS)
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=78, optimize=True)
+        optimized = output.getvalue()
+        if optimized and len(optimized) < len(image_bytes):
+            return optimized
+    except Exception:
+        return bytes(image_bytes)
+    return bytes(image_bytes)
 
 
 def build_kakao_digest_pdf(

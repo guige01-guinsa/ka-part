@@ -121,6 +121,8 @@
     return `${minutes}분 ${String(seconds).padStart(2, "0")}초`;
   }
 
+  const WORK_REPORT_REQUEST_TIMEOUT_MS = 295000;
+
   function renderWorkReportProgress(state) {
     const modeLabel = state?.mode === "pdf" ? "주요업무보고 PDF" : "주요업무보고 미리보기";
     const elapsed = Math.max(0, Number(state?.elapsedSec || 0));
@@ -138,6 +140,20 @@
         return `<div class="work-report-progress-step ${status}"><strong>${escapeHtml(`${index + 1}. ${String(step || "")}`)}</strong><span>${escapeHtml(label)}</span></div>`;
       }).join("")}</div>`,
       hint ? `<div class="work-report-progress-hint">${escapeHtml(hint)}</div>` : "",
+      "</div>",
+    ].join("");
+  }
+
+  function renderWorkReportProgressTerminal(mode, elapsedSec, message, status = "done") {
+    const modeLabel = mode === "pdf" ? "주요업무보고 PDF" : "주요업무보고 미리보기";
+    const safeMessage = String(message || "").trim() || (status === "error" ? "처리 중 오류가 발생했습니다." : "처리가 완료되었습니다.");
+    const statusLabel = status === "error" ? "실패" : "완료";
+    const statusClass = status === "error" ? " is-error" : " is-done";
+    return [
+      `<div class="work-report-progress${statusClass}">`,
+      `<div class="work-report-progress-head"><strong>${escapeHtml(modeLabel)}</strong><span>${escapeHtml(`${formatElapsedMinSec(elapsedSec)} 경과 · ${statusLabel}`)}</span></div>`,
+      `<div class="work-report-progress-note">${escapeHtml(safeMessage)}</div>`,
+      status === "error" ? '<div class="work-report-progress-hint">잠시 후 다시 시도해 주세요. 같은 지점에서 멈추면 서버 처리 시간을 추가로 줄이겠습니다.</div>' : "",
       "</div>",
     ].join("");
   }
@@ -161,10 +177,12 @@
     const steps = mode === "pdf" ? pdfSteps : previewSteps;
     const startedAt = Date.now();
     let timerId = 0;
+    let lastElapsedSec = 0;
 
     const paint = () => {
       if (!target) return;
       const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+      lastElapsedSec = elapsedSec;
       let currentStep = 0;
       if (elapsedSec >= 4) currentStep = 1;
       if (elapsedSec >= 10) currentStep = 2;
@@ -187,12 +205,29 @@
 
     paint();
     timerId = window.setInterval(paint, 1000);
+    const stop = () => {
+      if (timerId) {
+        window.clearInterval(timerId);
+        timerId = 0;
+      }
+    };
     return {
-      stop() {
-        if (timerId) {
-          window.clearInterval(timerId);
-          timerId = 0;
-        }
+      stop,
+      elapsedSec() {
+        return lastElapsedSec;
+      },
+      complete(message) {
+        stop();
+        if (!target) return;
+        target.classList.remove("hidden");
+        target.innerHTML = renderWorkReportProgressTerminal(mode, lastElapsedSec, message, "done");
+      },
+      fail(error) {
+        stop();
+        if (!target) return;
+        const message = String(error?.message || error || "처리 중 오류가 발생했습니다.").trim();
+        target.classList.remove("hidden");
+        target.innerHTML = renderWorkReportProgressTerminal(mode, lastElapsedSec, message, "error");
       },
     };
   }
@@ -303,11 +338,33 @@
     if (token && !headers.Authorization) {
       headers.Authorization = `Bearer ${token}`;
     }
-    const response = await fetch(url, {
-      ...opts,
-      headers,
-      credentials: "same-origin",
-    });
+    const timeoutMs = Math.max(0, Number(opts.timeoutMs || 0));
+    const controller = timeoutMs > 0 ? new AbortController() : null;
+    const { timeoutMs: _timeoutMs, signal: externalSignal, ...fetchOpts } = opts;
+    let timeoutId = 0;
+    if (controller) {
+      if (externalSignal) {
+        if (externalSignal.aborted) controller.abort();
+        else externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
+      }
+      timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    }
+    let response;
+    try {
+      response = await fetch(url, {
+        ...fetchOpts,
+        signal: controller?.signal || externalSignal,
+        headers,
+        credentials: "same-origin",
+      });
+    } catch (error) {
+      if (controller?.signal?.aborted) {
+        throw new Error(`요청 시간이 ${formatElapsedMinSec(Math.ceil(timeoutMs / 1000))}을 넘어 중단되었습니다.`);
+      }
+      throw error;
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+    }
     const contentType = response.headers.get("content-type") || "";
     const body = contentType.includes("application/json") ? await response.json() : await response.text();
     if (response.status === 401) {
@@ -327,11 +384,33 @@
     if (token && !headers.Authorization) {
       headers.Authorization = `Bearer ${token}`;
     }
-    const response = await fetch(url, {
-      ...opts,
-      headers,
-      credentials: "same-origin",
-    });
+    const timeoutMs = Math.max(0, Number(opts.timeoutMs || 0));
+    const controller = timeoutMs > 0 ? new AbortController() : null;
+    const { timeoutMs: _timeoutMs, signal: externalSignal, ...fetchOpts } = opts;
+    let timeoutId = 0;
+    if (controller) {
+      if (externalSignal) {
+        if (externalSignal.aborted) controller.abort();
+        else externalSignal.addEventListener("abort", () => controller.abort(), { once: true });
+      }
+      timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    }
+    let response;
+    try {
+      response = await fetch(url, {
+        ...fetchOpts,
+        signal: controller?.signal || externalSignal,
+        headers,
+        credentials: "same-origin",
+      });
+    } catch (error) {
+      if (controller?.signal?.aborted) {
+        throw new Error(`요청 시간이 ${formatElapsedMinSec(Math.ceil(timeoutMs / 1000))}을 넘어 중단되었습니다.`);
+      }
+      throw error;
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId);
+    }
     if (response.status === 401) {
       window.KAAuth.clearSession({ includeSensitive: true, broadcast: true });
       window.KAAuth.redirectLogin();
@@ -3972,10 +4051,14 @@
       const data = await authFetchJson("/api/ai/work_report", {
         method: "POST",
         body: workReportFormData(),
+        timeoutMs: WORK_REPORT_REQUEST_TIMEOUT_MS,
       });
       lastWorkReportResult = data.item || null;
       $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
       setMessage("#intakeMsg", `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`);
+    } catch (error) {
+      progress.fail(error);
+      throw error;
     } finally {
       progress.stop();
     }
@@ -3987,11 +4070,14 @@
       const response = await authFetchBlob("/api/ai/work_report/pdf", {
         method: "POST",
         body: workReportFormData(),
+        timeoutMs: WORK_REPORT_REQUEST_TIMEOUT_MS,
       });
       downloadBlob(response.blob, response.filename || "work-report.pdf");
-      $("#workReportBox").classList.remove("hidden");
-      $("#workReportBox").innerHTML = '<div class="work-report-progress"><div class="work-report-progress-head"><strong>주요업무보고 PDF</strong><span>완료</span></div><div class="work-report-progress-note">PDF 생성이 완료되었습니다. 다운로드를 확인해 주세요.</div></div>';
+      progress.complete("PDF 파일 생성을 완료했습니다. 다운로드된 파일을 확인해 주세요.");
       setMessage("#intakeMsg", "주요업무보고 PDF를 생성했습니다. 이 버튼만 사용하면 됩니다.");
+    } catch (error) {
+      progress.fail(error);
+      throw error;
     } finally {
       progress.stop();
     }
