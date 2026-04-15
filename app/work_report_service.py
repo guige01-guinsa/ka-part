@@ -46,12 +46,12 @@ WORK_REPORT_STAGE_HINTS = {
 }
 MAX_WORK_REPORT_IMAGES = 100
 MAX_WORK_REPORT_ATTACHMENTS = 30
-MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES = 6
-WORK_REPORT_OPENAI_IMAGE_MAX_DIM = 640
-WORK_REPORT_OPENAI_IMAGE_QUALITY = 60
+MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES = 8
+WORK_REPORT_OPENAI_IMAGE_MAX_DIM = 1024
+WORK_REPORT_OPENAI_IMAGE_QUALITY = 82
 WORK_REPORT_OPENAI_CLUSTER_GAP_SECONDS = 180
 WORK_REPORT_OPENAI_CLUSTER_CONTEXT_MINUTES = 12
-DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 75.0
+DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 120.0
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
     ".hwp",
@@ -88,6 +88,10 @@ def _float_env(name: str, default: float) -> float:
         return max(1.0, float(str(os.getenv(name) or "").strip() or default))
     except Exception:
         return float(default)
+
+
+def _str_env(name: str, default: str = "") -> str:
+    return str(os.getenv(name) or default or "").strip()
 
 
 def _extract_json_text(raw_text: Any) -> str:
@@ -1273,11 +1277,12 @@ def _openai_work_report(
     sample_title: str,
     sample_lines: Sequence[str],
 ) -> Dict[str, Any] | None:
-    client, model = _openai_client(default_model="gpt-4.1", env_name="WORK_REPORT_OPENAI_MODEL")
+    client, model = _openai_client(default_model="gpt-5.4", env_name="WORK_REPORT_OPENAI_MODEL")
     if not client:
         return None
     timeout_sec = _float_env("WORK_REPORT_OPENAI_TIMEOUT_SEC", DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC)
     client = client.with_options(timeout=timeout_sec, max_retries=0)
+    reasoning_effort = _str_env("WORK_REPORT_OPENAI_REASONING_EFFORT", "medium" if model.startswith("gpt-5") else "")
     candidate_lines: List[str] = []
     for position, event in enumerate(_parse_kakao_events(text), start=1):
         candidate_text = _collapse(event.get("text") or "")
@@ -1286,7 +1291,7 @@ def _openai_work_report(
         candidate_lines.append(
             f"- #{position} / {event.get('date_label') or event.get('date') or '-'} / {event.get('sender') or '-'} / {candidate_text}"
         )
-        if len(candidate_lines) >= 40:
+        if len(candidate_lines) >= 80:
             break
     prompt = """
 너는 아파트 관리사무소 시설팀의 주요업무보고서를 만드는 도우미다.
@@ -1331,6 +1336,11 @@ def _openai_work_report(
 - 시간 순서는 참고만 하고, 이미지의 실제 시각적 내용이 더 중요하다.
 - 다만 이미지 파일명의 촬영시각, 사진 공지 직전/직후 대화, 같은 시각대의 연속 이미지도 함께 검토한다.
 - 같은 촬영 군집에 대해 제공된 근접 대화 후보가 있으면 그 후보를 우선 검토한다.
+- 촬영 군집 근처에 명시적인 작업 문구가 있으면 그 문구의 제목과 위치 표현을 우선 유지한다. 비슷한 설비라고 해서 더 일반적인 다른 작업명으로 바꾸지 않는다.
+- 같은 날 조명/센서등처럼 비슷한 작업이 여러 개 있으면, 시각적으로 비슷해 보여도 가장 가까운 시간대의 구체적인 대화 문구(동, 위치, 수량)를 우선한다.
+- 하나의 촬영 군집은 가장 강한 단일 작업 항목에 우선 매칭한다. 근거가 약하면 다른 항목으로 퍼뜨리지 말고 unmatched로 남긴다.
+- 사진 직후에 나온 첫 설명 문구가 작업/습득물의 본제목이고, 그 다음 줄이 전달요청/업체문의/통화완료/소유자 확인 같은 후속 메모라면 새 항목으로 분리하지 말고 같은 항목 summary에 흡수한다.
+- CCTV 캡처, 증빙 화면, 확인 사진은 수리 사진이 아니어도 가장 가까운 확인/전달/민원 대응 항목에 매칭할 수 있다.
 - 같은 작업 내용이 같은 날 두 번 이상 반복되면 첫 등장은 작업 전, 마지막 등장은 작업 후일 가능성을 우선 검토한다.
 - 보고서 완성도는 작업 전/작업 후 이미지 쌍이 가장 중요하므로 가능하면 둘 다 확보되도록 매칭한다.
 - 자전거/스케이트보드/보관소가 보이면 자전거 정리·회수 계열 작업에 우선 매칭한다.
@@ -1404,11 +1414,21 @@ def _openai_work_report(
             attachment_text.append(f"[A{index}] {item.get('filename')} / {preview or '본문 미리보기 없음'}")
         content.append({"type": "input_text", "text": "\n".join(attachment_text)})
     try:
-        response = client.responses.create(
-            model=model,
-            input=[{"role": "user", "content": content}],
-            timeout=timeout_sec,
-        )
+        request_kwargs: Dict[str, Any] = {
+            "model": model,
+            "input": [{"role": "user", "content": content}],
+            "timeout": timeout_sec,
+        }
+        if reasoning_effort and model.startswith("gpt-5"):
+            request_kwargs["reasoning"] = {"effort": reasoning_effort}
+        try:
+            response = client.responses.create(**request_kwargs)
+        except Exception as exc:
+            if request_kwargs.get("reasoning") and "Unsupported parameter" in str(exc):
+                request_kwargs.pop("reasoning", None)
+                response = client.responses.create(**request_kwargs)
+            else:
+                raise
         raw = _extract_json_text(getattr(response, "output_text", "") or "")
         if not raw:
             return None

@@ -22,6 +22,10 @@ services:
         value: https://ka-part.com
       - key: OPENAI_API_KEY
         sync: false
+      - key: WORK_REPORT_OPENAI_MODEL
+        value: gpt-5.4
+      - key: WORK_REPORT_OPENAI_REASONING_EFFORT
+        value: medium
       - key: KA_VOICE_HANDOFF_NUMBER
         sync: false
       - key: KA_BOOTSTRAP_ADMIN_LOGIN

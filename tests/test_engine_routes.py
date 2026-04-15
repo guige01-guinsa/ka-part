@@ -578,6 +578,8 @@ def test_work_report_visual_sampling_limits_large_cluster_batches() -> None:
         "KakaoTalk_20260702_112531576.jpg",
         "KakaoTalk_20260702_140610088.jpg",
         "KakaoTalk_20260702_163218930.jpg",
+        "KakaoTalk_20260702_163218930_01.jpg",
+        "KakaoTalk_20260702_163218930_02.jpg",
         "KakaoTalk_20260702_163218930_03.jpg",
         "KakaoTalk_20260702_163750937.jpg",
     ]
