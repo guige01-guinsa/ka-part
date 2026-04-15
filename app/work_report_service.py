@@ -40,7 +40,7 @@ WORK_REPORT_STAGE_HINTS = {
 }
 MAX_WORK_REPORT_IMAGES = 24
 MAX_WORK_REPORT_ATTACHMENTS = 30
-DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 25.0
+DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 45.0
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
     ".hwp",
@@ -893,14 +893,14 @@ def _openai_work_report(
     timeout_sec = _float_env("WORK_REPORT_OPENAI_TIMEOUT_SEC", DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC)
     client = client.with_options(timeout=timeout_sec, max_retries=0)
     candidate_lines: List[str] = []
-    for event in _parse_kakao_events(text):
+    for position, event in enumerate(_parse_kakao_events(text), start=1):
         candidate_text = _collapse(event.get("text") or "")
         if not _looks_like_work_item(candidate_text):
             continue
         candidate_lines.append(
-            f"- {event.get('date_label') or event.get('date') or '-'} / {event.get('sender') or '-'} / {candidate_text}"
+            f"- #{position} / {event.get('date_label') or event.get('date') or '-'} / {event.get('sender') or '-'} / {candidate_text}"
         )
-        if len(candidate_lines) >= 20:
+        if len(candidate_lines) >= 40:
             break
     prompt = """
 너는 아파트 관리사무소 시설팀의 주요업무보고서를 만드는 도우미다.
@@ -942,12 +942,15 @@ def _openai_work_report(
 - 모호하면 confidence를 low로 두고 analysis_notice에 이유를 남긴다.
 - sample 보고서의 제목/보고기간 표현은 참고하되, 실제 입력이 다르면 입력을 우선한다.
 - 시간 순서는 참고만 하고, 이미지의 실제 시각적 내용이 더 중요하다.
+- 다만 이미지 파일명의 촬영시각, 사진 공지 직전/직후 대화, 같은 시각대의 연속 이미지도 함께 검토한다.
 - 같은 작업 내용이 같은 날 두 번 이상 반복되면 첫 등장은 작업 전, 마지막 등장은 작업 후일 가능성을 우선 검토한다.
 - 보고서 완성도는 작업 전/작업 후 이미지 쌍이 가장 중요하므로 가능하면 둘 다 확보되도록 매칭한다.
 - 자전거/스케이트보드/보관소가 보이면 자전거 정리·회수 계열 작업에 우선 매칭한다.
 - 음식물처리기 본체/키패드/안내문/AS 종이가 보이면 음식물처리기 고장·AS 접수 계열에 우선 매칭한다.
 - 천장등/센서등/등기구/분리된 원형 조명이 보이면 조명·센서등 교체 계열에 우선 매칭한다.
 - 박스나 자재 사진은 입고, 교체예정, 자재 준비와 더 가깝다.
+- 이미지가 여러 장이면 가능한 한 같은 작업 내에서 작업 전/작업중/작업후 흐름이 자연스럽게 이어지도록 배치한다.
+- 잘못된 매칭보다 보수적인 매칭이 낫다. 확신이 낮으면 unmatched로 남기고 analysis_notice에 적는다.
 """.strip()
     content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
     if sample_title or sample_lines:
@@ -958,13 +961,26 @@ def _openai_work_report(
     if candidate_lines:
         content.append({"type": "input_text", "text": "대화에서 보이는 작업 후보:\n" + "\n".join(candidate_lines)})
     if image_inputs:
+        image_descriptions = []
+        for index, item in enumerate(image_inputs, start=1):
+            filename = _collapse(item.get("filename") or f"image-{index}")
+            time_fields = _entry_time_fields(filename)
+            second_of_day = int(time_fields.get("second_of_day") or -1)
+            time_label = "-"
+            if second_of_day >= 0:
+                hour = second_of_day // 3600
+                minute = (second_of_day % 3600) // 60
+                second = second_of_day % 60
+                time_label = f"{time_fields.get('date') or '-'} {hour:02d}:{minute:02d}:{second:02d}"
+            stage_hint = _entry_stage(filename) or "-"
+            image_descriptions.append(f"[I{index}] {filename} / 촬영시각: {time_label} / 파일단계힌트: {stage_hint}")
         content.append(
             {
                 "type": "input_text",
-                "text": "\n".join(f"[I{index}] {item.get('filename')}" for index, item in enumerate(image_inputs, start=1)),
+                "text": "이미지 목록:\n" + "\n".join(image_descriptions),
             }
         )
-        for index, item in enumerate(image_inputs[:12], start=1):
+        for index, item in enumerate(image_inputs, start=1):
             data_url = _openai_image_url(item)
             content.append({"type": "input_text", "text": f"이미지 I{index}: {item.get('filename')}"})
             if data_url:

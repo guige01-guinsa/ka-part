@@ -53,6 +53,13 @@ def _collapse(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def _trim_one_line(value: Any, *, limit: int = 72) -> str:
+    text = _collapse(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(1, limit - 1)].rstrip()}…"
+
+
 def _styles() -> Dict[str, ParagraphStyle]:
     font_name = _register_font()
     base_styles = getSampleStyleSheet()
@@ -327,11 +334,13 @@ def build_kakao_digest_pdf(
 
 
 def _work_report_detail_table(item: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> Table:
-    stages = {str(row.get("stage") or "") for row in item.get("images") or []}
-    if {"before", "after"}.issubset(stages):
-        image_status = "작업 전/작업 후 이미지 확인"
-    elif stages:
-        image_status = "전후 이미지 중 일부만 확인"
+    image_count = len(item.get("images") or [])
+    if image_count >= 3:
+        image_status = "작업전/작업중/작업후 이미지 확인"
+    elif image_count == 2:
+        image_status = "작업전/작업후 이미지 확인"
+    elif image_count == 1:
+        image_status = "현장 이미지 1장 확인"
     else:
         image_status = "현장 이미지 없음"
     rows = [
@@ -365,6 +374,50 @@ def _work_report_image_lookup(image_inputs: Sequence[Dict[str, Any]] | None = No
     return {index: row for index, row in enumerate(list(image_inputs or []), start=1)}
 
 
+def _work_report_image_summary(item: Dict[str, Any]) -> str:
+    title = _collapse(item.get("title") or "")
+    summary = _collapse(item.get("summary") or "")
+    base = summary if summary and summary != title else title
+    return _trim_one_line(base, limit=68)
+
+
+def _work_report_image_phase_label(total: int, position: int) -> str:
+    if total <= 1:
+        return ""
+    if total == 2:
+        return "작업전" if position == 0 else "작업후"
+    if position == 0:
+        return "작업전"
+    if position == total - 1:
+        return "작업후"
+    return "작업중"
+
+
+def _fixed_canvas_image(image_bytes: bytes, *, draw_width: float, draw_height: float) -> Image:
+    payload = bytes(image_bytes or b"")
+    if payload and PILImage is not None:
+        try:
+            image = PILImage.open(BytesIO(payload))
+            image.load()
+            image = image.convert("RGB")
+            canvas_width = max(320, int(float(draw_width) * 2.2))
+            canvas_height = max(240, int(float(draw_height) * 2.2))
+            image.thumbnail((canvas_width, canvas_height), PILImage.Resampling.LANCZOS)
+            canvas = PILImage.new("RGB", (canvas_width, canvas_height), (255, 255, 255))
+            offset_x = max(0, (canvas_width - image.width) // 2)
+            offset_y = max(0, (canvas_height - image.height) // 2)
+            canvas.paste(image, (offset_x, offset_y))
+            output = BytesIO()
+            canvas.save(output, format="JPEG", quality=82, optimize=True)
+            flowable = Image(BytesIO(output.getvalue()))
+            flowable.drawWidth = draw_width
+            flowable.drawHeight = draw_height
+            return flowable
+        except Exception:
+            pass
+    return _scaled_image(payload, max_width=draw_width, max_height=draw_height)
+
+
 def _work_report_image_grid(item: Dict[str, Any], image_inputs: Sequence[Dict[str, Any]] | None, styles: Dict[str, ParagraphStyle]) -> Table | None:
     image_lookup = _work_report_image_lookup(image_inputs)
     matches = list(item.get("images") or [])
@@ -372,21 +425,23 @@ def _work_report_image_grid(item: Dict[str, Any], image_inputs: Sequence[Dict[st
         return None
     cells: List[List[Any]] = []
     row_cells: List[Any] = []
-    for match in matches:
+    total_matches = len(matches)
+    for position, match in enumerate(matches):
         image_index = int(match.get("index") or 0)
         image_item = image_lookup.get(image_index) or {}
         raw = image_item.get("bytes")
-        flowables: List[Any] = [
-            Paragraph(_escape(match.get("stage_label") or "현장 이미지"), styles["small"]),
-        ]
+        flowables: List[Any] = []
         if isinstance(raw, (bytes, bytearray)) and raw:
             try:
-                flowables.append(_scaled_image(bytes(raw), max_width=78 * mm, max_height=62 * mm))
+                flowables.append(_fixed_canvas_image(bytes(raw), draw_width=78 * mm, draw_height=62 * mm))
             except Exception:
                 flowables.append(Paragraph("이미지를 렌더링하지 못했습니다.", styles["caption"]))
         else:
             flowables.append(Paragraph("이미지 원본 없음", styles["caption"]))
-        flowables.append(Paragraph(_escape(match.get("filename") or image_item.get("filename") or f"image-{image_index}"), styles["caption"]))
+        phase_label = _work_report_image_phase_label(total_matches, position)
+        if phase_label:
+            flowables.append(Spacer(1, 1.2 * mm))
+            flowables.append(Paragraph(_escape(phase_label), styles["small"]))
         row_cells.append(flowables)
         if len(row_cells) == 2:
             cells.append(row_cells)
@@ -409,6 +464,44 @@ def _work_report_image_grid(item: Dict[str, Any], image_inputs: Sequence[Dict[st
         )
     )
     return table
+
+
+def _work_report_attachment_rows(
+    items: Sequence[Dict[str, Any]],
+    attachment_inputs: Sequence[Dict[str, Any]] | None,
+    unmatched_attachments: Sequence[Dict[str, Any]] | None,
+) -> List[Dict[str, Any]]:
+    attachment_lookup = {index: row for index, row in enumerate(list(attachment_inputs or []), start=1)}
+    rows: List[Dict[str, Any]] = []
+    used_indexes: set[int] = set()
+    for item in items:
+        item_title = _collapse(item.get("title") or "") or "-"
+        for attachment in item.get("attachments") or []:
+            attachment_index = int(attachment.get("index") or 0)
+            source = attachment_lookup.get(attachment_index) or attachment
+            used_indexes.add(attachment_index)
+            rows.append(
+                {
+                    "matched_title": item_title,
+                    "filename": _collapse(attachment.get("filename") or source.get("filename") or f"attachment-{attachment_index}"),
+                    "preview_text": _collapse(attachment.get("preview_text") or source.get("preview_text") or ""),
+                    "matched": True,
+                }
+            )
+    for attachment in unmatched_attachments or []:
+        attachment_index = int(attachment.get("index") or 0)
+        if attachment_index in used_indexes:
+            continue
+        source = attachment_lookup.get(attachment_index) or attachment
+        rows.append(
+            {
+                "matched_title": "",
+                "filename": _collapse(source.get("filename") or attachment.get("filename") or f"attachment-{attachment_index}"),
+                "preview_text": _collapse(source.get("preview_text") or attachment.get("preview_text") or ""),
+                "matched": False,
+            }
+        )
+    return rows
 
 
 def _work_report_text_only_table(items: Sequence[Dict[str, Any]], styles: Dict[str, ParagraphStyle]) -> Table | None:
@@ -530,19 +623,14 @@ def build_work_report_pdf(
             story.append(Spacer(1, 6 * mm))
             story.append(Paragraph(_escape(f"{position}. 주요 작업"), styles["heading"]))
             story.append(_work_report_detail_table(item, styles))
+            image_summary = _work_report_image_summary(item)
+            if image_summary:
+                story.append(Spacer(1, 2 * mm))
+                story.append(Paragraph(_escape(f"이미지 매칭 요약: {image_summary}"), styles["small"]))
             image_grid = _work_report_image_grid(item, image_inputs, styles)
             if image_grid:
                 story.append(Spacer(1, 3 * mm))
                 story.append(image_grid)
-            attachments = list(item.get("attachments") or [])
-            if attachments:
-                story.append(Spacer(1, 2 * mm))
-                story.append(Paragraph("첨부파일", styles["small"]))
-                for attachment in attachments:
-                    preview = _collapse(attachment.get("preview_text") or "")
-                    label = _collapse(attachment.get("filename") or "-")
-                    text = label if not preview else f"{label} / {preview}"
-                    story.append(Paragraph(f"- {_escape(text)}", styles["caption"]))
             if position < len(image_items):
                 story.append(Spacer(1, 4 * mm))
 
@@ -558,25 +646,34 @@ def build_work_report_pdf(
 
     unmatched_images = list(report.get("unmatched_images") or [])
     unmatched_attachments = list(report.get("unmatched_attachments") or [])
-    if unmatched_images or unmatched_attachments:
-        story.append(PageBreak())
-        story.append(Paragraph("미매칭 자료", styles["heading"]))
-        if unmatched_images:
-            story.append(Paragraph("미매칭 이미지", styles["small"]))
-            for row in unmatched_images:
-                story.append(Paragraph(f"- {_escape(row.get('filename') or '-')}", styles["caption"]))
-        if unmatched_attachments:
-            story.append(Spacer(1, 2 * mm))
-            story.append(Paragraph("미매칭 첨부파일", styles["small"]))
-            for row in unmatched_attachments:
-                story.append(Paragraph(f"- {_escape(row.get('filename') or '-')}", styles["caption"]))
-
     source_preview = [line for line in report.get("source_text_preview") or [] if _collapse(line)]
-    if source_preview:
-        story.append(Spacer(1, 5 * mm))
+    if not source_preview:
+        source_preview = [_collapse(line) for line in str(source_text or "").splitlines() if _collapse(line)][:20]
+    attachment_rows = _work_report_attachment_rows(report_items, attachment_inputs, unmatched_attachments)
+    if source_preview or attachment_rows:
+        story.append(PageBreak())
         story.append(Paragraph("원문 미리보기", styles["heading"]))
-        for line in source_preview[:16]:
+        for line in source_preview[:20]:
             story.append(Paragraph(_escape(line), styles["caption"]))
+        if attachment_rows:
+            story.append(Spacer(1, 4 * mm))
+            story.append(Paragraph("첨부 내용", styles["heading"]))
+            for position, row in enumerate(attachment_rows, start=1):
+                header = f"{position}. {row.get('filename') or '-'}"
+                matched_title = _collapse(row.get("matched_title") or "")
+                if matched_title:
+                    header = f"{header} / 매칭 작업: {matched_title}"
+                else:
+                    header = f"{header} / 미매칭 첨부"
+                story.append(Paragraph(_escape(header), styles["small"]))
+                story.append(Paragraph(_escape(row.get("preview_text") or "본문 미리보기 없음"), styles["caption"]))
+                story.append(Spacer(1, 1.6 * mm))
+
+    if unmatched_images:
+        story.append(PageBreak())
+        story.append(Paragraph("미매칭 이미지", styles["heading"]))
+        for row in unmatched_images:
+            story.append(Paragraph(f"- {_escape(row.get('filename') or '-')}", styles["caption"]))
 
     doc.build(story)
     return buffer.getvalue()
