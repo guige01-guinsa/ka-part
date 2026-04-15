@@ -4029,7 +4029,12 @@
     return sections.join("");
   }
 
-  function workReportFormData() {
+  function invalidateWorkReportCache() {
+    lastWorkReportResult = null;
+  }
+
+  function workReportFormData(options = {}) {
+    const includeCachedReport = !!options.includeCachedReport;
     const tenantId = currentTenantId();
     if (!tenantId) throw new Error("테넌트를 선택하세요.");
     const text = String($("#chatInput")?.value || "").trim();
@@ -4050,6 +4055,9 @@
     attachments.forEach((file) => fd.append("attachments", file, file.name || "attachment"));
     if (sampleFile) {
       fd.append("sample_file", sampleFile, sampleFile.name || "sample");
+    }
+    if (includeCachedReport && lastWorkReportResult) {
+      fd.append("report_json", JSON.stringify(lastWorkReportResult));
     }
     return fd;
   }
@@ -4146,7 +4154,7 @@
     try {
       const response = await authFetchBlob("/api/ai/work_report/pdf", {
         method: "POST",
-        body: workReportFormData(),
+        body: workReportFormData({ includeCachedReport: true }),
         timeoutMs: WORK_REPORT_REQUEST_TIMEOUT_MS,
       });
       downloadBlob(response.blob, response.filename || "work-report.pdf");
@@ -4582,17 +4590,26 @@
         setInputFiles("#chatImageInput", files.slice(0, MAX_WORK_REPORT_IMAGES));
         setMessage("#intakeMsg", `현장 사진은 최대 ${MAX_WORK_REPORT_IMAGES}장까지 선택할 수 있습니다. 초과분은 제외했습니다.`, true);
       }
+      invalidateWorkReportCache();
       clearChatSourcePreview();
       resetDigestImportState();
       updateChatDigestHint();
     });
-    $("#workReportFileInput")?.addEventListener("change", () => syncWorkReportAttachmentSelection());
+    $("#workReportFileInput")?.addEventListener("change", () => {
+      invalidateWorkReportCache();
+      syncWorkReportAttachmentSelection();
+    });
     $("#workReportSourceInput")?.addEventListener("change", () => {
+      invalidateWorkReportCache();
       syncWorkReportSourceSelection();
       updateChatDigestHint();
     });
-    $("#workReportSampleInput")?.addEventListener("change", () => syncWorkReportSampleSelection());
+    $("#workReportSampleInput")?.addEventListener("change", () => {
+      invalidateWorkReportCache();
+      syncWorkReportSampleSelection();
+    });
     $("#chatInput")?.addEventListener("input", () => {
+      invalidateWorkReportCache();
       clearChatSourcePreview();
       resetDigestImportState();
       updateChatDigestHint();
@@ -4639,21 +4656,25 @@
       if (!inputSelector || index < 0) return;
       removeInputFileAt(inputSelector, index);
       if (inputSelector === "#chatImageInput") {
+        invalidateWorkReportCache();
         clearChatSourcePreview();
         resetDigestImportState();
         updateChatDigestHint();
         return;
       }
       if (inputSelector === "#workReportSourceInput") {
+        invalidateWorkReportCache();
         syncWorkReportSourceSelection();
         updateChatDigestHint();
         return;
       }
       if (inputSelector === "#workReportSampleInput") {
+        invalidateWorkReportCache();
         syncWorkReportSampleSelection();
         return;
       }
       if (inputSelector === "#workReportFileInput") {
+        invalidateWorkReportCache();
         syncWorkReportAttachmentSelection();
       }
     });
@@ -4675,7 +4696,7 @@
     clearChatDigestImagePreview();
     clearChatSourcePreview();
     resetDigestImportState();
-    lastWorkReportResult = null;
+    invalidateWorkReportCache();
     updateChatDigestHint();
     syncWorkReportAttachmentSelection();
     syncWorkReportSourceSelection();

@@ -5,8 +5,14 @@ import json
 import os
 import re
 from datetime import date, datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+try:
+    from PIL import Image as PILImage
+except Exception:  # pragma: no cover - pillow optional at runtime
+    PILImage = None
 
 WORK_REPORT_ACTION_KEYWORDS = (
     "교체",
@@ -40,8 +46,12 @@ WORK_REPORT_STAGE_HINTS = {
 }
 MAX_WORK_REPORT_IMAGES = 100
 MAX_WORK_REPORT_ATTACHMENTS = 30
-MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES = 24
-DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 120.0
+MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES = 6
+WORK_REPORT_OPENAI_IMAGE_MAX_DIM = 640
+WORK_REPORT_OPENAI_IMAGE_QUALITY = 60
+WORK_REPORT_OPENAI_CLUSTER_GAP_SECONDS = 180
+WORK_REPORT_OPENAI_CLUSTER_CONTEXT_MINUTES = 12
+DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 75.0
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
     ".hwp",
@@ -167,7 +177,7 @@ def _time_minutes(text: str) -> int:
     return (hour * 60) + int(match.group(3))
 
 
-def _openai_client(default_model: str = "gpt-5") -> Tuple[Any | None, str]:
+def _openai_client(default_model: str = "gpt-5", env_name: str = "OPENAI_MODEL") -> Tuple[Any | None, str]:
     api_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
         return None, ""
@@ -175,7 +185,7 @@ def _openai_client(default_model: str = "gpt-5") -> Tuple[Any | None, str]:
         from openai import OpenAI
     except Exception:
         return None, ""
-    model = str(os.getenv("OPENAI_MODEL") or default_model).strip() or default_model
+    model = str(os.getenv(env_name) or os.getenv("OPENAI_MODEL") or default_model).strip() or default_model
     return OpenAI(api_key=api_key), model
 
 
@@ -343,6 +353,48 @@ def _clean_item_title(text: str) -> str:
     return normalized[:120]
 
 
+def _title_key(text: str) -> str:
+    return re.sub(r"[^0-9a-z가-힣]+", "", _clean_item_title(text).lower())
+
+
+def _title_action_keyword(text: str) -> str:
+    normalized = _clean_item_title(text)
+    for keyword in WORK_REPORT_ACTION_KEYWORDS:
+        if keyword in normalized:
+            return keyword
+    return ""
+
+
+def _title_tokens(text: str) -> set[str]:
+    stop_words = set(WORK_REPORT_ACTION_KEYWORDS) | {"작업", "민원", "사항", "업체", "요청", "접수", "완료", "예정"}
+    tokens = {
+        _collapse(token).lower()
+        for token in re.findall(r"\d+동|\d+호|[가-힣a-zA-Z]{2,}", _clean_item_title(text))
+        if _collapse(token)
+    }
+    return {token for token in tokens if token not in stop_words}
+
+
+def _titles_match(left: str, right: str) -> bool:
+    left_key = _title_key(left)
+    right_key = _title_key(right)
+    if not left_key or not right_key:
+        return False
+    if left_key == right_key:
+        return True
+    if (len(left_key) >= 8 and left_key in right_key) or (len(right_key) >= 8 and right_key in left_key):
+        return True
+    common_tokens = _title_tokens(left) & _title_tokens(right)
+    if len(common_tokens) >= 2:
+        return True
+    left_action = _title_action_keyword(left)
+    right_action = _title_action_keyword(right)
+    if common_tokens and left_action and left_action == right_action:
+        if not _guess_location(left) or not _guess_location(right):
+            return True
+    return False
+
+
 def _tagged_value(tagged: Dict[str, str], *labels: str) -> str:
     normalized_labels = [re.sub(r"[\s:]+", "", label) for label in labels if _collapse(label)]
     for key, value in tagged.items():
@@ -449,6 +501,37 @@ def _new_item(title: str, event: Dict[str, Any], *, confidence: str) -> Dict[str
         "_attachment_notice_tokens": [],
         "_minute_of_day": int(event.get("minute_of_day") or -1),
     }
+
+
+def _supplement_text_only_items(existing_items: Sequence[Dict[str, Any]], text: str) -> List[Dict[str, Any]]:
+    seeded_items = list(existing_items or [])
+    added_items: List[Dict[str, Any]] = []
+    seen_keys = {
+        (_title_key(item.get("title") or ""), _collapse(item.get("work_date") or ""))
+        for item in seeded_items
+        if _title_key(item.get("title") or "")
+    }
+    for event in _parse_kakao_events(text):
+        text_line = _collapse(event.get("text") or "")
+        if not text_line or not _looks_like_work_item(text_line):
+            continue
+        if any(_titles_match(text_line, item.get("title") or "") for item in seeded_items + added_items):
+            continue
+        title_key = _title_key(text_line)
+        date_key = _collapse(event.get("date") or "")
+        if not title_key or (title_key, date_key) in seen_keys:
+            continue
+        item = _new_item(text_line, event, confidence="heuristic-supplement")
+        item["images"] = []
+        item["attachments"] = []
+        item.pop("_expected_attachment_count", None)
+        item.pop("_image_notices", None)
+        item.pop("_attachment_notice_texts", None)
+        item.pop("_attachment_notice_tokens", None)
+        item.pop("_minute_of_day", None)
+        added_items.append(item)
+        seen_keys.add((title_key, date_key))
+    return added_items
 
 
 def _append_summary(item: Dict[str, Any], text: str) -> None:
@@ -569,6 +652,226 @@ def _entry_time_fields(filename: str) -> Dict[str, int | str]:
         "minute_of_day": (hour * 60) + minute,
         "second_of_day": (hour * 3600) + (minute * 60) + second,
     }
+
+
+def _openai_image_meta(index: int, entry: Dict[str, Any]) -> Dict[str, Any]:
+    filename = _collapse(entry.get("filename") or f"image-{index}")
+    time_fields = _entry_time_fields(filename)
+    return {
+        "index": int(index),
+        "filename": filename,
+        "date": _collapse(time_fields.get("date") or ""),
+        "minute_of_day": int(time_fields.get("minute_of_day") or -1),
+        "second_of_day": int(time_fields.get("second_of_day") or -1),
+        "stage_hint": _entry_stage(filename),
+    }
+
+
+def _cluster_openai_image_meta(entries: Sequence[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    ordered = sorted(
+        list(entries or []),
+        key=lambda row: (
+            str(row.get("date") or ""),
+            int(row.get("second_of_day") or -1) if int(row.get("second_of_day") or -1) >= 0 else 10**9,
+            int(row.get("index") or 0),
+        ),
+    )
+    if not ordered:
+        return []
+    clusters: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+    for row in ordered:
+        if not current:
+            current = [row]
+            continue
+        previous = current[-1]
+        row_second = int(row.get("second_of_day") or -1)
+        prev_second = int(previous.get("second_of_day") or -1)
+        same_date = _collapse(row.get("date") or "") == _collapse(previous.get("date") or "")
+        if row_second >= 0 and prev_second >= 0 and same_date and abs(row_second - prev_second) <= WORK_REPORT_OPENAI_CLUSTER_GAP_SECONDS:
+            current.append(row)
+            continue
+        clusters.append(current)
+        current = [row]
+    if current:
+        clusters.append(current)
+    return clusters
+
+
+def _sample_cluster_indexes(cluster: Sequence[Dict[str, Any]]) -> List[int]:
+    rows = list(cluster or [])
+    if not rows:
+        return []
+    selected_indexes: List[int] = []
+    first_index = int(rows[0].get("index") or 0)
+    last_index = int(rows[-1].get("index") or 0)
+    if first_index > 0:
+        selected_indexes.append(first_index)
+    if last_index > 0 and last_index not in selected_indexes:
+        selected_indexes.append(last_index)
+    if len(rows) >= 5:
+        middle_index = int(rows[len(rows) // 2].get("index") or 0)
+        if middle_index > 0 and middle_index not in selected_indexes:
+            selected_indexes.append(middle_index)
+    for row in rows:
+        image_index = int(row.get("index") or 0)
+        if image_index <= 0:
+            continue
+        if not _collapse(row.get("stage_hint") or ""):
+            continue
+        if image_index not in selected_indexes:
+            selected_indexes.append(image_index)
+    return selected_indexes
+
+
+def _evenly_sample_indexes(indexes: Sequence[int], limit: int) -> List[int]:
+    values = [int(value) for value in list(indexes or []) if int(value) > 0]
+    if limit <= 0 or not values:
+        return []
+    if len(values) <= limit:
+        return values
+    if limit == 1:
+        return [values[0]]
+    result: List[int] = []
+    last_position = len(values) - 1
+    for position in range(limit):
+        source_index = round(position * last_position / max(limit - 1, 1))
+        candidate = values[source_index]
+        if candidate not in result:
+            result.append(candidate)
+    for candidate in values:
+        if len(result) >= limit:
+            break
+        if candidate not in result:
+            result.append(candidate)
+    return result[:limit]
+
+
+def _select_openai_visual_meta(image_inputs: Sequence[Dict[str, Any]], limit: int = MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES) -> List[Dict[str, Any]]:
+    if limit <= 0:
+        return []
+    meta_rows = [_openai_image_meta(index, row) for index, row in enumerate(list(image_inputs or []), start=1)]
+    if len(meta_rows) <= limit:
+        return meta_rows
+    clusters = _cluster_openai_image_meta(meta_rows)
+    cluster_candidates = [_sample_cluster_indexes(cluster) for cluster in clusters]
+    selected_indexes: List[int] = []
+    pass_index = 0
+    while len(selected_indexes) < limit:
+        pass_candidates = [
+            indexes[pass_index]
+            for indexes in cluster_candidates
+            if pass_index < len(indexes) and int(indexes[pass_index] or 0) > 0 and int(indexes[pass_index] or 0) not in selected_indexes
+        ]
+        if not pass_candidates:
+            if pass_index >= max((len(indexes) for indexes in cluster_candidates), default=0):
+                break
+            pass_index += 1
+            continue
+        remaining = limit - len(selected_indexes)
+        for image_index in _evenly_sample_indexes(pass_candidates, remaining):
+            if image_index not in selected_indexes:
+                selected_indexes.append(image_index)
+        pass_index += 1
+    if len(selected_indexes) < limit:
+        for row in meta_rows:
+            image_index = int(row.get("index") or 0)
+            if image_index <= 0 or image_index in selected_indexes:
+                continue
+            selected_indexes.append(image_index)
+            if len(selected_indexes) >= limit:
+                break
+    selected_lookup = {int(value) for value in selected_indexes[:limit] if int(value) > 0}
+    return [row for row in meta_rows if int(row.get("index") or 0) in selected_lookup]
+
+
+def _openai_cluster_lines(entries: Sequence[Dict[str, Any]]) -> List[str]:
+    rows = list(entries or [])
+    if not rows:
+        return []
+    result: List[str] = []
+    for cluster_index, cluster in enumerate(_cluster_openai_image_meta(rows), start=1):
+        indexes = [f"I{int(row.get('index') or 0)}" for row in cluster if int(row.get("index") or 0) > 0]
+        if not indexes:
+            continue
+        first = cluster[0]
+        last = cluster[-1]
+        if len(cluster) == 1:
+            result.append(f"- C{cluster_index}: {indexes[0]} / 단일 이미지 / {first.get('filename') or '-'}")
+            continue
+        start_second = int(first.get("second_of_day") or -1)
+        end_second = int(last.get("second_of_day") or -1)
+        time_label = "-"
+        if start_second >= 0 and end_second >= 0:
+            start_hour = start_second // 3600
+            start_minute = (start_second % 3600) // 60
+            end_hour = end_second // 3600
+            end_minute = (end_second % 3600) // 60
+            time_label = f"{start_hour:02d}:{start_minute:02d}~{end_hour:02d}:{end_minute:02d}"
+        result.append(f"- C{cluster_index}: {', '.join(indexes)} / 연속 촬영 {len(cluster)}장 / {time_label}")
+    return result
+
+
+def _openai_cluster_context_lines(entries: Sequence[Dict[str, Any]], text: str) -> List[str]:
+    rows = list(entries or [])
+    if not rows or not _collapse(text):
+        return []
+    work_events = [
+        event
+        for event in _parse_kakao_events(text)
+        if _looks_like_work_item(_collapse(event.get("text") or ""))
+    ]
+    if not work_events:
+        return []
+    result: List[str] = []
+    for cluster_index, cluster in enumerate(_cluster_openai_image_meta(rows), start=1):
+        cluster_date = _collapse(cluster[0].get("date") or "")
+        cluster_minutes = [int(row.get("minute_of_day") or -1) for row in cluster if int(row.get("minute_of_day") or -1) >= 0]
+        if cluster_minutes:
+            center_minute = round(sum(cluster_minutes) / len(cluster_minutes))
+        else:
+            center_minute = -1
+        nearby: List[Tuple[int, Dict[str, Any]]] = []
+        for event in work_events:
+            event_date = _collapse(event.get("date") or "")
+            event_minute = int(event.get("minute_of_day") or -1)
+            if cluster_date and event_date and cluster_date != event_date:
+                continue
+            if center_minute >= 0 and event_minute >= 0:
+                gap = abs(event_minute - center_minute)
+                if gap > WORK_REPORT_OPENAI_CLUSTER_CONTEXT_MINUTES:
+                    continue
+            else:
+                gap = 999
+            nearby.append((gap, event))
+        if not nearby and cluster_date:
+            for event in work_events:
+                if _collapse(event.get("date") or "") != cluster_date:
+                    continue
+                event_minute = int(event.get("minute_of_day") or -1)
+                gap = abs(event_minute - center_minute) if center_minute >= 0 and event_minute >= 0 else 999
+                nearby.append((gap, event))
+        nearby.sort(key=lambda row: (int(row[0]), int(row[1].get("index") or 0)))
+        if not nearby:
+            continue
+        snippets: List[str] = []
+        seen_titles: set[str] = set()
+        for gap, event in nearby:
+            title = _clean_item_title(event.get("text") or "")
+            title_key = _title_key(title)
+            if not title_key or title_key in seen_titles:
+                continue
+            seen_titles.add(title_key)
+            minute = int(event.get("minute_of_day") or -1)
+            time_label = "--:--"
+            if minute >= 0:
+                time_label = f"{minute // 60:02d}:{minute % 60:02d}"
+            snippets.append(f"{time_label} {title}")
+            if len(snippets) >= 3:
+                break
+        if snippets:
+            result.append(f"- C{cluster_index}: " + " / ".join(snippets))
+    return result
 
 
 def _item_tokens(item: Dict[str, Any]) -> set[str]:
@@ -931,12 +1234,35 @@ def _build_text_summary(report_title: str, period_label: str, items: List[Dict[s
     return "\n".join(lines)
 
 
-def _openai_image_url(entry: Dict[str, Any]) -> str:
+def _optimized_openai_image_bytes(entry: Dict[str, Any]) -> Tuple[str, bytes]:
     raw = entry.get("bytes")
     if not isinstance(raw, (bytes, bytearray)) or not raw:
-        return ""
+        return "", b""
+    payload = bytes(raw)
+    if PILImage is None:
+        mime = str(entry.get("content_type") or "image/jpeg").strip() or "image/jpeg"
+        return mime, payload
+    try:
+        image = PILImage.open(BytesIO(payload))
+        image.load()
+        image = image.convert("RGB")
+        image.thumbnail((WORK_REPORT_OPENAI_IMAGE_MAX_DIM, WORK_REPORT_OPENAI_IMAGE_MAX_DIM), PILImage.Resampling.LANCZOS)
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=WORK_REPORT_OPENAI_IMAGE_QUALITY, optimize=True)
+        optimized = output.getvalue()
+        if optimized:
+            return "image/jpeg", optimized
+    except Exception:
+        pass
     mime = str(entry.get("content_type") or "image/jpeg").strip() or "image/jpeg"
-    return f"data:{mime};base64,{base64.b64encode(bytes(raw)).decode('ascii')}"
+    return mime, payload
+
+
+def _openai_image_url(entry: Dict[str, Any]) -> str:
+    mime, payload = _optimized_openai_image_bytes(entry)
+    if not payload:
+        return ""
+    return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
 
 
 def _openai_work_report(
@@ -947,7 +1273,7 @@ def _openai_work_report(
     sample_title: str,
     sample_lines: Sequence[str],
 ) -> Dict[str, Any] | None:
-    client, model = _openai_client()
+    client, model = _openai_client(default_model="gpt-4.1", env_name="WORK_REPORT_OPENAI_MODEL")
     if not client:
         return None
     timeout_sec = _float_env("WORK_REPORT_OPENAI_TIMEOUT_SEC", DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC)
@@ -999,10 +1325,12 @@ def _openai_work_report(
 
 규칙:
 - 이미지/첨부파일 index는 제공된 목록 번호만 사용한다.
+- 이미지가 없어도 작업으로 보이면 누락하지 말고 items에 포함한다. 그 경우 before/during/after image index는 모두 빈 배열로 둔다.
 - 모호하면 confidence를 low로 두고 analysis_notice에 이유를 남긴다.
 - sample 보고서의 제목/보고기간 표현은 참고하되, 실제 입력이 다르면 입력을 우선한다.
 - 시간 순서는 참고만 하고, 이미지의 실제 시각적 내용이 더 중요하다.
 - 다만 이미지 파일명의 촬영시각, 사진 공지 직전/직후 대화, 같은 시각대의 연속 이미지도 함께 검토한다.
+- 같은 촬영 군집에 대해 제공된 근접 대화 후보가 있으면 그 후보를 우선 검토한다.
 - 같은 작업 내용이 같은 날 두 번 이상 반복되면 첫 등장은 작업 전, 마지막 등장은 작업 후일 가능성을 우선 검토한다.
 - 보고서 완성도는 작업 전/작업 후 이미지 쌍이 가장 중요하므로 가능하면 둘 다 확보되도록 매칭한다.
 - 자전거/스케이트보드/보관소가 보이면 자전거 정리·회수 계열 작업에 우선 매칭한다.
@@ -1010,6 +1338,7 @@ def _openai_work_report(
 - 천장등/센서등/등기구/분리된 원형 조명이 보이면 조명·센서등 교체 계열에 우선 매칭한다.
 - 박스나 자재 사진은 입고, 교체예정, 자재 준비와 더 가깝다.
 - 이미지가 여러 장이면 가능한 한 같은 작업 내에서 작업 전/작업중/작업후 흐름이 자연스럽게 이어지도록 배치한다.
+- 이미지가 많으면 대표 이미지만 직접 시각 검토하고, 나머지는 같은 촬영시각 군집과 파일명 정보를 근거로 조심스럽게 확장한다.
 - 잘못된 매칭보다 보수적인 매칭이 낫다. 확신이 낮으면 unmatched로 남기고 analysis_notice에 적는다.
 """.strip()
     content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
@@ -1020,27 +1349,50 @@ def _openai_work_report(
         content.append({"type": "input_text", "text": f"카톡 대화 원문:\n{text}"})
     if candidate_lines:
         content.append({"type": "input_text", "text": "대화에서 보이는 작업 후보:\n" + "\n".join(candidate_lines)})
+    visual_meta: List[Dict[str, Any]] = []
     if image_inputs:
+        image_meta_rows = [_openai_image_meta(index, item) for index, item in enumerate(image_inputs, start=1)]
         image_descriptions = []
-        for index, item in enumerate(image_inputs, start=1):
-            filename = _collapse(item.get("filename") or f"image-{index}")
-            time_fields = _entry_time_fields(filename)
-            second_of_day = int(time_fields.get("second_of_day") or -1)
+        for row in image_meta_rows:
+            index = int(row.get("index") or 0)
             time_label = "-"
+            second_of_day = int(row.get("second_of_day") or -1)
             if second_of_day >= 0:
                 hour = second_of_day // 3600
                 minute = (second_of_day % 3600) // 60
                 second = second_of_day % 60
-                time_label = f"{time_fields.get('date') or '-'} {hour:02d}:{minute:02d}:{second:02d}"
-            stage_hint = _entry_stage(filename) or "-"
-            image_descriptions.append(f"[I{index}] {filename} / 촬영시각: {time_label} / 파일단계힌트: {stage_hint}")
+                time_label = f"{row.get('date') or '-'} {hour:02d}:{minute:02d}:{second:02d}"
+            image_descriptions.append(
+                f"[I{index}] {row.get('filename') or f'image-{index}'} / 촬영시각: {time_label} / 파일단계힌트: {_collapse(row.get('stage_hint') or '-')}"
+            )
         content.append(
             {
                 "type": "input_text",
                 "text": "이미지 목록:\n" + "\n".join(image_descriptions),
             }
         )
-        for index, item in enumerate(image_inputs[:MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES], start=1):
+        cluster_lines = _openai_cluster_lines(image_meta_rows)
+        if cluster_lines:
+            content.append({"type": "input_text", "text": "이미지 촬영 군집:\n" + "\n".join(cluster_lines)})
+        cluster_context_lines = _openai_cluster_context_lines(image_meta_rows, text)
+        if cluster_context_lines:
+            content.append({"type": "input_text", "text": "촬영 군집별 근접 대화 후보:\n" + "\n".join(cluster_context_lines)})
+        visual_meta = _select_openai_visual_meta(image_inputs, limit=MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES)
+        if visual_meta and len(visual_meta) < len(image_inputs):
+            representative = ", ".join(f"I{int(row.get('index') or 0)}" for row in visual_meta if int(row.get("index") or 0) > 0)
+            omitted = len(image_inputs) - len(visual_meta)
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": f"직접 시각 검토할 대표 이미지는 {representative} 이다. 나머지 {omitted}장은 같은 군집과 시간정보를 근거로 보수적으로 확장 매칭하라.",
+                }
+            )
+        image_lookup = {index: row for index, row in enumerate(image_inputs, start=1)}
+        for row in visual_meta:
+            index = int(row.get("index") or 0)
+            item = image_lookup.get(index)
+            if not item:
+                continue
             data_url = _openai_image_url(item)
             content.append({"type": "input_text", "text": f"이미지 I{index}: {item.get('filename')}"})
             if data_url:
@@ -1063,6 +1415,13 @@ def _openai_work_report(
         data = _normalize_ai_work_report_payload(json.loads(raw))
     except Exception:
         return None
+    if visual_meta and len(visual_meta) < len(image_inputs):
+        representative_notice = (
+            f"AI가 대표 이미지 {len(visual_meta)}장과 촬영 군집 정보를 직접 검토하고, "
+            f"나머지 {len(image_inputs) - len(visual_meta)}장은 시간군집 기준으로 보수적으로 확장 매칭했습니다."
+        )
+        merged_notice = _collapse(data.get("analysis_notice") or "")
+        data["analysis_notice"] = representative_notice if not merged_notice else f"{merged_notice} {representative_notice}"
     items: List[Dict[str, Any]] = []
     for index, row in enumerate(data.get("items") or [], start=1):
         if not isinstance(row, dict):
@@ -1168,6 +1527,13 @@ def analyze_work_report(
         analysis_model = _collapse(ai_result.get("analysis_model") or "gpt-5")
         report_title = _collapse(ai_result.get("report_title") or _sample_heading(sample_title, sample_lines))
         period_label = _collapse(ai_result.get("period_label") or _sample_period(sample_lines))
+        supplemental_items = _supplement_text_only_items(items, normalized_text)
+        if supplemental_items:
+            for item in supplemental_items:
+                item["index"] = len(items) + 1
+                items.append(item)
+            supplement_notice = f"텍스트 전용 작업 {len(supplemental_items)}건을 추가로 보강했습니다."
+            analysis_notice = supplement_notice if not analysis_notice else f"{analysis_notice} {supplement_notice}"
     else:
         events = _parse_kakao_events(normalized_text)
         explicit_items: List[Dict[str, Any]] = []

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import json
 import re
 import sys
 from pathlib import Path
@@ -558,6 +559,30 @@ def test_work_report_analysis_uses_notice_time_window_for_kakao_images(app_clien
     assert [str(image["filename"]) for image in keypad_item["images"]] == ["KakaoTalk_20260702_163750937.jpg"]
 
 
+def test_work_report_visual_sampling_limits_large_cluster_batches() -> None:
+    from app.work_report_service import _select_openai_visual_meta
+
+    rows = [
+        {"filename": "KakaoTalk_20260702_104711820.jpg"},
+        {"filename": "KakaoTalk_20260702_112531576.jpg"},
+        {"filename": "KakaoTalk_20260702_140610088.jpg"},
+        {"filename": "KakaoTalk_20260702_163218930.jpg"},
+        {"filename": "KakaoTalk_20260702_163218930_01.jpg"},
+        {"filename": "KakaoTalk_20260702_163218930_02.jpg"},
+        {"filename": "KakaoTalk_20260702_163218930_03.jpg"},
+        {"filename": "KakaoTalk_20260702_163750937.jpg"},
+    ]
+    selected = _select_openai_visual_meta(rows)
+    assert [str(row["filename"]) for row in selected] == [
+        "KakaoTalk_20260702_104711820.jpg",
+        "KakaoTalk_20260702_112531576.jpg",
+        "KakaoTalk_20260702_140610088.jpg",
+        "KakaoTalk_20260702_163218930.jpg",
+        "KakaoTalk_20260702_163218930_03.jpg",
+        "KakaoTalk_20260702_163750937.jpg",
+    ]
+
+
 def test_work_report_pdf_supports_sample_and_uploads(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)
@@ -579,6 +604,49 @@ def test_work_report_pdf_supports_sample_and_uploads(app_client) -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/pdf")
     assert "attachment;" in response.headers.get("content-disposition", "")
+    assert response.content.startswith(b"%PDF")
+
+
+def test_work_report_pdf_can_reuse_cached_preview_result(app_client, monkeypatch) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+    text = "2026년 7월 4일 오전 9:00, 관리실 : 어린이 수영장 청소"
+
+    preview = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": text},
+        files=[
+            ("images", ("7월4일-수영장-작업전.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+            ("images", ("7월4일-수영장-작업후.jpg", io.BytesIO(b"fake-image-2"), "image/jpeg")),
+        ],
+    )
+    assert preview.status_code == 200
+    cached_report = preview.json()["item"]
+
+    import app.routes.engine as engine
+
+    def _unexpected_reanalysis(*args, **kwargs):
+        raise AssertionError("cached report should skip analyze_work_report")
+
+    monkeypatch.setattr(engine, "analyze_work_report", _unexpected_reanalysis)
+
+    response = client.post(
+        "/api/ai/work_report/pdf",
+        headers=headers,
+        data={
+            "tenant_id": "ys_thesharp",
+            "text": text,
+            "report_json": json.dumps(cached_report, ensure_ascii=False),
+        },
+        files=[
+            ("images", ("7월4일-수영장-작업전.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+            ("images", ("7월4일-수영장-작업후.jpg", io.BytesIO(b"fake-image-2"), "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
     assert response.content.startswith(b"%PDF")
 
 

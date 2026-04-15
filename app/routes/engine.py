@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from ..ai_service import MAX_CHAT_DIGEST_IMAGES, analyze_chat_digest, classify_complaint_text, normalize_summary_text
 from ..db import (
@@ -402,7 +403,8 @@ async def ai_work_report(
     if not source_text and not image_inputs and not attachment_inputs:
         raise HTTPException(status_code=400, detail="text, image, or attachment is required")
     try:
-        item = analyze_work_report(
+        item = await run_in_threadpool(
+            analyze_work_report,
             source_text,
             image_inputs=image_inputs,
             attachment_inputs=attachment_inputs,
@@ -438,6 +440,7 @@ async def ai_work_report_pdf(
     images: List[UploadFile] = File(default=[]),
     attachments: List[UploadFile] = File(default=[]),
     sample_file: UploadFile | None = File(default=None),
+    report_json: str = Form(default=""),
 ) -> StreamingResponse:
     payload = {"tenant_id": tenant_id}
     resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
@@ -450,14 +453,27 @@ async def ai_work_report_pdf(
     if not source_text and not image_inputs and not attachment_inputs:
         raise HTTPException(status_code=400, detail="text, image, or attachment is required")
     try:
-        report = analyze_work_report(
+        cached_report = None
+        if str(report_json or "").strip():
+            try:
+                import json
+
+                parsed_report = json.loads(str(report_json or ""))
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="report_json 형식이 잘못되었습니다.") from exc
+            if not isinstance(parsed_report, dict):
+                raise HTTPException(status_code=400, detail="report_json 형식이 잘못되었습니다.")
+            cached_report = parsed_report
+        report = cached_report or await run_in_threadpool(
+            analyze_work_report,
             source_text,
             image_inputs=image_inputs,
             attachment_inputs=attachment_inputs,
             sample_title=str(sample.get("title") or "").strip(),
             sample_lines=[str(line or "") for line in sample.get("lines") or []],
         )
-        pdf_bytes = build_work_report_pdf(
+        pdf_bytes = await run_in_threadpool(
+            build_work_report_pdf,
             report=report,
             tenant_label=_tenant_label(resolved_tenant_id, tenant),
             source_text=source_text,
