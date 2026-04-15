@@ -114,6 +114,81 @@
     el.classList.toggle("error", !!isError);
   }
 
+  function renderWorkReportProgress(state) {
+    const modeLabel = state?.mode === "pdf" ? "주요업무보고 PDF" : "주요업무보고 미리보기";
+    const elapsed = Math.max(0, Number(state?.elapsedSec || 0));
+    const currentStep = Math.max(0, Number(state?.currentStep || 0));
+    const steps = Array.isArray(state?.steps) ? state.steps : [];
+    const hint = String(state?.hint || "").trim();
+    return [
+      '<div class="work-report-progress">',
+      `<div class="work-report-progress-head"><strong>${escapeHtml(modeLabel)}</strong><span>${escapeHtml(`${elapsed}초 경과`)}</span></div>`,
+      `<div class="work-report-progress-note">${escapeHtml(state?.summary || "처리 중입니다.")}</div>`,
+      `<div class="work-report-progress-steps">${steps.map((step, index) => {
+        const status = index < currentStep ? "done" : index === currentStep ? "active" : "pending";
+        const label = status === "done" ? "완료" : status === "active" ? "진행 중" : "대기";
+        return `<div class="work-report-progress-step ${status}"><strong>${escapeHtml(`${index + 1}. ${String(step || "")}`)}</strong><span>${escapeHtml(label)}</span></div>`;
+      }).join("")}</div>`,
+      hint ? `<div class="work-report-progress-hint">${escapeHtml(hint)}</div>` : "",
+      "</div>",
+    ].join("");
+  }
+
+  function startWorkReportProgress(mode = "preview") {
+    const target = $("#workReportBox");
+    const previewSteps = [
+      "입력 내용 확인",
+      "원문과 사진 정리",
+      "서버 분석 요청",
+      "작업 항목과 이미지 매칭",
+      "결과 정리",
+    ];
+    const pdfSteps = [
+      "입력 내용 확인",
+      "원문과 사진 정리",
+      "서버 분석 요청",
+      "작업 항목과 이미지 매칭",
+      "PDF 렌더링",
+    ];
+    const steps = mode === "pdf" ? pdfSteps : previewSteps;
+    const startedAt = Date.now();
+    let timerId = 0;
+
+    const paint = () => {
+      if (!target) return;
+      const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+      let currentStep = 0;
+      if (elapsedSec >= 4) currentStep = 1;
+      if (elapsedSec >= 10) currentStep = 2;
+      if (elapsedSec >= 18) currentStep = 3;
+      if (elapsedSec >= 32) currentStep = 4;
+      const summary = steps[Math.min(currentStep, steps.length - 1)] || "처리 중";
+      let hint = "잠시만 기다려 주세요.";
+      if (elapsedSec >= 20) hint = "사진 수와 원문 길이에 따라 시간이 더 걸릴 수 있습니다.";
+      if (elapsedSec >= 45) hint = "오래 걸리고 있지만 서버에서 계속 처리 중일 수 있습니다.";
+      target.classList.remove("hidden");
+      target.innerHTML = renderWorkReportProgress({
+        mode,
+        elapsedSec,
+        currentStep,
+        steps,
+        summary,
+        hint,
+      });
+    };
+
+    paint();
+    timerId = window.setInterval(paint, 1000);
+    return {
+      stop() {
+        if (timerId) {
+          window.clearInterval(timerId);
+          timerId = 0;
+        }
+      },
+    };
+  }
+
   function escapeHtml(value) {
     return String(value || "")
       .replaceAll("&", "&amp;")
@@ -3884,24 +3959,34 @@
   }
 
   async function analyzeWorkReport() {
-    $("#workReportBox").classList.remove("hidden");
-    $("#workReportBox").textContent = "주요업무보고 미리보기를 만드는 중입니다...";
-    const data = await authFetchJson("/api/ai/work_report", {
-      method: "POST",
-      body: workReportFormData(),
-    });
-    lastWorkReportResult = data.item || null;
-    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
-    setMessage("#intakeMsg", `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`);
+    const progress = startWorkReportProgress("preview");
+    try {
+      const data = await authFetchJson("/api/ai/work_report", {
+        method: "POST",
+        body: workReportFormData(),
+      });
+      lastWorkReportResult = data.item || null;
+      $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
+      setMessage("#intakeMsg", `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`);
+    } finally {
+      progress.stop();
+    }
   }
 
   async function downloadWorkReportPdf() {
-    const response = await authFetchBlob("/api/ai/work_report/pdf", {
-      method: "POST",
-      body: workReportFormData(),
-    });
-    downloadBlob(response.blob, response.filename || "work-report.pdf");
-    setMessage("#intakeMsg", "주요업무보고 PDF를 생성했습니다. 이 버튼만 사용하면 됩니다.");
+    const progress = startWorkReportProgress("pdf");
+    try {
+      const response = await authFetchBlob("/api/ai/work_report/pdf", {
+        method: "POST",
+        body: workReportFormData(),
+      });
+      downloadBlob(response.blob, response.filename || "work-report.pdf");
+      $("#workReportBox").classList.remove("hidden");
+      $("#workReportBox").innerHTML = '<div class="work-report-progress"><div class="work-report-progress-head"><strong>주요업무보고 PDF</strong><span>완료</span></div><div class="work-report-progress-note">PDF 생성이 완료되었습니다. 다운로드를 확인해 주세요.</div></div>';
+      setMessage("#intakeMsg", "주요업무보고 PDF를 생성했습니다. 이 버튼만 사용하면 됩니다.");
+    } finally {
+      progress.stop();
+    }
   }
 
   async function createTenant() {

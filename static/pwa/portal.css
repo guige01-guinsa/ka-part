@@ -988,6 +988,91 @@ body {
   line-height: 1.55;
 }
 
+.work-report-progress {
+  display: grid;
+  gap: 12px;
+}
+
+.work-report-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.work-report-progress-head strong {
+  font-size: 16px;
+}
+
+.work-report-progress-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.work-report-progress-note {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(12, 107, 103, 0.08);
+  border: 1px solid rgba(12, 107, 103, 0.12);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.work-report-progress-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.work-report-progress-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.work-report-progress-step strong {
+  font-size: 13px;
+}
+
+.work-report-progress-step span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.work-report-progress-step.done {
+  background: rgba(24, 137, 94, 0.08);
+  border-color: rgba(24, 137, 94, 0.16);
+}
+
+.work-report-progress-step.done span {
+  color: #18895e;
+}
+
+.work-report-progress-step.active {
+  background: rgba(12, 107, 103, 0.1);
+  border-color: rgba(12, 107, 103, 0.2);
+}
+
+.work-report-progress-step.active span {
+  color: var(--accent-strong);
+}
+
+.work-report-progress-step.pending span {
+  color: var(--muted);
+}
+
+.work-report-progress-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .attachment-top,
 .check-all {
   display: flex;
