@@ -300,11 +300,19 @@ def build_kakao_digest_pdf(
 
 
 def _work_report_detail_table(item: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> Table:
+    stages = {str(row.get("stage") or "") for row in item.get("images") or []}
+    if {"before", "after"}.issubset(stages):
+        image_status = "작업 전/작업 후 이미지 확인"
+    elif stages:
+        image_status = "전후 이미지 중 일부만 확인"
+    else:
+        image_status = "현장 이미지 없음"
     rows = [
         [Paragraph("작업내용", styles["small"]), Paragraph(_escape(item.get("title") or "-"), styles["body"])],
         [Paragraph("작업일자", styles["small"]), Paragraph(_escape(item.get("work_date_label") or item.get("work_date") or "-"), styles["small"])],
         [Paragraph("업체", styles["small"]), Paragraph(_escape(item.get("vendor_name") or "-"), styles["small"])],
         [Paragraph("위치", styles["small"]), Paragraph(_escape(item.get("location_name") or "-"), styles["small"])],
+        [Paragraph("이미지 상태", styles["small"]), Paragraph(_escape(image_status), styles["small"])],
     ]
     summary = _collapse(item.get("summary") or "")
     if summary and summary != _collapse(item.get("title") or ""):

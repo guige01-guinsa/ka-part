@@ -3780,13 +3780,17 @@
     const text = String($("#chatInput")?.value || "").trim();
     const images = selectedFiles("#chatImageInput");
     const attachments = selectedFiles("#workReportFileInput");
+    const sourceFile = selectedSingleFile("#workReportSourceInput");
     const sampleFile = selectedSingleFile("#workReportSampleInput");
-    if (!text && !images.length && !attachments.length) {
-      throw new Error("카톡 대화, 이미지, 첨부파일 중 하나 이상을 입력하세요.");
+    if (!text && !sourceFile && !images.length && !attachments.length) {
+      throw new Error("카톡 대화, 원문 파일, 이미지, 첨부파일 중 하나 이상을 입력하세요.");
     }
     const fd = new FormData();
     fd.append("tenant_id", tenantId);
     fd.append("text", text);
+    if (sourceFile) {
+      fd.append("source_file", sourceFile, sourceFile.name || "source");
+    }
     images.forEach((file) => fd.append("images", file, file.name || "work-image"));
     attachments.forEach((file) => fd.append("attachments", file, file.name || "attachment"));
     if (sampleFile) {
@@ -4305,6 +4309,7 @@
       updateChatDigestHint();
     });
     $("#workReportFileInput")?.addEventListener("change", () => updateGenericFileHint("#workReportFileInput", "#workReportFileHint", "선택된 첨부파일이 없습니다."));
+    $("#workReportSourceInput")?.addEventListener("change", () => updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "카톡 대화 HWP/TXT/MD를 넣으면 본문을 직접 읽어 분석합니다. 텍스트를 함께 입력하면 두 내용을 합쳐서 사용합니다."));
     $("#workReportSampleInput")?.addEventListener("change", () => updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "주요업무보고 HWP/TXT/MD 샘플을 넣으면 제목과 양식 표현을 참고합니다. 비워두면 기본 양식으로 생성합니다."));
     $("#chatInput")?.addEventListener("input", () => {
       clearChatSourcePreview();
@@ -4365,6 +4370,7 @@
     lastWorkReportResult = null;
     updateChatDigestHint();
     updateGenericFileHint("#workReportFileInput", "#workReportFileHint", "선택된 첨부파일이 없습니다.");
+    updateSingleFileHint("#workReportSourceInput", "#workReportSourceHint", "카톡 대화 HWP/TXT/MD를 넣으면 본문을 직접 읽어 분석합니다. 텍스트를 함께 입력하면 두 내용을 합쳐서 사용합니다.");
     updateSingleFileHint("#workReportSampleInput", "#workReportSampleHint", "주요업무보고 HWP/TXT/MD 샘플을 넣으면 제목과 양식 표현을 참고합니다. 비워두면 기본 양식으로 생성합니다.");
     clearNoticeForm();
     clearComplaintDetail();

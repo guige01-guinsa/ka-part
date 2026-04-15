@@ -268,6 +268,28 @@ async def _read_work_report_sample(upload: Optional[UploadFile]) -> Dict[str, An
             pass
 
 
+async def _read_work_report_source(upload: Optional[UploadFile]) -> Dict[str, Any]:
+    if not upload:
+        return {}
+    raw_name = str(upload.filename or "").strip() or "source"
+    file_bytes = await upload.read()
+    try:
+        if len(file_bytes) > WORK_REPORT_SAMPLE_MAX_BYTES:
+            raise HTTPException(status_code=400, detail="카톡 원문 파일은 30MB 이하여야 합니다.")
+        try:
+            source = extract_document_sample(raw_name, file_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        source["source_name"] = raw_name
+        source["source_text"] = "\n".join(str(line or "") for line in (source.get("lines") or []))
+        return source
+    finally:
+        try:
+            await upload.close()
+        except Exception:
+            pass
+
+
 @router.post("/ai/classify")
 def ai_classify(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     tenant_id, user, tenant = _tenant_id_from_request(request, payload)
@@ -364,13 +386,16 @@ async def ai_work_report(
     request: Request,
     tenant_id: str = Form(default=""),
     text: str = Form(default=""),
+    source_file: UploadFile | None = File(default=None),
     images: List[UploadFile] = File(default=[]),
     attachments: List[UploadFile] = File(default=[]),
     sample_file: UploadFile | None = File(default=None),
 ) -> Dict[str, Any]:
     payload = {"tenant_id": tenant_id}
     resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
-    source_text = str(text or "").strip()
+    source = await _read_work_report_source(source_file)
+    source_text_parts = [str(text or "").strip(), str(source.get("source_text") or "").strip()]
+    source_text = "\n".join(part for part in source_text_parts if part)
     image_inputs = await _read_work_report_images(list(images or []))
     attachment_inputs = await _read_work_report_attachments(list(attachments or []))
     sample = await _read_work_report_sample(sample_file)
@@ -397,6 +422,7 @@ async def ai_work_report(
             "lines": len(source_text.splitlines()),
             "images": len(image_inputs),
             "attachments": len(attachment_inputs),
+            "source_file": str(source.get("source_name") or ""),
             "sample": str(sample.get("source_name") or ""),
         },
     )
@@ -408,13 +434,16 @@ async def ai_work_report_pdf(
     request: Request,
     tenant_id: str = Form(default=""),
     text: str = Form(default=""),
+    source_file: UploadFile | None = File(default=None),
     images: List[UploadFile] = File(default=[]),
     attachments: List[UploadFile] = File(default=[]),
     sample_file: UploadFile | None = File(default=None),
 ) -> StreamingResponse:
     payload = {"tenant_id": tenant_id}
     resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
-    source_text = str(text or "").strip()
+    source = await _read_work_report_source(source_file)
+    source_text_parts = [str(text or "").strip(), str(source.get("source_text") or "").strip()]
+    source_text = "\n".join(part for part in source_text_parts if part)
     image_inputs = await _read_work_report_images(list(images or []))
     attachment_inputs = await _read_work_report_attachments(list(attachments or []))
     sample = await _read_work_report_sample(sample_file)
@@ -447,6 +476,7 @@ async def ai_work_report_pdf(
             "lines": len(source_text.splitlines()),
             "images": len(image_inputs),
             "attachments": len(attachment_inputs),
+            "source_file": str(source.get("source_name") or ""),
             "sample": str(sample.get("source_name") or ""),
         },
     )

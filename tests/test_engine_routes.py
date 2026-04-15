@@ -415,6 +415,114 @@ def test_work_report_analysis_extracts_metadata_from_attachment_preview(app_clie
     assert first_item["location_name"] == "상가A동 25호기"
 
 
+def test_work_report_analysis_accepts_source_file_without_text(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    source_text = "\n".join(
+        [
+            "2026년 4월 14일 화요일",
+            "[김종훈(시설계장)] [오전 10:47] 사진",
+            "[김종훈(시설계장)] [오전 10:48] 109동 놀이터 방치 자전거 및 스케이트 보드 회수함.",
+        ]
+    )
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": ""},
+        files=[
+            ("source_file", ("kakao-source.txt", io.BytesIO(source_text.encode("utf-8")), "text/plain")),
+            ("images", ("bike.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    assert item["item_count"] >= 1
+    first_item = item["items"][0]
+    assert "자전거" in str(first_item["title"])
+    assert len(first_item["images"]) == 1
+
+
+def test_work_report_analysis_merges_repeated_work_title_into_before_after_pair(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={
+            "tenant_id": "ys_thesharp",
+            "text": "\n".join(
+                [
+                    "2026년 7월 2일 수요일",
+                    "[관리실] [오전 9:00] 101동 계단등 교체",
+                    "[관리실] [오전 9:01] 사진",
+                    "[관리실] [오전 10:00] 101동 계단등 교체",
+                    "[관리실] [오전 10:01] 사진",
+                ]
+            ),
+        },
+        files=[
+            ("images", ("KakaoTalk_20260702_090100.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+            ("images", ("KakaoTalk_20260702_100100.jpg", io.BytesIO(b"fake-image-2"), "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    assert item["item_count"] == 1
+    work_item = item["items"][0]
+    assert work_item["title"] == "101동 계단등 교체"
+    assert [str(image["stage_label"]) for image in work_item["images"]] == ["작업 전", "작업 후"]
+
+
+def test_work_report_analysis_uses_notice_time_window_for_kakao_images(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={
+            "tenant_id": "ys_thesharp",
+            "text": "\n".join(
+                [
+                    "2026년 7월 2일 수요일",
+                    "[관리실] [오후 4:15] 집하장 센서등 10개 입고",
+                    "[관리실] [오후 4:15] 사진",
+                    "[관리실] [오후 4:32] 사진 4장",
+                    "[관리실] [오후 4:32] 101동 집하장 센서등 2개교체",
+                    "[관리실] [오후 4:37] 사진",
+                    "[관리실] [오후 4:38] 104동 음식물처리기 키패드 As접수",
+                ]
+            ),
+        },
+        files=[
+            ("images", ("KakaoTalk_20260702_163218930.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+            ("images", ("KakaoTalk_20260702_163218930_01.jpg", io.BytesIO(b"fake-image-2"), "image/jpeg")),
+            ("images", ("KakaoTalk_20260702_163218930_02.jpg", io.BytesIO(b"fake-image-3"), "image/jpeg")),
+            ("images", ("KakaoTalk_20260702_163218930_03.jpg", io.BytesIO(b"fake-image-4"), "image/jpeg")),
+            ("images", ("KakaoTalk_20260702_163750937.jpg", io.BytesIO(b"fake-image-5"), "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    stock_item = next(row for row in item["items"] if "10개 입고" in str(row["title"]))
+    repair_item = next(row for row in item["items"] if "2개교체" in str(row["title"]))
+    keypad_item = next(row for row in item["items"] if "키패드" in str(row["title"]))
+    assert stock_item["images"] == []
+    assert len(repair_item["images"]) == 4
+    assert [str(image["filename"]) for image in repair_item["images"]] == [
+        "KakaoTalk_20260702_163218930.jpg",
+        "KakaoTalk_20260702_163218930_01.jpg",
+        "KakaoTalk_20260702_163218930_02.jpg",
+        "KakaoTalk_20260702_163218930_03.jpg",
+    ]
+    assert [str(image["filename"]) for image in keypad_item["images"]] == ["KakaoTalk_20260702_163750937.jpg"]
+
+
 def test_work_report_pdf_supports_sample_and_uploads(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)

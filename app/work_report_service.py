@@ -184,7 +184,12 @@ def _looks_like_work_item(text: str) -> bool:
     normalized = _collapse(text)
     if len(normalized) < 4:
         return False
+    lowered = normalized.lower()
     if re.search(r"\d{2,4}-\d{3,4}\s*/\s*010-\d{4}-\d{4}", normalized):
+        return False
+    if lowered in {"완료", "교체완료", "작업완료", "사진", "동영상", "입고"}:
+        return False
+    if re.fullmatch(r"사진\s*\d+\s*장", normalized):
         return False
     if any(
         phrase in normalized
@@ -200,7 +205,7 @@ def _looks_like_work_item(text: str) -> bool:
         return False
     if "작업내용" in normalized:
         return True
-    if any(pattern in normalized for pattern in ("AS요청", "요청함", "교체예정", "타이머조정", "변경 완료", "회수함")):
+    if any(pattern in lowered for pattern in ("as요청", "as접수", "요청함", "교체예정", "타이머조정", "변경 완료", "회수함", "입고")):
         return True
     return any(keyword in normalized for keyword in WORK_REPORT_ACTION_KEYWORDS)
 
@@ -370,9 +375,10 @@ def _new_item(title: str, event: Dict[str, Any], *, confidence: str) -> Dict[str
         "confidence": confidence,
         "images": [],
         "attachments": [],
-        "_expected_image_count": 0,
         "_expected_attachment_count": 0,
+        "_image_notices": [],
         "_attachment_notice_texts": [],
+        "_attachment_notice_tokens": [],
         "_minute_of_day": int(event.get("minute_of_day") or -1),
     }
 
@@ -480,6 +486,23 @@ def _entry_stage(filename: str) -> str:
     return ""
 
 
+def _entry_time_fields(filename: str) -> Dict[str, int | str]:
+    stem = _collapse(Path(str(filename or "")).stem)
+    match = re.search(r"(?P<date>\d{8})_(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})", stem)
+    if not match:
+        return {"date": "", "minute_of_day": -1, "second_of_day": -1}
+    raw_date = match.group("date")
+    date_value = _safe_date_value(int(raw_date[:4]), int(raw_date[4:6]), int(raw_date[6:8]))
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute"))
+    second = int(match.group("second"))
+    return {
+        "date": date_value,
+        "minute_of_day": (hour * 60) + minute,
+        "second_of_day": (hour * 3600) + (minute * 60) + second,
+    }
+
+
 def _item_tokens(item: Dict[str, Any]) -> set[str]:
     fields = [
         item.get("title"),
@@ -544,7 +567,12 @@ def _chunk_assign(entries: List[Dict[str, Any]], items: List[Dict[str, Any]]) ->
     return assigned
 
 
-def _assign_entries(items: List[Dict[str, Any]], entries: List[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
+def _assign_entries(
+    items: List[Dict[str, Any]],
+    entries: List[Dict[str, Any]],
+    *,
+    allow_chunk_fallback: bool = True,
+) -> Dict[int, List[Dict[str, Any]]]:
     assigned: Dict[int, List[Dict[str, Any]]] = {int(item["index"]): [] for item in items}
     unmatched: List[Dict[str, Any]] = []
     for entry in entries:
@@ -559,11 +587,177 @@ def _assign_entries(items: List[Dict[str, Any]], entries: List[Dict[str, Any]]) 
             assigned[int(best_item["index"])].append(entry)
         else:
             unmatched.append(entry)
-    if unmatched:
+    if unmatched and allow_chunk_fallback:
         fallback = _chunk_assign(unmatched, items)
         for item_index, rows in fallback.items():
             assigned[item_index].extend(rows)
     return assigned
+
+
+def _assign_images_by_notices(
+    items: Sequence[Dict[str, Any]],
+    entries: Sequence[Dict[str, Any]],
+    *,
+    max_gap_minutes: int = 10,
+    cluster_gap_seconds: int = 180,
+) -> Tuple[Dict[int, List[Dict[str, Any]]], List[Dict[str, Any]]]:
+    assigned: Dict[int, List[Dict[str, Any]]] = {int(item["index"]): [] for item in items}
+    remaining = sorted(
+        list(entries),
+        key=lambda row: (
+            int(row.get("second_of_day") or -1) if int(row.get("second_of_day") or -1) >= 0 else 10**9,
+            int(row.get("index") or 0),
+        ),
+    )
+    notice_rows: List[Dict[str, Any]] = []
+    for item in items:
+        for order, notice in enumerate(item.get("_image_notices") or [], start=1):
+            notice_rows.append(
+                {
+                    "item_index": int(item["index"]),
+                    "date": _collapse(notice.get("date") or item.get("work_date") or ""),
+                    "minute_of_day": int(notice.get("minute_of_day") or -1),
+                    "second_of_day": int(notice.get("second_of_day") or -1),
+                    "count": max(1, int(notice.get("count") or 1)),
+                    "order": order,
+                }
+            )
+    notice_rows.sort(
+        key=lambda row: (
+            str(row.get("date") or ""),
+            int(row.get("second_of_day") or -1) if int(row.get("second_of_day") or -1) >= 0 else 10**9,
+            int(row.get("item_index") or 0),
+            int(row.get("order") or 0),
+        )
+    )
+    for notice in notice_rows:
+        if not remaining:
+            break
+        requested = max(1, int(notice.get("count") or 1))
+        notice_minute = int(notice.get("minute_of_day") or -1)
+        notice_second = int(notice.get("second_of_day") or -1)
+        notice_date = _collapse(notice.get("date") or "")
+        timed_exists = any(int(row.get("second_of_day") or -1) >= 0 for row in remaining)
+        if notice_minute < 0 or not timed_exists:
+            take = min(requested, len(remaining))
+            if take > 0:
+                assigned[int(notice["item_index"])].extend(remaining[:take])
+                del remaining[:take]
+            continue
+
+        candidate_positions: List[int] = []
+        for position, row in enumerate(remaining):
+            entry_second = int(row.get("second_of_day") or -1)
+            entry_minute = int(row.get("minute_of_day") or -1)
+            entry_date = _collapse(row.get("date") or "")
+            if entry_second < 0 or entry_minute < 0:
+                continue
+            if notice_date and entry_date and entry_date != notice_date:
+                continue
+            if abs(entry_minute - notice_minute) <= max_gap_minutes:
+                candidate_positions.append(position)
+        if not candidate_positions:
+            continue
+
+        anchor_pos = min(
+            candidate_positions,
+            key=lambda position: (
+                abs(int(remaining[position].get("second_of_day") or -1) - notice_second),
+                int(remaining[position].get("index") or 0),
+            ),
+        )
+        anchor_second = int(remaining[anchor_pos].get("second_of_day") or -1)
+        anchor_date = _collapse(remaining[anchor_pos].get("date") or "")
+        selected_positions = [anchor_pos]
+        for position in range(anchor_pos + 1, len(remaining)):
+            if len(selected_positions) >= requested:
+                break
+            row = remaining[position]
+            entry_second = int(row.get("second_of_day") or -1)
+            entry_date = _collapse(row.get("date") or "")
+            if entry_second < 0:
+                break
+            if anchor_date and entry_date and entry_date != anchor_date:
+                break
+            if abs(entry_second - anchor_second) > cluster_gap_seconds:
+                break
+            selected_positions.append(position)
+        if len(selected_positions) < requested:
+            for position in range(anchor_pos - 1, -1, -1):
+                if len(selected_positions) >= requested:
+                    break
+                row = remaining[position]
+                entry_second = int(row.get("second_of_day") or -1)
+                entry_date = _collapse(row.get("date") or "")
+                if entry_second < 0:
+                    continue
+                if anchor_date and entry_date and entry_date != anchor_date:
+                    continue
+                if abs(entry_second - anchor_second) <= cluster_gap_seconds:
+                    selected_positions.append(position)
+        chosen_positions = sorted(set(selected_positions[:requested]))
+        chosen_rows = [remaining[position] for position in chosen_positions]
+        for position in reversed(chosen_positions):
+            del remaining[position]
+        assigned[int(notice["item_index"])].extend(chosen_rows)
+    return assigned, remaining
+
+
+def _occurrence_stage(total: int, position: int) -> str:
+    if total <= 1:
+        return ""
+    if total == 2:
+        return "before" if position == 0 else "after"
+    if position == 0:
+        return "before"
+    if position == total - 1:
+        return "after"
+    return "during"
+
+
+def _merge_explicit_items(
+    explicit_items: Sequence[Dict[str, Any]],
+    image_matches: Dict[int, List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen_titles: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for item in explicit_items:
+        key = (_collapse(item.get("title") or ""), _collapse(item.get("work_date") or ""))
+        occurrence_images = sorted(image_matches.get(int(item["index"]), []), key=lambda row: int(row.get("index") or 0))
+        existing = seen_titles.get(key)
+        if existing:
+            existing["_expected_attachment_count"] = int(existing.get("_expected_attachment_count") or 0) + int(item.get("_expected_attachment_count") or 0)
+            existing["_attachment_notice_texts"].extend(list(item.get("_attachment_notice_texts") or []))
+            existing["_attachment_notice_tokens"].extend(list(item.get("_attachment_notice_tokens") or []))
+            existing["_occurrence_images"].append(occurrence_images)
+            if not _collapse(existing.get("summary") or "") or _collapse(existing.get("summary") or "") == _collapse(existing.get("title") or ""):
+                if _collapse(item.get("summary") or ""):
+                    existing["summary"] = _collapse(item.get("summary") or "")
+            elif _collapse(item.get("summary") or "") and _collapse(item.get("summary") or "") not in _collapse(existing.get("summary") or ""):
+                existing["summary"] = f"{_collapse(existing.get('summary') or '')} / {_collapse(item.get('summary') or '')}"[:240]
+            if not existing.get("vendor_name") and _collapse(item.get("vendor_name") or ""):
+                existing["vendor_name"] = _collapse(item.get("vendor_name") or "")
+            if not existing.get("location_name") and _collapse(item.get("location_name") or ""):
+                existing["location_name"] = _collapse(item.get("location_name") or "")
+            existing["_minute_of_day"] = max(int(existing.get("_minute_of_day") or -1), int(item.get("_minute_of_day") or -1))
+            continue
+        item_copy = dict(item)
+        item_copy["index"] = len(merged) + 1
+        item_copy["_occurrence_images"] = [occurrence_images]
+        merged.append(item_copy)
+        seen_titles[key] = item_copy
+
+    for item in merged:
+        occurrence_images = list(item.pop("_occurrence_images", []))
+        if len(occurrence_images) > 1:
+            for position, rows in enumerate(occurrence_images):
+                inferred_stage = _occurrence_stage(len(occurrence_images), position)
+                for row in rows:
+                    if not row.get("stage") and inferred_stage:
+                        row["stage"] = inferred_stage
+        combined_images = [row for rows in occurrence_images for row in rows]
+        item["images"] = _finalize_image_stages(combined_images)
+    return merged
 
 
 def _assign_entries_by_expected_counts(
@@ -582,6 +776,28 @@ def _assign_entries_by_expected_counts(
         if take > 0:
             assigned[int(item["index"])].extend(remaining[cursor : cursor + take])
             cursor += take
+    return assigned, remaining[cursor:]
+
+
+def _assign_entries_by_notice_tokens(
+    items: Sequence[Dict[str, Any]], entries: Sequence[Dict[str, Any]], token_key: str
+) -> Tuple[Dict[int, List[Dict[str, Any]]], List[Dict[str, Any]]]:
+    assigned: Dict[int, List[Dict[str, Any]]] = {int(item["index"]): [] for item in items}
+    token_rows: List[Tuple[int, int]] = []
+    for item in items:
+        for token in item.get(token_key) or []:
+            try:
+                token_rows.append((int(token), int(item["index"])))
+            except Exception:
+                continue
+    token_rows.sort(key=lambda row: row[0])
+    remaining = list(entries)
+    cursor = 0
+    for _, item_index in token_rows:
+        if cursor >= len(remaining):
+            break
+        assigned[item_index].append(remaining[cursor])
+        cursor += 1
     return assigned, remaining[cursor:]
 
 
@@ -655,6 +871,16 @@ def _openai_work_report(
     client, model = _openai_client()
     if not client:
         return None
+    candidate_lines: List[str] = []
+    for event in _parse_kakao_events(text):
+        candidate_text = _collapse(event.get("text") or "")
+        if not _looks_like_work_item(candidate_text):
+            continue
+        candidate_lines.append(
+            f"- {event.get('date_label') or event.get('date') or '-'} / {event.get('sender') or '-'} / {candidate_text}"
+        )
+        if len(candidate_lines) >= 20:
+            break
     prompt = """
 너는 아파트 관리사무소 시설팀의 주요업무보고서를 만드는 도우미다.
 입력으로 카카오톡 단체방 대화, 현장 사진, 첨부파일 목록, 샘플 보고서 개요가 들어온다.
@@ -694,6 +920,13 @@ def _openai_work_report(
 - 이미지/첨부파일 index는 제공된 목록 번호만 사용한다.
 - 모호하면 confidence를 low로 두고 analysis_notice에 이유를 남긴다.
 - sample 보고서의 제목/보고기간 표현은 참고하되, 실제 입력이 다르면 입력을 우선한다.
+- 시간 순서는 참고만 하고, 이미지의 실제 시각적 내용이 더 중요하다.
+- 같은 작업 내용이 같은 날 두 번 이상 반복되면 첫 등장은 작업 전, 마지막 등장은 작업 후일 가능성을 우선 검토한다.
+- 보고서 완성도는 작업 전/작업 후 이미지 쌍이 가장 중요하므로 가능하면 둘 다 확보되도록 매칭한다.
+- 자전거/스케이트보드/보관소가 보이면 자전거 정리·회수 계열 작업에 우선 매칭한다.
+- 음식물처리기 본체/키패드/안내문/AS 종이가 보이면 음식물처리기 고장·AS 접수 계열에 우선 매칭한다.
+- 천장등/센서등/등기구/분리된 원형 조명이 보이면 조명·센서등 교체 계열에 우선 매칭한다.
+- 박스나 자재 사진은 입고, 교체예정, 자재 준비와 더 가깝다.
 """.strip()
     content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
     if sample_title or sample_lines:
@@ -701,6 +934,8 @@ def _openai_work_report(
         content.append({"type": "input_text", "text": f"샘플 제목: {sample_title or '-'}\n샘플 개요:\n{sample_excerpt or '-'}"})
     if _collapse(text):
         content.append({"type": "input_text", "text": f"카톡 대화 원문:\n{text}"})
+    if candidate_lines:
+        content.append({"type": "input_text", "text": "대화에서 보이는 작업 후보:\n" + "\n".join(candidate_lines)})
     if image_inputs:
         content.append(
             {
@@ -836,17 +1071,39 @@ def analyze_work_report(
         events = _parse_kakao_events(normalized_text)
         explicit_items: List[Dict[str, Any]] = []
         current_item: Optional[Dict[str, Any]] = None
-        pending_image_count = 0
+        pending_image_notices: List[Dict[str, Any]] = []
         pending_attachment_count = 0
         pending_attachment_texts: List[str] = []
+        attachment_notice_cursor = 0
+
+        def add_notice(item: Dict[str, Any], event: Dict[str, Any], count: int, *, kind: str) -> None:
+            nonlocal attachment_notice_cursor
+            total = max(0, int(count or 0))
+            if total <= 0:
+                return
+            if kind == "image":
+                item.setdefault("_image_notices", []).append(
+                    {
+                        "count": total,
+                        "date": _collapse(event.get("date") or ""),
+                        "minute_of_day": int(event.get("minute_of_day") or -1),
+                        "second_of_day": max(0, int(event.get("minute_of_day") or -1)) * 60,
+                    }
+                )
+                return
+            tokens = item.setdefault("_attachment_notice_tokens", [])
+            for _ in range(total):
+                attachment_notice_cursor += 1
+                tokens.append(attachment_notice_cursor)
+            item["_expected_attachment_count"] = int(item.get("_expected_attachment_count") or 0) + total
 
         def apply_pending(item: Dict[str, Any]) -> None:
-            nonlocal pending_image_count, pending_attachment_count, pending_attachment_texts
-            if pending_image_count > 0:
-                item["_expected_image_count"] = int(item.get("_expected_image_count") or 0) + pending_image_count
-                pending_image_count = 0
+            nonlocal pending_image_notices, pending_attachment_count, pending_attachment_texts
+            if pending_image_notices:
+                item.setdefault("_image_notices", []).extend(pending_image_notices)
+                pending_image_notices = []
             if pending_attachment_count > 0:
-                item["_expected_attachment_count"] = int(item.get("_expected_attachment_count") or 0) + pending_attachment_count
+                add_notice(item, {"date": item.get("work_date"), "minute_of_day": item.get("_minute_of_day")}, pending_attachment_count, kind="attachment")
                 pending_attachment_count = 0
             if pending_attachment_texts:
                 item["_attachment_notice_texts"].extend(pending_attachment_texts)
@@ -868,11 +1125,13 @@ def analyze_work_report(
                 explicit_items.append(current_item)
             current_item = None
 
-        for event in events:
+        for position, event in enumerate(events):
             text_line = _collapse(event.get("text") or "")
             if not text_line:
                 continue
             tagged = _extract_tagged_pairs(text_line)
+            next_event = events[position + 1] if position + 1 < len(events) else {}
+            next_text = _collapse(next_event.get("text") or "")
             if _tagged_value(tagged, "작업내용", "제목", "건명"):
                 flush_current()
                 current_item = _new_item(_tagged_value(tagged, "작업내용", "제목", "건명"), event, confidence="structured")
@@ -883,16 +1142,35 @@ def analyze_work_report(
                 _apply_tagged_fields(current_item, tagged, event)
                 continue
             if event.get("kind") == "photo_notice":
-                target_item = None if hold_notice_for_next_item(current_item, event) else current_item
+                should_hold_for_next = hold_notice_for_next_item(current_item, event)
+                if next_text and _looks_like_work_item(next_text):
+                    current_minute = int(event.get("minute_of_day") or -1)
+                    next_minute = int(next_event.get("minute_of_day") or -1)
+                    if current_minute < 0 or next_minute < 0 or 0 <= next_minute - current_minute <= 5:
+                        should_hold_for_next = True
+                target_item = None if should_hold_for_next else current_item
                 if target_item:
-                    target_item["_expected_image_count"] = int(target_item.get("_expected_image_count") or 0) + _notice_count(text_line)
+                    add_notice(target_item, event, _notice_count(text_line), kind="image")
                 else:
-                    pending_image_count += _notice_count(text_line)
+                    pending_image_notices.append(
+                        {
+                            "count": _notice_count(text_line),
+                            "date": _collapse(event.get("date") or ""),
+                            "minute_of_day": int(event.get("minute_of_day") or -1),
+                            "second_of_day": max(0, int(event.get("minute_of_day") or -1)) * 60,
+                        }
+                    )
                 continue
             if event.get("kind") == "file_notice":
-                target_item = None if hold_notice_for_next_item(current_item, event) else current_item
+                should_hold_for_next = hold_notice_for_next_item(current_item, event)
+                if next_text and _looks_like_work_item(next_text):
+                    current_minute = int(event.get("minute_of_day") or -1)
+                    next_minute = int(next_event.get("minute_of_day") or -1)
+                    if current_minute < 0 or next_minute < 0 or 0 <= next_minute - current_minute <= 5:
+                        should_hold_for_next = True
+                target_item = None if should_hold_for_next else current_item
                 if target_item:
-                    target_item["_expected_attachment_count"] = int(target_item.get("_expected_attachment_count") or 0) + _notice_count(text_line)
+                    add_notice(target_item, event, _notice_count(text_line), kind="attachment")
                     target_item["_attachment_notice_texts"].append(text_line)
                 else:
                     pending_attachment_count += _notice_count(text_line)
@@ -928,21 +1206,20 @@ def analyze_work_report(
                 if len(text_line) >= 8 and not _should_skip_context_line(text_line):
                     _append_summary(current_item, text_line)
 
-        if current_item and (pending_image_count > 0 or pending_attachment_count > 0 or pending_attachment_texts):
+        if current_item and (pending_image_notices or pending_attachment_count > 0 or pending_attachment_texts):
             apply_pending(current_item)
         flush_current()
-
-        deduped: List[Dict[str, Any]] = []
-        seen_titles = set()
-        for item in explicit_items:
-            key = (_collapse(item.get("title") or ""), _collapse(item.get("work_date") or ""))
-            if key in seen_titles:
-                continue
-            seen_titles.add(key)
-            item["index"] = len(deduped) + 1
-            deduped.append(item)
-
-        items = deduped
+        image_entries = [
+            {
+                "index": index,
+                "filename": row.get("filename"),
+                "stage": _entry_stage(str(row.get("filename") or "")),
+                **_entry_time_fields(str(row.get("filename") or "")),
+            }
+            for index, row in enumerate(images, start=1)
+        ]
+        explicit_image_matches, remaining_images = _assign_images_by_notices(explicit_items, image_entries)
+        items = _merge_explicit_items(explicit_items, explicit_image_matches)
         if not items and attachments:
             for entry in attachments:
                 metadata = _attachment_metadata(entry)
@@ -961,9 +1238,9 @@ def analyze_work_report(
                         "confidence": "attachment-fallback",
                         "images": [],
                         "attachments": [],
-                        "_expected_image_count": 0,
                         "_expected_attachment_count": 1,
                         "_attachment_notice_texts": [],
+                        "_attachment_notice_tokens": [],
                     }
                 )
 
@@ -972,14 +1249,6 @@ def analyze_work_report(
         analysis_notice = ""
         analysis_model = "heuristic"
 
-        image_entries = [
-            {
-                "index": index,
-                "filename": row.get("filename"),
-                "stage": _entry_stage(str(row.get("filename") or "")),
-            }
-            for index, row in enumerate(images, start=1)
-        ]
         attachment_entries = [
             {
                 "index": index,
@@ -989,18 +1258,48 @@ def analyze_work_report(
             }
             for index, row in enumerate(attachments, start=1)
         ]
-
+        unmatched_image_indexes = [int(row.get("index") or 0) for row in remaining_images if int(row.get("index") or 0) > 0]
+        unmatched_attachment_indexes = []
         if items:
-            image_matches, remaining_images = _assign_entries_by_expected_counts(items, image_entries, "_expected_image_count")
-            attachment_matches, remaining_attachments = _assign_entries_by_expected_counts(items, attachment_entries, "_expected_attachment_count")
+            image_matches = {
+                int(item["index"]): list(item.get("images") or [])
+                for item in items
+            }
+            attachment_matches, remaining_attachments = _assign_entries_by_notice_tokens(items, attachment_entries, "_attachment_notice_tokens")
+            if any(int(item.get("_expected_attachment_count") or 0) > 0 for item in items) and not any(
+                item.get("_attachment_notice_tokens") for item in items
+            ):
+                attachment_matches, remaining_attachments = _assign_entries_by_expected_counts(items, attachment_entries, "_expected_attachment_count")
             if remaining_images:
-                score_matches = _assign_entries(items, remaining_images)
+                score_matches = _assign_entries(items, remaining_images, allow_chunk_fallback=False)
                 for item_index, rows in score_matches.items():
                     image_matches[item_index].extend(rows)
+                matched_indexes = {
+                    int(row.get("index") or 0)
+                    for rows in score_matches.values()
+                    for row in rows
+                    if int(row.get("index") or 0) > 0
+                }
+                unmatched_image_indexes = [
+                    int(row.get("index") or 0)
+                    for row in remaining_images
+                    if int(row.get("index") or 0) > 0 and int(row.get("index") or 0) not in matched_indexes
+                ]
             if remaining_attachments:
                 score_matches = _assign_entries(items, remaining_attachments)
                 for item_index, rows in score_matches.items():
                     attachment_matches[item_index].extend(rows)
+                matched_attachment_indexes = {
+                    int(row.get("index") or 0)
+                    for rows in score_matches.values()
+                    for row in rows
+                    if int(row.get("index") or 0) > 0
+                }
+                unmatched_attachment_indexes = [
+                    int(row.get("index") or 0)
+                    for row in remaining_attachments
+                    if int(row.get("index") or 0) > 0 and int(row.get("index") or 0) not in matched_attachment_indexes
+                ]
             for item in items:
                 item["images"] = _finalize_image_stages(image_matches.get(int(item["index"]), []))
                 raw_attachments = sorted(attachment_matches.get(int(item["index"]), []), key=lambda row: int(row.get("index") or 0))
@@ -1013,12 +1312,11 @@ def analyze_work_report(
                     }
                     for row in raw_attachments
                 ]
-                item.pop("_expected_image_count", None)
                 item.pop("_expected_attachment_count", None)
+                item.pop("_image_notices", None)
                 item.pop("_attachment_notice_texts", None)
+                item.pop("_attachment_notice_tokens", None)
                 item.pop("_minute_of_day", None)
-        unmatched_image_indexes = []
-        unmatched_attachment_indexes = []
 
     dated_items = [item for item in items if item.get("work_date")]
     if dated_items:
