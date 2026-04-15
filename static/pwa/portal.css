@@ -991,23 +991,30 @@ body {
 .work-report-progress {
   display: grid;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .work-report-progress-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
+  min-width: 0;
 }
 
 .work-report-progress-head strong {
   font-size: 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .work-report-progress-head span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+  justify-self: end;
+  text-align: right;
 }
 
 .work-report-progress-visual {
@@ -1086,23 +1093,28 @@ body {
 }
 
 .work-report-progress-step {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
   border-radius: 14px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.7);
+  min-width: 0;
 }
 
 .work-report-progress-step strong {
   font-size: 13px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .work-report-progress-step span {
   font-size: 12px;
   font-weight: 700;
+  justify-self: end;
+  text-align: right;
 }
 
 .work-report-progress-step.done {
@@ -1161,6 +1173,19 @@ body {
   }
   50% {
     transform: translateY(-6px) scale(1.08);
+  }
+}
+
+@media (max-width: 640px) {
+  .work-report-progress-head,
+  .work-report-progress-step {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .work-report-progress-head span,
+  .work-report-progress-step span {
+    justify-self: start;
+    text-align: left;
   }
 }
 
