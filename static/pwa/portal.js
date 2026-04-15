@@ -3725,6 +3725,8 @@
   function renderWorkReportResult(item) {
     const report = item || {};
     const items = Array.isArray(report.items) ? report.items : [];
+    const imageItems = Array.isArray(report.image_items) ? report.image_items : items.filter((row) => Array.isArray(row.images) && row.images.length);
+    const textOnlyItems = Array.isArray(report.text_only_items) ? report.text_only_items : items.filter((row) => !Array.isArray(row.images) || !row.images.length);
     const unmatchedImages = Array.isArray(report.unmatched_images) ? report.unmatched_images : [];
     const unmatchedAttachments = Array.isArray(report.unmatched_attachments) ? report.unmatched_attachments : [];
     const sections = [
@@ -3734,6 +3736,8 @@
         `<span>${escapeHtml(String(report.report_title || "시설팀 주요 업무 보고"))}</span>`,
         `<span>기간 ${escapeHtml(String(report.period_label || "-"))}</span>`,
         `<span>작업 ${escapeHtml(String(report.item_count || items.length || 0))}건</span>`,
+        `<span>사진 포함 ${escapeHtml(String(report.image_item_count || imageItems.length || 0))}건</span>`,
+        `<span>텍스트 전용 ${escapeHtml(String(report.text_only_item_count || textOnlyItems.length || 0))}건</span>`,
         `<span>모델 ${escapeHtml(String(report.analysis_model || "-"))}</span>`,
         report.template_source_name ? `<span>양식 ${escapeHtml(String(report.template_source_name || ""))}</span>` : "",
         `</div>`,
@@ -3742,15 +3746,28 @@
     if (report.analysis_notice) {
       sections.push(`<div class="detail-block">${escapeHtml(String(report.analysis_notice || ""))}</div>`);
     }
-    if (items.length) {
-      sections.push("<div class=\"subhead\">자동 매칭 작업 항목</div>");
+    if (imageItems.length) {
+      sections.push("<div class=\"subhead\">사진 포함 작업 항목</div>");
       sections.push(
-        `<div class="work-report-match-list">${items.map((row, index) => [
+        `<div class="work-report-match-list">${imageItems.map((row, index) => [
           '<article class="work-report-match-card">',
           `<strong>${escapeHtml(`${index + 1}. ${String(row.title || "-")}`)}</strong>`,
           `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 업체: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
           row.summary && String(row.summary || "").trim() !== String(row.title || "").trim() ? `<p>${escapeHtml(String(row.summary || ""))}</p>` : "",
           Array.isArray(row.images) && row.images.length ? `<div class="work-report-chip-list">${row.images.map((image) => `<span>${escapeHtml(`${String(image.stage_label || "현장 이미지")} · ${String(image.filename || "-")}`)}</span>`).join("")}</div>` : '<p>매칭된 이미지 없음</p>',
+          Array.isArray(row.attachments) && row.attachments.length ? `<div class="work-report-chip-list">${row.attachments.map((file) => `<span>${escapeHtml(`파일 · ${String(file.filename || "-")}`)}</span>`).join("")}</div>` : "",
+          "</article>",
+        ].join("")).join("")}</div>`
+      );
+    }
+    if (textOnlyItems.length) {
+      sections.push("<div class=\"subhead\">이미지 미첨부 작업 목록</div>");
+      sections.push(
+        `<div class="work-report-match-list">${textOnlyItems.map((row, index) => [
+          '<article class="work-report-match-card">',
+          `<strong>${escapeHtml(`${index + 1}. ${String(row.title || "-")}`)}</strong>`,
+          `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 업체: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
+          row.summary && String(row.summary || "").trim() !== String(row.title || "").trim() ? `<p>${escapeHtml(String(row.summary || ""))}</p>` : "",
           Array.isArray(row.attachments) && row.attachments.length ? `<div class="work-report-chip-list">${row.attachments.map((file) => `<span>${escapeHtml(`파일 · ${String(file.filename || "-")}`)}</span>`).join("")}</div>` : "",
           "</article>",
         ].join("")).join("")}</div>`

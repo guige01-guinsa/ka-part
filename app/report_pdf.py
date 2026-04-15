@@ -384,6 +384,55 @@ def _work_report_image_grid(item: Dict[str, Any], image_inputs: Sequence[Dict[st
     return table
 
 
+def _work_report_text_only_table(items: Sequence[Dict[str, Any]], styles: Dict[str, ParagraphStyle]) -> Table | None:
+    rows = list(items or [])
+    if not rows:
+        return None
+    table_rows: List[List[Any]] = [
+        [
+            Paragraph("일자", styles["small"]),
+            Paragraph("업무 내용", styles["small"]),
+            Paragraph("비고", styles["small"]),
+        ]
+    ]
+    for item in rows:
+        note_parts = []
+        vendor_name = _collapse(item.get("vendor_name") or "")
+        location_name = _collapse(item.get("location_name") or "")
+        summary = _collapse(item.get("summary") or "")
+        title = _collapse(item.get("title") or "")
+        if vendor_name:
+            note_parts.append(vendor_name)
+        if location_name:
+            note_parts.append(location_name)
+        if summary and summary != title:
+            note_parts.append(summary)
+        table_rows.append(
+            [
+                Paragraph(_escape(item.get("work_date_label") or item.get("work_date") or "-"), styles["caption"]),
+                Paragraph(_escape(title or "-"), styles["caption"]),
+                Paragraph(_escape(" / ".join(note_parts) or "-"), styles["caption"]),
+            ]
+        )
+    table = Table(table_rows, repeatRows=1, colWidths=[22 * mm, 98 * mm, 50 * mm])
+    table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#C8D3CE")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E4EDE8")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#17342F")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FBF9")]),
+            ]
+        )
+    )
+    return table
+
+
 def build_work_report_pdf(
     *,
     report: Dict[str, Any],
@@ -416,9 +465,13 @@ def build_work_report_pdf(
         story.append(Paragraph(_escape(f"참조 양식: {template_source_name}"), styles["meta"]))
     story.append(Spacer(1, 4 * mm))
 
+    report_items = list(report.get("items") or [])
+    image_items = list(report.get("image_items")) if isinstance(report.get("image_items"), list) else [item for item in report_items if item.get("images")]
+    text_only_items = list(report.get("text_only_items")) if isinstance(report.get("text_only_items"), list) else [item for item in report_items if not item.get("images")]
     overview = Table(
         [
-            [Paragraph("작업 항목", styles["small"]), Paragraph(str(int(report.get("item_count") or len(report.get("items") or []))), styles["small"]), Paragraph("미매칭 이미지", styles["small"]), Paragraph(str(len(report.get("unmatched_images") or [])), styles["small"])],
+            [Paragraph("작업 항목", styles["small"]), Paragraph(str(int(report.get("item_count") or len(report.get("items") or []))), styles["small"]), Paragraph("사진 포함", styles["small"]), Paragraph(str(int(report.get("image_item_count") or len(image_items))), styles["small"])],
+            [Paragraph("텍스트 전용", styles["small"]), Paragraph(str(int(report.get("text_only_item_count") or len(text_only_items))), styles["small"]), Paragraph("미매칭 이미지", styles["small"]), Paragraph(str(len(report.get("unmatched_images") or [])), styles["small"])],
             [Paragraph("미매칭 파일", styles["small"]), Paragraph(str(len(report.get("unmatched_attachments") or [])), styles["small"]), Paragraph("분석모델", styles["small"]), Paragraph(_escape(report.get("analysis_model") or "-"), styles["small"])],
         ],
         colWidths=[24 * mm, 58 * mm, 24 * mm, 58 * mm],
@@ -443,9 +496,10 @@ def build_work_report_pdf(
         story.append(Spacer(1, 3 * mm))
         story.append(Paragraph(_escape(notice), styles["caption"]))
 
-    items = list(report.get("items") or [])
-    if items:
-        for position, item in enumerate(items, start=1):
+    if image_items:
+        story.append(Spacer(1, 5 * mm))
+        story.append(Paragraph("사진 포함 작업", styles["heading"]))
+        for position, item in enumerate(image_items, start=1):
             story.append(Spacer(1, 6 * mm))
             story.append(Paragraph(_escape(f"{position}. 주요 작업"), styles["heading"]))
             story.append(_work_report_detail_table(item, styles))
@@ -462,9 +516,16 @@ def build_work_report_pdf(
                     label = _collapse(attachment.get("filename") or "-")
                     text = label if not preview else f"{label} / {preview}"
                     story.append(Paragraph(f"- {_escape(text)}", styles["caption"]))
-            if position < len(items):
+            if position < len(image_items):
                 story.append(Spacer(1, 4 * mm))
-    else:
+
+    if text_only_items:
+        story.append(Spacer(1, 6 * mm))
+        story.append(Paragraph("이미지 미첨부 작업 목록", styles["heading"]))
+        text_only_table = _work_report_text_only_table(text_only_items, styles)
+        if text_only_table:
+            story.append(text_only_table)
+    elif not image_items:
         story.append(Spacer(1, 5 * mm))
         story.append(Paragraph("자동 분류된 작업 항목이 없습니다.", styles["body"]))
 

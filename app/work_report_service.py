@@ -828,27 +828,38 @@ def _finalize_image_stages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
 
 def _build_text_summary(report_title: str, period_label: str, items: List[Dict[str, Any]], unmatched_images: List[Dict[str, Any]], unmatched_attachments: List[Dict[str, Any]], analysis_notice: str) -> str:
+    image_items = [item for item in items if item.get("images")]
+    text_only_items = [item for item in items if not item.get("images")]
     lines = [
         report_title or "시설팀 주요 업무 보고",
         f"보고기간: {period_label or '-'}",
         f"작업 항목 수: {len(items)}",
+        f"사진 포함 작업: {len(image_items)}",
+        f"텍스트 전용 작업: {len(text_only_items)}",
         f"미매칭 이미지: {len(unmatched_images)}",
         f"미매칭 첨부파일: {len(unmatched_attachments)}",
     ]
     if analysis_notice:
         lines.extend(["", f"안내: {analysis_notice}"])
-    for item in items:
-        lines.extend(
-            [
-                "",
-                f"{int(item.get('index') or 0)}. {item.get('title') or '-'}",
-                f"- 작업일자: {item.get('work_date_label') or item.get('work_date') or '-'}",
-                f"- 업체: {item.get('vendor_name') or '-'}",
-                f"- 위치: {item.get('location_name') or '-'}",
-                f"- 이미지: {len(item.get('images') or [])}장",
-                f"- 첨부파일: {len(item.get('attachments') or [])}건",
-            ]
-        )
+
+    def append_items(section_title: str, rows: Sequence[Dict[str, Any]]) -> None:
+        if not rows:
+            return
+        lines.extend(["", section_title])
+        for item in rows:
+            lines.extend(
+                [
+                    f"{int(item.get('index') or 0)}. {item.get('title') or '-'}",
+                    f"- 작업일자: {item.get('work_date_label') or item.get('work_date') or '-'}",
+                    f"- 업체: {item.get('vendor_name') or '-'}",
+                    f"- 위치: {item.get('location_name') or '-'}",
+                    f"- 이미지: {len(item.get('images') or [])}장",
+                    f"- 첨부파일: {len(item.get('attachments') or [])}건",
+                ]
+            )
+
+    append_items("[사진 포함 작업]", image_items)
+    append_items("[텍스트 전용 작업]", text_only_items)
     return "\n".join(lines)
 
 
@@ -1342,6 +1353,8 @@ def analyze_work_report(
         for index in unmatched_attachment_indexes
         if 0 < int(index) <= len(attachments)
     ]
+    image_items = [item for item in items if item.get("images")]
+    text_only_items = [item for item in items if not item.get("images")]
     report_text = _build_text_summary(report_title, period_label, items, unmatched_images, unmatched_attachments, analysis_notice)
     return {
         "report_title": report_title,
@@ -1350,7 +1363,11 @@ def analyze_work_report(
         "analysis_model": analysis_model,
         "analysis_notice": analysis_notice,
         "item_count": len(items),
+        "image_item_count": len(image_items),
+        "text_only_item_count": len(text_only_items),
         "items": items,
+        "image_items": image_items,
+        "text_only_items": text_only_items,
         "unmatched_images": unmatched_images,
         "unmatched_attachments": unmatched_attachments,
         "source_text_preview": [_collapse(line) for line in normalized_text.splitlines() if _collapse(line)][:16],

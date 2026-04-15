@@ -444,6 +444,41 @@ def test_work_report_analysis_accepts_source_file_without_text(app_client) -> No
     assert len(first_item["images"]) == 1
 
 
+def test_work_report_analysis_separates_text_only_items(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={
+            "tenant_id": "ys_thesharp",
+            "text": "\n".join(
+                [
+                    "2026년 7월 2일 수요일",
+                    "[관리실] [오전 9:00] 101동 계단등 교체",
+                    "[관리실] [오전 9:01] 사진",
+                    "[관리실] [오전 11:00] 102동 주차장 바닥 균열 보수 예정",
+                ]
+            ),
+        },
+        files=[
+            ("images", ("KakaoTalk_20260702_090100.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    assert item["item_count"] == 2
+    assert item["image_item_count"] == 1
+    assert item["text_only_item_count"] == 1
+    assert len(item["image_items"]) == 1
+    assert len(item["text_only_items"]) == 1
+    assert "계단등" in str(item["image_items"][0]["title"])
+    assert "균열 보수" in str(item["text_only_items"][0]["title"])
+    assert item["text_only_items"][0]["images"] == []
+
+
 def test_work_report_analysis_merges_repeated_work_title_into_before_after_pair(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)
