@@ -125,18 +125,24 @@ def _styles() -> Dict[str, ParagraphStyle]:
 
 
 def _work_report_approval_table(styles: Dict[str, ParagraphStyle]) -> Table:
+    approval_style = ParagraphStyle(
+        "KaApprovalCell",
+        parent=styles["small"],
+        alignment=TA_CENTER,
+        leading=10,
+    )
     rows = [
         [
-            Paragraph("결재", styles["small"]),
-            Paragraph("계장", styles["small"]),
-            Paragraph("과장", styles["small"]),
-            Paragraph("소장", styles["small"]),
+            Paragraph("결<br/>재", approval_style),
+            Paragraph("계장", approval_style),
+            Paragraph("과장", approval_style),
+            Paragraph("소장", approval_style),
         ],
         [
-            Paragraph("", styles["small"]),
-            Paragraph("", styles["small"]),
-            Paragraph("", styles["small"]),
-            Paragraph("", styles["small"]),
+            Paragraph("", approval_style),
+            Paragraph("", approval_style),
+            Paragraph("", approval_style),
+            Paragraph("", approval_style),
         ],
     ]
     table = Table(rows, colWidths=[12 * mm, 18 * mm, 18 * mm, 18 * mm], rowHeights=[7 * mm, 12 * mm])
@@ -469,11 +475,30 @@ def _fixed_canvas_image(image_bytes: bytes, *, draw_width: float, draw_height: f
     return _scaled_image(payload, max_width=draw_width, max_height=draw_height)
 
 
+def _work_report_image_layout(total_matches: int) -> Dict[str, Any]:
+    if total_matches == 3:
+        return {
+            "columns": 3,
+            "draw_width": 49 * mm,
+            "draw_height": 39 * mm,
+            "col_widths": [56 * mm, 56 * mm, 56 * mm],
+            "cell_padding": 3.5,
+        }
+    return {
+        "columns": 2,
+        "draw_width": 78 * mm,
+        "draw_height": 62 * mm,
+        "col_widths": [84 * mm, 84 * mm],
+        "cell_padding": 6,
+    }
+
+
 def _work_report_image_grid(item: Dict[str, Any], image_inputs: Sequence[Dict[str, Any]] | None, styles: Dict[str, ParagraphStyle]) -> Table | None:
     image_lookup = _work_report_image_lookup(image_inputs)
     matches = list(item.get("images") or [])
     if not matches:
         return None
+    layout = _work_report_image_layout(len(matches))
     cells: List[List[Any]] = []
     row_cells: List[Any] = []
     total_matches = len(matches)
@@ -484,7 +509,13 @@ def _work_report_image_grid(item: Dict[str, Any], image_inputs: Sequence[Dict[st
         flowables: List[Any] = []
         if isinstance(raw, (bytes, bytearray)) and raw:
             try:
-                flowables.append(_fixed_canvas_image(bytes(raw), draw_width=78 * mm, draw_height=62 * mm))
+                flowables.append(
+                    _fixed_canvas_image(
+                        bytes(raw),
+                        draw_width=float(layout["draw_width"]),
+                        draw_height=float(layout["draw_height"]),
+                    )
+                )
             except Exception:
                 flowables.append(Paragraph("이미지를 렌더링하지 못했습니다.", styles["caption"]))
         else:
@@ -494,20 +525,21 @@ def _work_report_image_grid(item: Dict[str, Any], image_inputs: Sequence[Dict[st
             flowables.append(Spacer(1, 1.2 * mm))
             flowables.append(Paragraph(_escape(phase_label), styles["small"]))
         row_cells.append(flowables)
-        if len(row_cells) == 2:
+        if len(row_cells) == int(layout["columns"]):
             cells.append(row_cells)
             row_cells = []
     if row_cells:
-        row_cells.append(Paragraph("", styles["caption"]))
+        while len(row_cells) < int(layout["columns"]):
+            row_cells.append(Paragraph("", styles["caption"]))
         cells.append(row_cells)
-    table = Table(cells, colWidths=[84 * mm, 84 * mm])
+    table = Table(cells, colWidths=list(layout["col_widths"]))
     table.setStyle(
         TableStyle(
             [
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D5DFDA")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("LEFTPADDING", (0, 0), (-1, -1), float(layout["cell_padding"])),
+                ("RIGHTPADDING", (0, 0), (-1, -1), float(layout["cell_padding"])),
                 ("TOPPADDING", (0, 0), (-1, -1), 6),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FBFDFC")),
@@ -638,35 +670,8 @@ def build_work_report_pdf(
         story.append(Paragraph(_escape(f"참조 양식: {template_source_name}"), styles["meta"]))
     story.append(Spacer(1, 4 * mm))
 
-    report_items, image_items, text_only_items = _work_report_output_items(report)
+    _, image_items, text_only_items = _work_report_output_items(report)
     unmatched_images = _selected_unmatched_images(report)
-    overview = Table(
-        [
-            [Paragraph("작업 항목", styles["small"]), Paragraph(str(int(report.get("item_count") or len(report_items))), styles["small"]), Paragraph("사진 포함", styles["small"]), Paragraph(str(len(image_items)), styles["small"])],
-            [Paragraph("텍스트 전용", styles["small"]), Paragraph(str(len(text_only_items)), styles["small"]), Paragraph("미매칭 이미지", styles["small"]), Paragraph(str(len(unmatched_images)), styles["small"])],
-            [Paragraph("미매칭 파일", styles["small"]), Paragraph(str(len(report.get("unmatched_attachments") or [])), styles["small"]), Paragraph("분석모델", styles["small"]), Paragraph(_escape(report.get("analysis_model") or "-"), styles["small"])],
-        ],
-        colWidths=[24 * mm, 58 * mm, 24 * mm, 58 * mm],
-    )
-    overview.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.55, colors.HexColor("#C8D3CE")),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F0F5F2")),
-                ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#F0F5F2")),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ]
-        )
-    )
-    story.append(overview)
-    notice = _collapse(report.get("analysis_notice") or "")
-    if notice:
-        story.append(Spacer(1, 3 * mm))
-        story.append(Paragraph(_escape(notice), styles["caption"]))
 
     if image_items:
         story.append(Spacer(1, 5 * mm))

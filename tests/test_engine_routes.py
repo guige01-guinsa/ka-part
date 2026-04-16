@@ -737,6 +737,20 @@ def test_work_report_pdf_output_items_respect_selected_images() -> None:
     assert text_only_items == []
 
 
+def test_work_report_image_layout_uses_three_columns_for_three_images() -> None:
+    from app.report_pdf import _work_report_image_layout
+
+    two_image_layout = _work_report_image_layout(2)
+    three_image_layout = _work_report_image_layout(3)
+
+    assert two_image_layout["columns"] == 2
+    assert len(two_image_layout["col_widths"]) == 2
+    assert three_image_layout["columns"] == 3
+    assert len(three_image_layout["col_widths"]) == 3
+    assert three_image_layout["draw_width"] < two_image_layout["draw_width"]
+    assert three_image_layout["draw_height"] < two_image_layout["draw_height"]
+
+
 def test_work_report_pdf_supports_sample_and_uploads(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)
