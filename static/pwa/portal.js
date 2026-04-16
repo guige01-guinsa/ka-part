@@ -123,7 +123,7 @@
     return `${minutes}분 ${String(seconds).padStart(2, "0")}초`;
   }
 
-  const WORK_REPORT_REQUEST_TIMEOUT_MS = 480000;
+  const WORK_REPORT_REQUEST_TIMEOUT_MS = 900000;
 
   function renderWorkReportProgress(state) {
     const modeLabel = state?.mode === "pdf" ? "주요업무보고 PDF" : "주요업무보고 미리보기";
