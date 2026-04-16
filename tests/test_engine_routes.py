@@ -471,7 +471,8 @@ def test_work_report_analysis_accepts_multiple_source_files_with_text_and_images
     assert item["item_count"] >= 1
     first_item = item["items"][0]
     assert "자전거" in str(first_item["title"])
-    assert len(first_item["images"]) == 1
+    assert len(first_item["images"]) == 0
+    assert item["image_item_count"] == 0
 
 
 def test_work_report_analysis_rejects_more_than_twenty_source_files(app_client) -> None:
@@ -638,7 +639,7 @@ def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatc
 
     openai_calls: list[int] = []
 
-    def _fake_openai_work_report(*, text, image_inputs, attachment_inputs, sample_title, sample_lines):
+    def _fake_openai_work_report(*, text, image_inputs, reference_image_inputs, attachment_inputs, sample_title, sample_lines):
         openai_calls.append(len(list(image_inputs or [])))
         return {
             "report_title": "시설팀 주요 업무 보고",
@@ -720,6 +721,7 @@ def test_work_report_pdf_output_items_respect_selected_images() -> None:
                 "index": 2,
                 "title": "음식물처리기 키패드 불량 AS 접수",
                 "summary": "키패드 불량으로 AS 접수",
+                "include_in_output": False,
                 "images": [
                     {"index": 3, "filename": "keypad.jpg", "stage": "general", "include_in_output": False},
                 ],
@@ -729,11 +731,10 @@ def test_work_report_pdf_output_items_respect_selected_images() -> None:
 
     items, image_items, text_only_items = _work_report_output_items(report)
 
-    assert len(items) == 2
+    assert len(items) == 1
     assert [str(image["filename"]) for image in items[0]["images"]] == ["before.jpg"]
-    assert items[1]["images"] == []
     assert [str(item["title"]) for item in image_items] == ["커뮤니티 유리 깨짐 교체 작업"]
-    assert [str(item["title"]) for item in text_only_items] == ["음식물처리기 키패드 불량 AS 접수"]
+    assert text_only_items == []
 
 
 def test_work_report_pdf_supports_sample_and_uploads(app_client) -> None:

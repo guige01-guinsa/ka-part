@@ -433,18 +433,19 @@ async def ai_work_report(
     source_text_parts = [str(text or "").strip(), str(source.get("source_text") or "").strip()]
     source_text = "\n".join(part for part in source_text_parts if part)
     image_inputs = await _read_work_report_images(list(images or []))
-    image_inputs = list(source.get("source_images") or []) + image_inputs
+    reference_image_inputs = list(source.get("source_images") or [])
     if len(image_inputs) > MAX_WORK_REPORT_IMAGES:
-        raise HTTPException(status_code=400, detail=f"카톡 캡처 이미지와 현장 사진을 합쳐 최대 {MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.")
+        raise HTTPException(status_code=400, detail=f"현장 사진은 최대 {MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.")
     attachment_inputs = await _read_work_report_attachments(list(attachments or []))
     sample = await _read_work_report_sample(sample_file)
-    if not source_text and not image_inputs and not attachment_inputs:
+    if not source_text and not image_inputs and not reference_image_inputs and not attachment_inputs:
         raise HTTPException(status_code=400, detail="text, image, or attachment is required")
     try:
         item = await run_in_threadpool(
             analyze_work_report,
             source_text,
             image_inputs=image_inputs,
+            reference_image_inputs=reference_image_inputs,
             attachment_inputs=attachment_inputs,
             sample_title=str(sample.get("title") or "").strip(),
             sample_lines=[str(line or "") for line in sample.get("lines") or []],
@@ -461,6 +462,7 @@ async def ai_work_report(
         {
             "lines": len(source_text.splitlines()),
             "images": len(image_inputs),
+            "reference_images": len(reference_image_inputs),
             "attachments": len(attachment_inputs),
             "source_file": str(source.get("source_name") or ""),
             "source_file_count": len(source.get("source_names") or []),
@@ -489,12 +491,12 @@ async def ai_work_report_pdf(
     source_text_parts = [str(text or "").strip(), str(source.get("source_text") or "").strip()]
     source_text = "\n".join(part for part in source_text_parts if part)
     image_inputs = await _read_work_report_images(list(images or []))
-    image_inputs = list(source.get("source_images") or []) + image_inputs
+    reference_image_inputs = list(source.get("source_images") or [])
     if len(image_inputs) > MAX_WORK_REPORT_IMAGES:
-        raise HTTPException(status_code=400, detail=f"카톡 캡처 이미지와 현장 사진을 합쳐 최대 {MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.")
+        raise HTTPException(status_code=400, detail=f"현장 사진은 최대 {MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.")
     attachment_inputs = await _read_work_report_attachments(list(attachments or []))
     sample = await _read_work_report_sample(sample_file)
-    if not source_text and not image_inputs and not attachment_inputs:
+    if not source_text and not image_inputs and not reference_image_inputs and not attachment_inputs:
         raise HTTPException(status_code=400, detail="text, image, or attachment is required")
     try:
         cached_report = None
@@ -512,6 +514,7 @@ async def ai_work_report_pdf(
             analyze_work_report,
             source_text,
             image_inputs=image_inputs,
+            reference_image_inputs=reference_image_inputs,
             attachment_inputs=attachment_inputs,
             sample_title=str(sample.get("title") or "").strip(),
             sample_lines=[str(line or "") for line in sample.get("lines") or []],
@@ -535,6 +538,7 @@ async def ai_work_report_pdf(
         {
             "lines": len(source_text.splitlines()),
             "images": len(image_inputs),
+            "reference_images": len(reference_image_inputs),
             "attachments": len(attachment_inputs),
             "source_file": str(source.get("source_name") or ""),
             "source_file_count": len(source.get("source_names") or []),

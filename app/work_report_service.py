@@ -56,6 +56,7 @@ DEFAULT_WORK_REPORT_OPENAI_IMAGE_MATCH_TIMEOUT_SEC = 45.0
 WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES = 12
 WORK_REPORT_OPENAI_IMAGE_MATCH_MAX_CLUSTERS = 4
 WORK_REPORT_OPENAI_IMAGE_MATCH_SAMPLE_PER_CLUSTER = 2
+MAX_WORK_REPORT_OPENAI_REFERENCE_IMAGES = 6
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
     ".hwp",
@@ -1409,6 +1410,7 @@ def _openai_work_report(
     *,
     text: str,
     image_inputs: List[Dict[str, Any]],
+    reference_image_inputs: List[Dict[str, Any]] | None,
     attachment_inputs: List[Dict[str, Any]],
     sample_title: str,
     sample_lines: Sequence[str],
@@ -1502,6 +1504,35 @@ def _openai_work_report(
         content.append({"type": "input_text", "text": f"카톡 대화 원문:\n{text}"})
     if candidate_lines:
         content.append({"type": "input_text", "text": "대화에서 보이는 작업 후보:\n" + "\n".join(candidate_lines)})
+    reference_images = list(reference_image_inputs or [])
+    if reference_images:
+        reference_meta = _select_openai_visual_meta(reference_images, limit=MAX_WORK_REPORT_OPENAI_REFERENCE_IMAGES)
+        reference_lookup = {index: row for index, row in enumerate(reference_images, start=1)}
+        reference_lines = [
+            f"[S{int(row.get('index') or 0)}] {row.get('filename') or '-'} / 카톡 캡처 참고 이미지"
+            for row in reference_meta
+            if int(row.get("index") or 0) > 0
+        ]
+        if reference_lines:
+            content.append(
+                {
+                    "type": "input_text",
+                    "text": (
+                        "카톡 캡처 참고 이미지 목록:\n"
+                        + "\n".join(reference_lines)
+                        + "\n이 이미지는 작업사진 출력용이 아니라 분석 참고용이다. 결과 JSON의 before/during/after에는 현장사진 I index만 사용하라."
+                    ),
+                }
+            )
+        for row in reference_meta:
+            index = int(row.get("index") or 0)
+            item = reference_lookup.get(index)
+            if not item:
+                continue
+            data_url = _openai_image_url(item)
+            content.append({"type": "input_text", "text": f"카톡 캡처 참고 이미지 S{index}: {item.get('filename') or f'source-{index}'}"})
+            if data_url:
+                content.append({"type": "input_image", "image_url": data_url})
     visual_meta: List[Dict[str, Any]] = []
     if image_inputs:
         image_meta_rows = [_openai_image_meta(index, item) for index, item in enumerate(image_inputs, start=1)]
@@ -1820,15 +1851,17 @@ def analyze_work_report(
     text: str,
     *,
     image_inputs: Sequence[Dict[str, Any]] | None = None,
+    reference_image_inputs: Sequence[Dict[str, Any]] | None = None,
     attachment_inputs: Sequence[Dict[str, Any]] | None = None,
     sample_title: str = "",
     sample_lines: Sequence[str] | None = None,
 ) -> Dict[str, Any]:
     normalized_text = str(text or "")
     images = list(image_inputs or [])[:MAX_WORK_REPORT_IMAGES]
+    reference_images = list(reference_image_inputs or [])
     attachments = list(attachment_inputs or [])[:MAX_WORK_REPORT_ATTACHMENTS]
     sample_lines = list(sample_lines or [])
-    if not _collapse(normalized_text) and not images and not attachments:
+    if not _collapse(normalized_text) and not images and not reference_images and not attachments:
         raise ValueError("text, image, or attachment is required")
 
     chunk_trigger_images = _int_env(
@@ -1843,6 +1876,7 @@ def analyze_work_report(
         base_ai_result = _openai_work_report(
             text=normalized_text,
             image_inputs=[],
+            reference_image_inputs=reference_images,
             attachment_inputs=attachments,
             sample_title=sample_title,
             sample_lines=sample_lines,
@@ -1877,6 +1911,7 @@ def analyze_work_report(
         ai_result = _openai_work_report(
             text=normalized_text,
             image_inputs=images,
+            reference_image_inputs=reference_images,
             attachment_inputs=attachments,
             sample_title=sample_title,
             sample_lines=sample_lines,
@@ -1885,6 +1920,7 @@ def analyze_work_report(
         base_ai_result = _openai_work_report(
             text=normalized_text,
             image_inputs=[],
+            reference_image_inputs=reference_images,
             attachment_inputs=attachments,
             sample_title=sample_title,
             sample_lines=sample_lines,

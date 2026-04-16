@@ -1026,6 +1026,26 @@ body {
   font-size: 14px;
 }
 
+.work-report-item-toggle {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 8px;
+  justify-content: start;
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(13, 106, 103, 0.16);
+  background: rgba(12, 107, 103, 0.06);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.work-report-item-toggle input {
+  margin: 0;
+}
+
 .work-report-match-card p {
   margin: 0;
   color: var(--muted);

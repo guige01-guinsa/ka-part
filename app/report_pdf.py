@@ -124,6 +124,41 @@ def _styles() -> Dict[str, ParagraphStyle]:
     }
 
 
+def _work_report_approval_table(styles: Dict[str, ParagraphStyle]) -> Table:
+    rows = [
+        [
+            Paragraph("결재", styles["small"]),
+            Paragraph("계장", styles["small"]),
+            Paragraph("과장", styles["small"]),
+            Paragraph("소장", styles["small"]),
+        ],
+        [
+            Paragraph("", styles["small"]),
+            Paragraph("", styles["small"]),
+            Paragraph("", styles["small"]),
+            Paragraph("", styles["small"]),
+        ],
+    ]
+    table = Table(rows, colWidths=[12 * mm, 18 * mm, 18 * mm, 18 * mm], rowHeights=[7 * mm, 12 * mm])
+    table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.55, colors.HexColor("#B6C4BD")),
+                ("SPAN", (0, 0), (0, 1)),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F0F5F2")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    table.hAlign = "RIGHT"
+    return table
+
+
 def _paragraphs(lines: Iterable[str], style: ParagraphStyle) -> List[Paragraph]:
     items: List[Paragraph] = []
     for line in lines:
@@ -372,12 +407,22 @@ def _work_report_selected_images(item: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _work_report_output_items(report: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     items: List[Dict[str, Any]] = []
     for item in list(report.get("items") or []):
+        if item.get("include_in_output", True) is False:
+            continue
         clone = dict(item)
         clone["images"] = _work_report_selected_images(item)
         items.append(clone)
     image_items = [item for item in items if item.get("images")]
     text_only_items = [item for item in items if not item.get("images")]
     return items, image_items, text_only_items
+
+
+def _selected_unmatched_images(report: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [
+        dict(row)
+        for row in list(report.get("unmatched_images") or [])
+        if row.get("include_in_output", True) is not False
+    ]
 
 
 def _work_report_image_summary(item: Dict[str, Any]) -> str:
@@ -581,6 +626,8 @@ def build_work_report_pdf(
         author="KA-PART AI 민원처리 엔진",
     )
     story: List[Any] = []
+    story.append(_work_report_approval_table(styles))
+    story.append(Spacer(1, 3 * mm))
     report_title = _collapse(report.get("report_title") or "시설팀 주요 업무 보고")
     period_label = _collapse(report.get("period_label") or "-")
     story.append(Paragraph(_escape(report_title), styles["title"]))
@@ -592,10 +639,11 @@ def build_work_report_pdf(
     story.append(Spacer(1, 4 * mm))
 
     report_items, image_items, text_only_items = _work_report_output_items(report)
+    unmatched_images = _selected_unmatched_images(report)
     overview = Table(
         [
             [Paragraph("작업 항목", styles["small"]), Paragraph(str(int(report.get("item_count") or len(report_items))), styles["small"]), Paragraph("사진 포함", styles["small"]), Paragraph(str(len(image_items)), styles["small"])],
-            [Paragraph("텍스트 전용", styles["small"]), Paragraph(str(len(text_only_items)), styles["small"]), Paragraph("미매칭 이미지", styles["small"]), Paragraph(str(len(report.get("unmatched_images") or [])), styles["small"])],
+            [Paragraph("텍스트 전용", styles["small"]), Paragraph(str(len(text_only_items)), styles["small"]), Paragraph("미매칭 이미지", styles["small"]), Paragraph(str(len(unmatched_images)), styles["small"])],
             [Paragraph("미매칭 파일", styles["small"]), Paragraph(str(len(report.get("unmatched_attachments") or [])), styles["small"]), Paragraph("분석모델", styles["small"]), Paragraph(_escape(report.get("analysis_model") or "-"), styles["small"])],
         ],
         colWidths=[24 * mm, 58 * mm, 24 * mm, 58 * mm],
@@ -640,7 +688,7 @@ def build_work_report_pdf(
 
     if text_only_items:
         story.append(Spacer(1, 6 * mm))
-        story.append(Paragraph("이미지 미첨부 작업 목록", styles["heading"]))
+        story.append(Paragraph("세대민원 및 기타 작업", styles["heading"]))
         text_only_table = _work_report_text_only_table(text_only_items, styles)
         if text_only_table:
             story.append(text_only_table)
@@ -648,7 +696,6 @@ def build_work_report_pdf(
         story.append(Spacer(1, 5 * mm))
         story.append(Paragraph("자동 분류된 작업 항목이 없습니다.", styles["body"]))
 
-    unmatched_images = list(report.get("unmatched_images") or [])
     source_preview = [line for line in report.get("source_text_preview") or [] if _collapse(line)]
     if not source_preview:
         source_preview = [_collapse(line) for line in str(source_text or "").splitlines() if _collapse(line)][:20]

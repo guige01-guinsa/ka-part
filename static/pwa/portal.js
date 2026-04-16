@@ -558,7 +558,7 @@
     updateGenericFileHint(
       "#workReportSourceInput",
       "#workReportSourceHint",
-      "텍스트/HWP와 카톡 캡처 이미지를 함께 넣을 수 있습니다. 텍스트는 원문으로 합치고, 이미지는 매칭용으로 함께 사용합니다."
+      "텍스트/HWP와 카톡 캡처 이미지를 함께 넣을 수 있습니다. 텍스트는 원문으로 합치고, 이미지는 분석 참고용으로만 사용합니다."
     );
     renderSelectableFileList("#workReportSourceInput", "#workReportSourceList", "선택된 원문 파일이 없습니다.", "원문 자료");
   }
@@ -3996,6 +3996,10 @@
       sections.push(
         `<div class="work-report-match-list">${imageItems.map((row, index) => [
           '<article class="work-report-match-card">',
+          '<label class="work-report-item-toggle">',
+          `<input class="work-report-item-output-check" type="checkbox" data-item-index="${Number(row.index || 0)}"${row && row.include_in_output !== false ? " checked" : ""}>`,
+          '<span>이 항목 출력</span>',
+          '</label>',
           `<strong>${escapeHtml(`${index + 1}. ${String(row.title || "-")}`)}</strong>`,
           `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 작업자: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
           `<p>${escapeHtml(`내용설명 : ${String(row.summary || row.title || "-")}`)}</p>`,
@@ -4013,10 +4017,14 @@
       );
     }
     if (textOnlyItems.length) {
-      sections.push("<div class=\"subhead\">이미지 미첨부 작업 목록</div>");
+      sections.push("<div class=\"subhead\">세대민원 및 기타 작업</div>");
       sections.push(
         `<div class="work-report-match-list">${textOnlyItems.map((row, index) => [
           '<article class="work-report-match-card">',
+          '<label class="work-report-item-toggle">',
+          `<input class="work-report-item-output-check" type="checkbox" data-item-index="${Number(row.index || 0)}"${row && row.include_in_output !== false ? " checked" : ""}>`,
+          '<span>이 항목 출력</span>',
+          '</label>',
           `<strong>${escapeHtml(`${index + 1}. ${String(row.title || "-")}`)}</strong>`,
           `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 작업자: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
           `<p>${escapeHtml(`내용설명 : ${String(row.summary || row.title || "-")}`)}</p>`,
@@ -4027,10 +4035,13 @@
     if (unmatchedImages.length) {
       sections.push("<div class=\"subhead\">미매칭 자료</div>");
       sections.push(
-        `<div class="work-report-chip-list">${
-          [
-            ...unmatchedImages.map((row) => `<span>${escapeHtml(`이미지 · ${String(row.filename || "-")}`)}</span>`),
-          ].join("")
+        `<div class="work-report-image-select-list">${
+          unmatchedImages.map((row, index) => [
+            '<label class="work-report-image-select">',
+            `<input class="work-report-unmatched-output-check" type="checkbox" data-unmatched-index="${index}"${row && row.include_in_output !== false ? " checked" : ""}>`,
+            `<span>${escapeHtml(`미매칭 이미지 · ${String(row.filename || "-")}`)}</span>`,
+            "</label>",
+          ].join("")).join("")
         }</div>`
       );
     }
@@ -4048,15 +4059,21 @@
   function cloneWorkReportForPdf(report) {
     const cloned = JSON.parse(JSON.stringify(report || {}));
     const items = Array.isArray(cloned.items) ? cloned.items : [];
-    cloned.items = items.map((row) => ({
-      ...row,
-      images: Array.isArray(row.images) ? row.images.filter((image) => !image || image.include_in_output !== false) : [],
-      attachments: [],
-    }));
+    cloned.items = items
+      .filter((row) => row && row.include_in_output !== false)
+      .map((row) => ({
+        ...row,
+        images: Array.isArray(row.images) ? row.images.filter((image) => !image || image.include_in_output !== false) : [],
+        attachments: [],
+      }));
     cloned.image_items = cloned.items.filter((row) => Array.isArray(row.images) && row.images.length);
     cloned.text_only_items = cloned.items.filter((row) => !Array.isArray(row.images) || !row.images.length);
     cloned.image_item_count = cloned.image_items.length;
     cloned.text_only_item_count = cloned.text_only_items.length;
+    cloned.item_count = cloned.items.length;
+    cloned.unmatched_images = Array.isArray(cloned.unmatched_images)
+      ? cloned.unmatched_images.filter((row) => row && row.include_in_output !== false)
+      : [];
     return cloned;
   }
 
@@ -4071,6 +4088,30 @@
     item.images[imageIndex].include_in_output = !!target.checked;
     $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
     setMessage("#intakeMsg", "미리보기에서 선택한 사진만 PDF에 출력됩니다.");
+  }
+
+  function handleWorkReportItemOutputToggle(event) {
+    const target = event?.target;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains("work-report-item-output-check")) return;
+    if (!lastWorkReportResult || !Array.isArray(lastWorkReportResult.items)) return;
+    const itemIndex = Number(target.getAttribute("data-item-index") || -1);
+    const item = lastWorkReportResult.items.find((row) => Number(row?.index || 0) === itemIndex);
+    if (!item) return;
+    item.include_in_output = !!target.checked;
+    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
+    setMessage("#intakeMsg", "미리보기에서 체크된 항목만 PDF에 출력됩니다.");
+  }
+
+  function handleWorkReportUnmatchedOutputToggle(event) {
+    const target = event?.target;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains("work-report-unmatched-output-check")) return;
+    if (!lastWorkReportResult || !Array.isArray(lastWorkReportResult.unmatched_images)) return;
+    const unmatchedIndex = Number(target.getAttribute("data-unmatched-index") || -1);
+    const row = lastWorkReportResult.unmatched_images[unmatchedIndex];
+    if (!row) return;
+    row.include_in_output = !!target.checked;
+    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
+    setMessage("#intakeMsg", "미매칭 이미지도 체크된 항목만 PDF에 출력됩니다.");
   }
 
   function workReportFormData(options = {}) {
@@ -4503,7 +4544,11 @@
     $("#btnPreviewDigestSource")?.addEventListener("click", () => previewChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDownloadDigestSource")?.addEventListener("click", () => downloadChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnPasteDigestImage")?.addEventListener("click", () => importClipboardImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
-    $("#workReportBox")?.addEventListener("change", handleWorkReportImageOutputToggle);
+    $("#workReportBox")?.addEventListener("change", (event) => {
+      handleWorkReportItemOutputToggle(event);
+      handleWorkReportImageOutputToggle(event);
+      handleWorkReportUnmatchedOutputToggle(event);
+    });
     $("#btnAnalyzeWorkReport")?.addEventListener("click", () => analyzeWorkReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnWorkReportPdf")?.addEventListener("click", () => downloadWorkReportPdf().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnLoadFacilityDashboard")?.addEventListener("click", () => loadFacilityDashboard().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));
