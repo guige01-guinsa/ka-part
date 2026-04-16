@@ -160,6 +160,18 @@
     ].join("");
   }
 
+  function focusWorkReportBox() {
+    const target = $("#workReportBox");
+    if (!target) return;
+    target.classList.remove("hidden");
+    window.requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (typeof target.focus === "function") {
+        target.focus({ preventScroll: true });
+      }
+    });
+  }
+
   function startWorkReportProgress(mode = "preview") {
     const target = $("#workReportBox");
     const previewSteps = [
@@ -206,6 +218,7 @@
     };
 
     paint();
+    focusWorkReportBox();
     timerId = window.setInterval(paint, 1000);
     const stop = () => {
       if (timerId) {
