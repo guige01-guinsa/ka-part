@@ -702,6 +702,40 @@ def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatc
     assert "단계적으로 매칭" in str(result["analysis_notice"])
 
 
+def test_work_report_pdf_output_items_respect_selected_images() -> None:
+    from app.report_pdf import _work_report_output_items
+
+    report = {
+        "items": [
+            {
+                "index": 1,
+                "title": "커뮤니티 유리 깨짐 교체 작업",
+                "summary": "커뮤니티 창호 유리 교체 진행",
+                "images": [
+                    {"index": 1, "filename": "before.jpg", "stage": "before", "include_in_output": True},
+                    {"index": 2, "filename": "after.jpg", "stage": "after", "include_in_output": False},
+                ],
+            },
+            {
+                "index": 2,
+                "title": "음식물처리기 키패드 불량 AS 접수",
+                "summary": "키패드 불량으로 AS 접수",
+                "images": [
+                    {"index": 3, "filename": "keypad.jpg", "stage": "general", "include_in_output": False},
+                ],
+            },
+        ]
+    }
+
+    items, image_items, text_only_items = _work_report_output_items(report)
+
+    assert len(items) == 2
+    assert [str(image["filename"]) for image in items[0]["images"]] == ["before.jpg"]
+    assert items[1]["images"] == []
+    assert [str(item["title"]) for item in image_items] == ["커뮤니티 유리 깨짐 교체 작업"]
+    assert [str(item["title"]) for item in text_only_items] == ["음식물처리기 키패드 불량 AS 접수"]
+
+
 def test_work_report_pdf_supports_sample_and_uploads(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)
@@ -743,6 +777,8 @@ def test_work_report_pdf_can_reuse_cached_preview_result(app_client, monkeypatch
     )
     assert preview.status_code == 200
     cached_report = preview.json()["item"]
+    if cached_report.get("items") and cached_report["items"][0].get("images"):
+        cached_report["items"][0]["images"][-1]["include_in_output"] = False
 
     import app.routes.engine as engine
 

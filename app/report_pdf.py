@@ -334,25 +334,12 @@ def build_kakao_digest_pdf(
 
 
 def _work_report_detail_table(item: Dict[str, Any], styles: Dict[str, ParagraphStyle]) -> Table:
-    image_count = len(item.get("images") or [])
-    if image_count >= 3:
-        image_status = "작업전/작업중/작업후 이미지 확인"
-    elif image_count == 2:
-        image_status = "작업전/작업후 이미지 확인"
-    elif image_count == 1:
-        image_status = "현장 이미지 1장 확인"
-    else:
-        image_status = "현장 이미지 없음"
     rows = [
         [Paragraph("작업내용", styles["small"]), Paragraph(_escape(item.get("title") or "-"), styles["body"])],
         [Paragraph("작업일자", styles["small"]), Paragraph(_escape(item.get("work_date_label") or item.get("work_date") or "-"), styles["small"])],
-        [Paragraph("업체", styles["small"]), Paragraph(_escape(item.get("vendor_name") or "-"), styles["small"])],
+        [Paragraph("작업자", styles["small"]), Paragraph(_escape(item.get("vendor_name") or "-"), styles["small"])],
         [Paragraph("위치", styles["small"]), Paragraph(_escape(item.get("location_name") or "-"), styles["small"])],
-        [Paragraph("이미지 상태", styles["small"]), Paragraph(_escape(image_status), styles["small"])],
     ]
-    summary = _collapse(item.get("summary") or "")
-    if summary and summary != _collapse(item.get("title") or ""):
-        rows.append([Paragraph("비고", styles["small"]), Paragraph(_escape(summary), styles["small"])])
     table = Table(rows, colWidths=[24 * mm, 146 * mm])
     table.setStyle(
         TableStyle(
@@ -372,6 +359,25 @@ def _work_report_detail_table(item: Dict[str, Any], styles: Dict[str, ParagraphS
 
 def _work_report_image_lookup(image_inputs: Sequence[Dict[str, Any]] | None = None) -> Dict[int, Dict[str, Any]]:
     return {index: row for index, row in enumerate(list(image_inputs or []), start=1)}
+
+
+def _work_report_selected_images(item: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [
+        dict(row)
+        for row in list(item.get("images") or [])
+        if row.get("include_in_output", True) is not False
+    ]
+
+
+def _work_report_output_items(report: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    items: List[Dict[str, Any]] = []
+    for item in list(report.get("items") or []):
+        clone = dict(item)
+        clone["images"] = _work_report_selected_images(item)
+        items.append(clone)
+    image_items = [item for item in items if item.get("images")]
+    text_only_items = [item for item in items if not item.get("images")]
+    return items, image_items, text_only_items
 
 
 def _work_report_image_summary(item: Dict[str, Any]) -> str:
@@ -585,13 +591,11 @@ def build_work_report_pdf(
         story.append(Paragraph(_escape(f"참조 양식: {template_source_name}"), styles["meta"]))
     story.append(Spacer(1, 4 * mm))
 
-    report_items = list(report.get("items") or [])
-    image_items = list(report.get("image_items")) if isinstance(report.get("image_items"), list) else [item for item in report_items if item.get("images")]
-    text_only_items = list(report.get("text_only_items")) if isinstance(report.get("text_only_items"), list) else [item for item in report_items if not item.get("images")]
+    report_items, image_items, text_only_items = _work_report_output_items(report)
     overview = Table(
         [
-            [Paragraph("작업 항목", styles["small"]), Paragraph(str(int(report.get("item_count") or len(report.get("items") or []))), styles["small"]), Paragraph("사진 포함", styles["small"]), Paragraph(str(int(report.get("image_item_count") or len(image_items))), styles["small"])],
-            [Paragraph("텍스트 전용", styles["small"]), Paragraph(str(int(report.get("text_only_item_count") or len(text_only_items))), styles["small"]), Paragraph("미매칭 이미지", styles["small"]), Paragraph(str(len(report.get("unmatched_images") or [])), styles["small"])],
+            [Paragraph("작업 항목", styles["small"]), Paragraph(str(int(report.get("item_count") or len(report_items))), styles["small"]), Paragraph("사진 포함", styles["small"]), Paragraph(str(len(image_items)), styles["small"])],
+            [Paragraph("텍스트 전용", styles["small"]), Paragraph(str(len(text_only_items)), styles["small"]), Paragraph("미매칭 이미지", styles["small"]), Paragraph(str(len(report.get("unmatched_images") or [])), styles["small"])],
             [Paragraph("미매칭 파일", styles["small"]), Paragraph(str(len(report.get("unmatched_attachments") or [])), styles["small"]), Paragraph("분석모델", styles["small"]), Paragraph(_escape(report.get("analysis_model") or "-"), styles["small"])],
         ],
         colWidths=[24 * mm, 58 * mm, 24 * mm, 58 * mm],
@@ -626,7 +630,7 @@ def build_work_report_pdf(
             image_summary = _work_report_image_summary(item)
             if image_summary:
                 story.append(Spacer(1, 2 * mm))
-                story.append(Paragraph(_escape(f"이미지 매칭 요약: {image_summary}"), styles["small"]))
+                story.append(Paragraph(_escape(f"내용설명 : {image_summary}"), styles["small"]))
             image_grid = _work_report_image_grid(item, image_inputs, styles)
             if image_grid:
                 story.append(Spacer(1, 3 * mm))
@@ -645,29 +649,14 @@ def build_work_report_pdf(
         story.append(Paragraph("자동 분류된 작업 항목이 없습니다.", styles["body"]))
 
     unmatched_images = list(report.get("unmatched_images") or [])
-    unmatched_attachments = list(report.get("unmatched_attachments") or [])
     source_preview = [line for line in report.get("source_text_preview") or [] if _collapse(line)]
     if not source_preview:
         source_preview = [_collapse(line) for line in str(source_text or "").splitlines() if _collapse(line)][:20]
-    attachment_rows = _work_report_attachment_rows(report_items, attachment_inputs, unmatched_attachments)
-    if source_preview or attachment_rows:
+    if source_preview:
         story.append(PageBreak())
         story.append(Paragraph("원문 미리보기", styles["heading"]))
         for line in source_preview[:20]:
             story.append(Paragraph(_escape(line), styles["caption"]))
-        if attachment_rows:
-            story.append(Spacer(1, 4 * mm))
-            story.append(Paragraph("첨부 내용", styles["heading"]))
-            for position, row in enumerate(attachment_rows, start=1):
-                header = f"{position}. {row.get('filename') or '-'}"
-                matched_title = _collapse(row.get("matched_title") or "")
-                if matched_title:
-                    header = f"{header} / 매칭 작업: {matched_title}"
-                else:
-                    header = f"{header} / 미매칭 첨부"
-                story.append(Paragraph(_escape(header), styles["small"]))
-                story.append(Paragraph(_escape(row.get("preview_text") or "본문 미리보기 없음"), styles["caption"]))
-                story.append(Spacer(1, 1.6 * mm))
 
     if unmatched_images:
         story.append(PageBreak())

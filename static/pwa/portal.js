@@ -3968,10 +3968,9 @@
   function renderWorkReportResult(item) {
     const report = item || {};
     const items = Array.isArray(report.items) ? report.items : [];
-    const imageItems = Array.isArray(report.image_items) ? report.image_items : items.filter((row) => Array.isArray(row.images) && row.images.length);
-    const textOnlyItems = Array.isArray(report.text_only_items) ? report.text_only_items : items.filter((row) => !Array.isArray(row.images) || !row.images.length);
+    const imageItems = items.filter((row) => Array.isArray(row.images) && row.images.length);
+    const textOnlyItems = items.filter((row) => !Array.isArray(row.images) || !row.images.length);
     const unmatchedImages = Array.isArray(report.unmatched_images) ? report.unmatched_images : [];
-    const unmatchedAttachments = Array.isArray(report.unmatched_attachments) ? report.unmatched_attachments : [];
     const sections = [
       [
         "<div class=\"subhead\">보고 개요</div>",
@@ -3990,15 +3989,25 @@
       sections.push(`<div class="detail-block">${escapeHtml(String(report.analysis_notice || ""))}</div>`);
     }
     if (imageItems.length) {
+      sections.push('<div class="detail-block">미리보기에서 체크된 사진만 PDF에 출력됩니다.</div>');
+    }
+    if (imageItems.length) {
       sections.push("<div class=\"subhead\">사진 포함 작업 항목</div>");
       sections.push(
         `<div class="work-report-match-list">${imageItems.map((row, index) => [
           '<article class="work-report-match-card">',
           `<strong>${escapeHtml(`${index + 1}. ${String(row.title || "-")}`)}</strong>`,
-          `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 업체: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
-          row.summary && String(row.summary || "").trim() !== String(row.title || "").trim() ? `<p>${escapeHtml(String(row.summary || ""))}</p>` : "",
-          Array.isArray(row.images) && row.images.length ? `<div class="work-report-chip-list">${row.images.map((image) => `<span>${escapeHtml(`${String(image.stage_label || "현장 이미지")} · ${String(image.filename || "-")}`)}</span>`).join("")}</div>` : '<p>매칭된 이미지 없음</p>',
-          Array.isArray(row.attachments) && row.attachments.length ? `<div class="work-report-chip-list">${row.attachments.map((file) => `<span>${escapeHtml(`파일 · ${String(file.filename || "-")}`)}</span>`).join("")}</div>` : "",
+          `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 작업자: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
+          `<p>${escapeHtml(`내용설명 : ${String(row.summary || row.title || "-")}`)}</p>`,
+          Array.isArray(row.images) && row.images.length ? `<div class="work-report-image-select-list">${row.images.map((image, imageIndex) => {
+            const checked = image && image.include_in_output !== false ? " checked" : "";
+            return [
+              '<label class="work-report-image-select">',
+              `<input class="work-report-output-check" type="checkbox" data-item-index="${Number(row.index || 0)}" data-image-index="${imageIndex}"${checked}>`,
+              `<span>${escapeHtml(`${String(image.stage_label || "현장 이미지")} · ${String(image.filename || "-")}`)}</span>`,
+              '</label>',
+            ].join("");
+          }).join("")}</div>` : '<p>매칭된 이미지 없음</p>',
           "</article>",
         ].join("")).join("")}</div>`
       );
@@ -4009,20 +4018,18 @@
         `<div class="work-report-match-list">${textOnlyItems.map((row, index) => [
           '<article class="work-report-match-card">',
           `<strong>${escapeHtml(`${index + 1}. ${String(row.title || "-")}`)}</strong>`,
-          `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 업체: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
-          row.summary && String(row.summary || "").trim() !== String(row.title || "").trim() ? `<p>${escapeHtml(String(row.summary || ""))}</p>` : "",
-          Array.isArray(row.attachments) && row.attachments.length ? `<div class="work-report-chip-list">${row.attachments.map((file) => `<span>${escapeHtml(`파일 · ${String(file.filename || "-")}`)}</span>`).join("")}</div>` : "",
+          `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 작업자: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
+          `<p>${escapeHtml(`내용설명 : ${String(row.summary || row.title || "-")}`)}</p>`,
           "</article>",
         ].join("")).join("")}</div>`
       );
     }
-    if (unmatchedImages.length || unmatchedAttachments.length) {
+    if (unmatchedImages.length) {
       sections.push("<div class=\"subhead\">미매칭 자료</div>");
       sections.push(
         `<div class="work-report-chip-list">${
           [
             ...unmatchedImages.map((row) => `<span>${escapeHtml(`이미지 · ${String(row.filename || "-")}`)}</span>`),
-            ...unmatchedAttachments.map((row) => `<span>${escapeHtml(`파일 · ${String(row.filename || "-")}`)}</span>`),
           ].join("")
         }</div>`
       );
@@ -4036,6 +4043,34 @@
 
   function invalidateWorkReportCache() {
     lastWorkReportResult = null;
+  }
+
+  function cloneWorkReportForPdf(report) {
+    const cloned = JSON.parse(JSON.stringify(report || {}));
+    const items = Array.isArray(cloned.items) ? cloned.items : [];
+    cloned.items = items.map((row) => ({
+      ...row,
+      images: Array.isArray(row.images) ? row.images.filter((image) => !image || image.include_in_output !== false) : [],
+      attachments: [],
+    }));
+    cloned.image_items = cloned.items.filter((row) => Array.isArray(row.images) && row.images.length);
+    cloned.text_only_items = cloned.items.filter((row) => !Array.isArray(row.images) || !row.images.length);
+    cloned.image_item_count = cloned.image_items.length;
+    cloned.text_only_item_count = cloned.text_only_items.length;
+    return cloned;
+  }
+
+  function handleWorkReportImageOutputToggle(event) {
+    const target = event?.target;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains("work-report-output-check")) return;
+    if (!lastWorkReportResult || !Array.isArray(lastWorkReportResult.items)) return;
+    const itemIndex = Number(target.getAttribute("data-item-index") || -1);
+    const imageIndex = Number(target.getAttribute("data-image-index") || -1);
+    const item = lastWorkReportResult.items.find((row) => Number(row?.index || 0) === itemIndex);
+    if (!item || !Array.isArray(item.images) || !item.images[imageIndex]) return;
+    item.images[imageIndex].include_in_output = !!target.checked;
+    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
+    setMessage("#intakeMsg", "미리보기에서 선택한 사진만 PDF에 출력됩니다.");
   }
 
   function workReportFormData(options = {}) {
@@ -4060,7 +4095,7 @@
       fd.append("sample_file", sampleFile, sampleFile.name || "sample");
     }
     if (includeCachedReport && lastWorkReportResult) {
-      fd.append("report_json", JSON.stringify(lastWorkReportResult));
+      fd.append("report_json", JSON.stringify(cloneWorkReportForPdf(lastWorkReportResult)));
     }
     return fd;
   }
@@ -4153,6 +4188,9 @@
   }
 
   async function downloadWorkReportPdf() {
+    if (!lastWorkReportResult) {
+      throw new Error("먼저 미리보기를 생성한 뒤, 미리보기에서 출력할 사진을 선택해 주세요.");
+    }
     const progress = startWorkReportProgress("pdf");
     try {
       const response = await authFetchBlob("/api/ai/work_report/pdf", {
@@ -4465,6 +4503,7 @@
     $("#btnPreviewDigestSource")?.addEventListener("click", () => previewChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDownloadDigestSource")?.addEventListener("click", () => downloadChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnPasteDigestImage")?.addEventListener("click", () => importClipboardImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
+    $("#workReportBox")?.addEventListener("change", handleWorkReportImageOutputToggle);
     $("#btnAnalyzeWorkReport")?.addEventListener("click", () => analyzeWorkReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnWorkReportPdf")?.addEventListener("click", () => downloadWorkReportPdf().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnLoadFacilityDashboard")?.addEventListener("click", () => loadFacilityDashboard().catch((error) => setMessage("#facilityAssetMsg", error.message || String(error), true)));

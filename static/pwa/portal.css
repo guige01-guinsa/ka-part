@@ -1033,6 +1033,36 @@ body {
   line-height: 1.5;
 }
 
+.work-report-image-select-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.work-report-image-select {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.82);
+  min-width: 0;
+}
+
+.work-report-image-select input {
+  margin-top: 2px;
+}
+
+.work-report-image-select span {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .work-report-advanced {
   margin-top: 14px;
 }
