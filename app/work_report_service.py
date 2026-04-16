@@ -52,6 +52,10 @@ WORK_REPORT_OPENAI_IMAGE_QUALITY = 82
 WORK_REPORT_OPENAI_CLUSTER_GAP_SECONDS = 180
 WORK_REPORT_OPENAI_CLUSTER_CONTEXT_MINUTES = 12
 DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 120.0
+DEFAULT_WORK_REPORT_OPENAI_IMAGE_MATCH_TIMEOUT_SEC = 45.0
+WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES = 12
+WORK_REPORT_OPENAI_IMAGE_MATCH_MAX_CLUSTERS = 4
+WORK_REPORT_OPENAI_IMAGE_MATCH_SAMPLE_PER_CLUSTER = 2
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
     ".hwp",
@@ -88,6 +92,13 @@ def _float_env(name: str, default: float) -> float:
         return max(1.0, float(str(os.getenv(name) or "").strip() or default))
     except Exception:
         return float(default)
+
+
+def _int_env(name: str, default: int, *, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(str(os.getenv(name) or "").strip() or default))
+    except Exception:
+        return int(default)
 
 
 def _str_env(name: str, default: str = "") -> str:
@@ -789,6 +800,43 @@ def _select_openai_visual_meta(image_inputs: Sequence[Dict[str, Any]], limit: in
     return [row for row in meta_rows if int(row.get("index") or 0) in selected_lookup]
 
 
+def _chunk_rows(rows: Sequence[Any], chunk_size: int) -> List[List[Any]]:
+    values = list(rows or [])
+    size = max(1, int(chunk_size or 1))
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def _sample_cluster_rows(cluster: Sequence[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    rows = list(cluster or [])
+    if not rows or limit <= 0:
+        return []
+    lookup = {int(row.get("index") or 0): row for row in rows if int(row.get("index") or 0) > 0}
+    sampled_indexes = _sample_cluster_indexes(rows)
+    sampled_rows = [lookup[index] for index in sampled_indexes if index in lookup]
+    if not sampled_rows:
+        sampled_rows = rows[:limit]
+    selected: List[Dict[str, Any]] = []
+    seen_indexes: set[int] = set()
+    for row in sampled_rows:
+        image_index = int(row.get("index") or 0)
+        if image_index <= 0 or image_index in seen_indexes:
+            continue
+        seen_indexes.add(image_index)
+        selected.append(row)
+        if len(selected) >= limit:
+            break
+    if len(selected) < min(limit, len(rows)):
+        for row in rows:
+            image_index = int(row.get("index") or 0)
+            if image_index <= 0 or image_index in seen_indexes:
+                continue
+            seen_indexes.add(image_index)
+            selected.append(row)
+            if len(selected) >= limit:
+                break
+    return selected
+
+
 def _openai_cluster_lines(entries: Sequence[Dict[str, Any]]) -> List[str]:
     rows = list(entries or [])
     if not rows:
@@ -928,6 +976,20 @@ def _match_score(item: Dict[str, Any], entry: Dict[str, Any]) -> int:
     if vendor and vendor in _collapse(entry.get("filename") or ""):
         score += 2
     return score
+
+
+def _best_item_index_for_cluster(items: Sequence[Dict[str, Any]], cluster: Sequence[Dict[str, Any]]) -> int:
+    best_item_index = 0
+    best_score = 0
+    for item in list(items or []):
+        item_index = int(item.get("index") or 0)
+        if item_index <= 0:
+            continue
+        score = sum(_match_score(item, row) for row in list(cluster or []))
+        if score > best_score:
+            best_score = score
+            best_item_index = item_index
+    return best_item_index if best_score > 0 else 0
 
 
 def _chunk_assign(entries: List[Dict[str, Any]], items: List[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
@@ -1202,6 +1264,47 @@ def _finalize_image_stages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return ordered
 
 
+def _openai_item_summary_lines(items: Sequence[Dict[str, Any]]) -> List[str]:
+    lines: List[str] = []
+    for item in list(items or []):
+        item_index = int(item.get("index") or 0)
+        if item_index <= 0:
+            continue
+        lines.append(
+            " / ".join(
+                [
+                    f"[T{item_index}] {item.get('title') or '-'}",
+                    f"일자 {_collapse(item.get('work_date_label') or item.get('work_date') or '-')}",
+                    f"위치 {_collapse(item.get('location_name') or '-')}",
+                    f"업체 {_collapse(item.get('vendor_name') or '-')}",
+                    f"요약 {_collapse(item.get('summary') or item.get('title') or '-')[:120]}",
+                ]
+            )
+        )
+    return lines
+
+
+def _apply_image_matches_to_items(
+    items: Sequence[Dict[str, Any]],
+    assigned_rows: Dict[int, List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    normalized_items: List[Dict[str, Any]] = []
+    for item in list(items or []):
+        clone = dict(item)
+        image_rows: List[Dict[str, Any]] = []
+        for row in assigned_rows.get(int(clone.get("index") or 0), []):
+            image_rows.append(
+                {
+                    "index": int(row.get("index") or 0),
+                    "filename": _collapse(row.get("filename") or ""),
+                    "stage": _collapse(row.get("stage") or row.get("stage_hint") or ""),
+                }
+            )
+        clone["images"] = _finalize_image_stages(image_rows)
+        normalized_items.append(clone)
+    return normalized_items
+
+
 def _build_text_summary(report_title: str, period_label: str, items: List[Dict[str, Any]], unmatched_images: List[Dict[str, Any]], unmatched_attachments: List[Dict[str, Any]], analysis_notice: str) -> str:
     image_items = [item for item in items if item.get("images")]
     text_only_items = [item for item in items if not item.get("images")]
@@ -1236,6 +1339,39 @@ def _build_text_summary(report_title: str, period_label: str, items: List[Dict[s
     append_items("[사진 포함 작업]", image_items)
     append_items("[텍스트 전용 작업]", text_only_items)
     return "\n".join(lines)
+
+
+def _openai_json_response(
+    *,
+    client: Any,
+    model: str,
+    content: Sequence[Dict[str, Any]],
+    timeout_sec: float,
+    reasoning_effort: str = "",
+) -> Dict[str, Any] | None:
+    request_kwargs: Dict[str, Any] = {
+        "model": model,
+        "input": [{"role": "user", "content": list(content or [])}],
+        "timeout": timeout_sec,
+    }
+    if reasoning_effort and model.startswith("gpt-5"):
+        request_kwargs["reasoning"] = {"effort": reasoning_effort}
+    try:
+        try:
+            response = client.responses.create(**request_kwargs)
+        except Exception as exc:
+            if request_kwargs.get("reasoning") and "Unsupported parameter" in str(exc):
+                request_kwargs.pop("reasoning", None)
+                response = client.responses.create(**request_kwargs)
+            else:
+                raise
+        raw = _extract_json_text(getattr(response, "output_text", "") or "")
+        if not raw:
+            return None
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 def _optimized_openai_image_bytes(entry: Dict[str, Any]) -> Tuple[str, bytes]:
@@ -1413,28 +1549,16 @@ def _openai_work_report(
             preview = _collapse(item.get("preview_text") or "")
             attachment_text.append(f"[A{index}] {item.get('filename')} / {preview or '본문 미리보기 없음'}")
         content.append({"type": "input_text", "text": "\n".join(attachment_text)})
-    try:
-        request_kwargs: Dict[str, Any] = {
-            "model": model,
-            "input": [{"role": "user", "content": content}],
-            "timeout": timeout_sec,
-        }
-        if reasoning_effort and model.startswith("gpt-5"):
-            request_kwargs["reasoning"] = {"effort": reasoning_effort}
-        try:
-            response = client.responses.create(**request_kwargs)
-        except Exception as exc:
-            if request_kwargs.get("reasoning") and "Unsupported parameter" in str(exc):
-                request_kwargs.pop("reasoning", None)
-                response = client.responses.create(**request_kwargs)
-            else:
-                raise
-        raw = _extract_json_text(getattr(response, "output_text", "") or "")
-        if not raw:
-            return None
-        data = _normalize_ai_work_report_payload(json.loads(raw))
-    except Exception:
+    raw_data = _openai_json_response(
+        client=client,
+        model=model,
+        content=content,
+        timeout_sec=timeout_sec,
+        reasoning_effort=reasoning_effort,
+    )
+    if not raw_data:
         return None
+    data = _normalize_ai_work_report_payload(raw_data)
     if visual_meta and len(visual_meta) < len(image_inputs):
         representative_notice = (
             f"AI가 대표 이미지 {len(visual_meta)}장과 촬영 군집 정보를 직접 검토하고, "
@@ -1517,6 +1641,172 @@ def _openai_work_report(
     }
 
 
+def _openai_match_image_chunks(
+    *,
+    text: str,
+    image_inputs: Sequence[Dict[str, Any]],
+    items: Sequence[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    client, model = _openai_client(default_model="gpt-5.4", env_name="WORK_REPORT_OPENAI_MODEL")
+    if not client or not image_inputs or not items:
+        return None
+    timeout_sec = _float_env("WORK_REPORT_OPENAI_IMAGE_MATCH_TIMEOUT_SEC", DEFAULT_WORK_REPORT_OPENAI_IMAGE_MATCH_TIMEOUT_SEC)
+    client = client.with_options(timeout=timeout_sec, max_retries=0)
+    reasoning_effort = _str_env("WORK_REPORT_OPENAI_REASONING_EFFORT", "medium" if model.startswith("gpt-5") else "")
+    max_clusters = _int_env("WORK_REPORT_OPENAI_IMAGE_MATCH_MAX_CLUSTERS", WORK_REPORT_OPENAI_IMAGE_MATCH_MAX_CLUSTERS, minimum=1)
+    sample_per_cluster = _int_env(
+        "WORK_REPORT_OPENAI_IMAGE_MATCH_SAMPLE_PER_CLUSTER",
+        WORK_REPORT_OPENAI_IMAGE_MATCH_SAMPLE_PER_CLUSTER,
+        minimum=1,
+    )
+    image_lookup = {index: row for index, row in enumerate(list(image_inputs or []), start=1)}
+    image_meta_rows = [_openai_image_meta(index, row) for index, row in image_lookup.items()]
+    clusters = _cluster_openai_image_meta(image_meta_rows)
+    if not clusters:
+        return None
+
+    item_lines = _openai_item_summary_lines(items)
+    assigned_rows: Dict[int, List[Dict[str, Any]]] = {int(item.get("index") or 0): [] for item in items if int(item.get("index") or 0) > 0}
+    unmatched_image_indexes: set[int] = set()
+    analysis_notes: List[str] = []
+
+    prompt = """
+너는 이미 추출된 시설팀 작업 항목에 현장 사진 군집을 매칭하는 도우미다.
+작업 항목 목록은 이미 확정되었다. 새 작업 항목을 만들지 말고, 각 사진 군집(Cn)을 가장 알맞은 작업 항목(Tn) 하나에만 매칭하거나 unmatched로 남겨라.
+반드시 JSON으로만 답한다.
+
+출력 형식:
+{
+  "cluster_matches": [
+    {"cluster_index": 1, "item_index": 2, "confidence": "high"}
+  ],
+  "unmatched_cluster_indexes": [3],
+  "analysis_notice": ""
+}
+
+규칙:
+- cluster_index와 item_index는 제공된 번호만 사용한다.
+- 하나의 군집은 하나의 작업 항목에만 매칭한다.
+- 확신이 낮으면 unmatched_cluster_indexes로 남긴다.
+- 실제 이미지 내용, 파일명의 촬영시각, 같은 시각대 연속 촬영 여부, 근접 대화 후보를 함께 본다.
+- 비슷한 작업명이 여러 개면 동/위치/사물 종류가 더 구체적으로 맞는 항목을 우선한다.
+- 매칭이 약한데 억지로 붙이지 말고 unmatched로 둔다.
+""".strip()
+
+    for batch_number, batch_clusters in enumerate(_chunk_rows(clusters, max_clusters), start=1):
+        content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+        content.append({"type": "input_text", "text": "작업 항목 목록:\n" + "\n".join(item_lines)})
+
+        cluster_lines: List[str] = []
+        for local_index, cluster in enumerate(batch_clusters, start=1):
+            indexes = [f"I{int(row.get('index') or 0)}" for row in cluster if int(row.get("index") or 0) > 0]
+            if not indexes:
+                continue
+            file_names = ", ".join(str(row.get("filename") or "") for row in cluster[:4])
+            time_line = _openai_cluster_lines(cluster)
+            nearby_line = _openai_cluster_context_lines(cluster, text)
+            cluster_parts = [f"[C{local_index}] 전체 이미지 {', '.join(indexes)}", f"파일 {file_names or '-'}"]
+            if time_line:
+                cluster_parts.append(re.sub(r"^- C1:\s*", "", str(time_line[0])))
+            if nearby_line:
+                cluster_parts.append("근접 대화 " + re.sub(r"^- C1:\s*", "", str(nearby_line[0])))
+            cluster_lines.append(" / ".join(part for part in cluster_parts if part))
+        if cluster_lines:
+            content.append({"type": "input_text", "text": "이번 배치 사진 군집:\n" + "\n".join(cluster_lines)})
+
+        for local_index, cluster in enumerate(batch_clusters, start=1):
+            for sample_order, row in enumerate(_sample_cluster_rows(cluster, sample_per_cluster), start=1):
+                image_index = int(row.get("index") or 0)
+                if image_index <= 0:
+                    continue
+                source = image_lookup.get(image_index)
+                if not source:
+                    continue
+                content.append(
+                    {
+                        "type": "input_text",
+                        "text": (
+                            f"대표 이미지 C{local_index}-{sample_order} / global I{image_index} / "
+                            f"{source.get('filename') or f'image-{image_index}'} / "
+                            f"파일단계힌트 {_collapse(row.get('stage_hint') or '-')}"
+                        ),
+                    }
+                )
+                data_url = _openai_image_url(source)
+                if data_url:
+                    content.append({"type": "input_image", "image_url": data_url})
+
+        raw_data = _openai_json_response(
+            client=client,
+            model=model,
+            content=content,
+            timeout_sec=timeout_sec,
+            reasoning_effort=reasoning_effort,
+        )
+
+        matched_local_indexes: set[int] = set()
+        unmatched_local_indexes: set[int] = set()
+        if isinstance(raw_data, dict):
+            for row in raw_data.get("cluster_matches") or []:
+                if not isinstance(row, dict):
+                    continue
+                local_index = int(row.get("cluster_index") or 0)
+                item_index = int(row.get("item_index") or 0)
+                if local_index <= 0 or local_index > len(batch_clusters) or local_index in matched_local_indexes:
+                    continue
+                if item_index not in assigned_rows:
+                    continue
+                cluster = batch_clusters[local_index - 1]
+                for cluster_row in cluster:
+                    assigned_rows[item_index].append(dict(cluster_row))
+                matched_local_indexes.add(local_index)
+            unmatched_local_indexes = {
+                int(value)
+                for value in raw_data.get("unmatched_cluster_indexes") or []
+                if str(value).isdigit() and 0 < int(value) <= len(batch_clusters)
+            }
+            notice = _collapse(raw_data.get("analysis_notice") or "")
+            if notice:
+                analysis_notes.append(notice)
+        else:
+            analysis_notes.append(f"이미지 배치 {batch_number}건은 AI 응답이 불안정해 보수적으로 재배치했습니다.")
+
+        pending_local_indexes = set(range(1, len(batch_clusters) + 1)) - matched_local_indexes - unmatched_local_indexes
+        if pending_local_indexes:
+            for local_index in sorted(pending_local_indexes):
+                cluster = batch_clusters[local_index - 1]
+                fallback_item_index = _best_item_index_for_cluster(items, cluster)
+                if fallback_item_index and fallback_item_index in assigned_rows:
+                    for cluster_row in cluster:
+                        assigned_rows[fallback_item_index].append(dict(cluster_row))
+                else:
+                    unmatched_local_indexes.add(local_index)
+            if raw_data is None:
+                analysis_notes.append(f"이미지 배치 {batch_number}의 남은 군집은 파일명/문맥 점수로만 보수 매칭했습니다.")
+        for local_index in unmatched_local_indexes:
+            for cluster_row in batch_clusters[local_index - 1]:
+                image_index = int(cluster_row.get("index") or 0)
+                if image_index > 0:
+                    unmatched_image_indexes.add(image_index)
+
+    assigned_indexes = {
+        int(row.get("index") or 0)
+        for rows in assigned_rows.values()
+        for row in rows
+        if int(row.get("index") or 0) > 0
+    }
+    for image_index in range(1, len(image_inputs) + 1):
+        if image_index not in assigned_indexes and image_index not in unmatched_image_indexes:
+            unmatched_image_indexes.add(image_index)
+
+    return {
+        "items": _apply_image_matches_to_items(items, assigned_rows),
+        "unmatched_image_indexes": sorted(unmatched_image_indexes),
+        "analysis_notice": _collapse(" ".join(note for note in analysis_notes if _collapse(note))),
+        "analysis_model": model,
+    }
+
+
 def analyze_work_report(
     text: str,
     *,
@@ -1532,13 +1822,83 @@ def analyze_work_report(
     if not _collapse(normalized_text) and not images and not attachments:
         raise ValueError("text, image, or attachment is required")
 
-    ai_result = _openai_work_report(
-        text=normalized_text,
-        image_inputs=images,
-        attachment_inputs=attachments,
-        sample_title=sample_title,
-        sample_lines=sample_lines,
+    chunk_trigger_images = _int_env(
+        "WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES",
+        WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES,
+        minimum=1,
     )
+    use_chunked_image_matching = bool(images) and len(images) >= chunk_trigger_images
+
+    ai_result: Dict[str, Any] | None = None
+    if use_chunked_image_matching:
+        base_ai_result = _openai_work_report(
+            text=normalized_text,
+            image_inputs=[],
+            attachment_inputs=attachments,
+            sample_title=sample_title,
+            sample_lines=sample_lines,
+        )
+        if base_ai_result:
+            chunked_images = _openai_match_image_chunks(
+                text=normalized_text,
+                image_inputs=images,
+                items=list(base_ai_result.get("items") or []),
+            )
+            if chunked_images:
+                merged_notice = "대량 이미지는 군집 단위로 나눠 AI가 단계적으로 매칭했습니다."
+                chunk_notice = _collapse(chunked_images.get("analysis_notice") or "")
+                analysis_notice = merged_notice if not chunk_notice else f"{merged_notice} {chunk_notice}"
+                ai_result = {
+                    "report_title": _collapse(base_ai_result.get("report_title") or ""),
+                    "period_label": _collapse(base_ai_result.get("period_label") or ""),
+                    "items": list(chunked_images.get("items") or []),
+                    "unmatched_image_indexes": list(chunked_images.get("unmatched_image_indexes") or []),
+                    "unmatched_attachment_indexes": list(base_ai_result.get("unmatched_attachment_indexes") or []),
+                    "analysis_notice": analysis_notice,
+                    "analysis_model": _collapse(chunked_images.get("analysis_model") or base_ai_result.get("analysis_model") or "gpt-5.4"),
+                }
+            else:
+                ai_result = base_ai_result
+                ai_result["unmatched_image_indexes"] = list(range(1, len(images) + 1))
+                fallback_notice = "대량 이미지 AI 매칭이 불안정해 이미지는 미매칭 상태로 유지했습니다."
+                current_notice = _collapse(ai_result.get("analysis_notice") or "")
+                ai_result["analysis_notice"] = fallback_notice if not current_notice else f"{current_notice} {fallback_notice}"
+
+    if not ai_result:
+        ai_result = _openai_work_report(
+            text=normalized_text,
+            image_inputs=images,
+            attachment_inputs=attachments,
+            sample_title=sample_title,
+            sample_lines=sample_lines,
+        )
+    if not ai_result and images:
+        base_ai_result = _openai_work_report(
+            text=normalized_text,
+            image_inputs=[],
+            attachment_inputs=attachments,
+            sample_title=sample_title,
+            sample_lines=sample_lines,
+        )
+        if base_ai_result:
+            chunked_images = _openai_match_image_chunks(
+                text=normalized_text,
+                image_inputs=images,
+                items=list(base_ai_result.get("items") or []),
+            )
+            if chunked_images:
+                merged_notice = "기본 통합 분석이 지연되어 이미지 매칭을 군집 배치로 다시 수행했습니다."
+                chunk_notice = _collapse(chunked_images.get("analysis_notice") or "")
+                analysis_notice = merged_notice if not chunk_notice else f"{merged_notice} {chunk_notice}"
+                ai_result = {
+                    "report_title": _collapse(base_ai_result.get("report_title") or ""),
+                    "period_label": _collapse(base_ai_result.get("period_label") or ""),
+                    "items": list(chunked_images.get("items") or []),
+                    "unmatched_image_indexes": list(chunked_images.get("unmatched_image_indexes") or []),
+                    "unmatched_attachment_indexes": list(base_ai_result.get("unmatched_attachment_indexes") or []),
+                    "analysis_notice": analysis_notice,
+                    "analysis_model": _collapse(chunked_images.get("analysis_model") or base_ai_result.get("analysis_model") or "gpt-5.4"),
+                }
     if ai_result:
         items = list(ai_result.get("items") or [])
         unmatched_image_indexes = list(ai_result.get("unmatched_image_indexes") or [])

@@ -633,6 +633,75 @@ def test_work_report_visual_sampling_limits_large_cluster_batches() -> None:
     ]
 
 
+def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatch) -> None:
+    import app.work_report_service as service
+
+    openai_calls: list[int] = []
+
+    def _fake_openai_work_report(*, text, image_inputs, attachment_inputs, sample_title, sample_lines):
+        openai_calls.append(len(list(image_inputs or [])))
+        return {
+            "report_title": "시설팀 주요 업무 보고",
+            "period_label": "4월 15일",
+            "items": [
+                {
+                    "index": 1,
+                    "title": "커뮤니티 유리 깨짐 교체 작업",
+                    "work_date": "2026-04-15",
+                    "work_date_label": "4월 15일",
+                    "vendor_name": "",
+                    "location_name": "커뮤니티",
+                    "summary": "커뮤니티 유리 깨짐 교체 작업",
+                    "confidence": "high",
+                    "images": [],
+                    "attachments": [],
+                }
+            ],
+            "unmatched_image_indexes": [],
+            "unmatched_attachment_indexes": [],
+            "analysis_notice": "",
+            "analysis_model": "gpt-5.4",
+        }
+
+    def _fake_openai_match_image_chunks(*, text, image_inputs, items):
+        assert len(list(image_inputs or [])) == 13
+        return {
+            "items": [
+                {
+                    **dict(items[0]),
+                    "images": [
+                        {"index": 1, "filename": "KakaoTalk_20260415_093628492.jpg", "stage": "before", "stage_label": "작업 전"},
+                        {"index": 2, "filename": "KakaoTalk_20260415_093628492_05.jpg", "stage": "after", "stage_label": "작업 후"},
+                    ],
+                }
+            ],
+            "unmatched_image_indexes": [3],
+            "analysis_notice": "군집 1건은 unmatched로 남겼습니다.",
+            "analysis_model": "gpt-5.4",
+        }
+
+    monkeypatch.setattr(service, "_openai_work_report", _fake_openai_work_report)
+    monkeypatch.setattr(service, "_openai_match_image_chunks", _fake_openai_match_image_chunks)
+
+    image_inputs = [
+        {"filename": f"KakaoTalk_20260415_093628492_{index:02d}.jpg", "bytes": b"fake-image", "content_type": "image/jpeg"}
+        for index in range(13)
+    ]
+    result = service.analyze_work_report(
+        "2026년 4월 15일 오전 9:21, 관리실 : 커뮤니티 유리 깨짐 교체 작업 시작한다고 함.",
+        image_inputs=image_inputs,
+    )
+
+    assert openai_calls == [0]
+    assert result["analysis_model"] == "gpt-5.4"
+    assert result["item_count"] == 1
+    assert len(result["items"][0]["images"]) == 2
+    assert result["items"][0]["images"][0]["stage"] == "before"
+    assert result["items"][0]["images"][1]["stage"] == "after"
+    assert len(result["unmatched_images"]) == 1
+    assert "단계적으로 매칭" in str(result["analysis_notice"])
+
+
 def test_work_report_pdf_supports_sample_and_uploads(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)
