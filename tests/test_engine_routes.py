@@ -703,6 +703,51 @@ def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatc
     assert "단계적으로 매칭" in str(result["analysis_notice"])
 
 
+def test_work_report_cluster_candidate_lines_prioritize_nearby_location_match() -> None:
+    from app.work_report_service import _cluster_item_candidate_lines
+
+    cluster = [
+        {
+            "index": 1,
+            "filename": "KakaoTalk_20260415_093628492.jpg",
+            "date": "2026-04-15",
+            "minute_of_day": 561,
+            "second_of_day": 33660,
+            "stage_hint": "",
+        }
+    ]
+    items = [
+        {
+            "index": 1,
+            "title": "107동 천장 센서등 교체",
+            "summary": "107동 복도 천장 센서등 교체 진행",
+            "location_name": "107동 복도",
+            "vendor_name": "",
+            "work_date": "2026-04-15",
+            "work_date_label": "4월 15일",
+        },
+        {
+            "index": 2,
+            "title": "109동 음식물처리기 키패드 AS 접수",
+            "summary": "109동 음식물처리기 키패드 이상 접수",
+            "location_name": "109동 음식물처리기",
+            "vendor_name": "",
+            "work_date": "2026-04-15",
+            "work_date_label": "4월 15일",
+        },
+    ]
+    work_events = [
+        {"index": 1, "date": "2026-04-15", "minute_of_day": 560, "text": "107동 천장 센서등 교체"},
+        {"index": 2, "date": "2026-04-15", "minute_of_day": 700, "text": "109동 음식물처리기 키패드 AS 접수"},
+    ]
+
+    lines = _cluster_item_candidate_lines(cluster, items, work_events)
+
+    assert lines
+    assert lines[0].startswith("T1 107동 천장 센서등 교체")
+    assert "위치 107동 복도" in lines[0]
+
+
 def test_work_report_pdf_output_items_respect_selected_images() -> None:
     from app.report_pdf import _work_report_output_items
 

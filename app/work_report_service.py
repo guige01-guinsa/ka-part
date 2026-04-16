@@ -46,7 +46,7 @@ WORK_REPORT_STAGE_HINTS = {
 }
 MAX_WORK_REPORT_IMAGES = 100
 MAX_WORK_REPORT_ATTACHMENTS = 30
-MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES = 8
+MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES = 10
 WORK_REPORT_OPENAI_IMAGE_MAX_DIM = 1024
 WORK_REPORT_OPENAI_IMAGE_QUALITY = 82
 WORK_REPORT_OPENAI_CLUSTER_GAP_SECONDS = 180
@@ -55,7 +55,7 @@ DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 120.0
 DEFAULT_WORK_REPORT_OPENAI_IMAGE_MATCH_TIMEOUT_SEC = 45.0
 WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES = 12
 WORK_REPORT_OPENAI_IMAGE_MATCH_MAX_CLUSTERS = 4
-WORK_REPORT_OPENAI_IMAGE_MATCH_SAMPLE_PER_CLUSTER = 2
+WORK_REPORT_OPENAI_IMAGE_MATCH_SAMPLE_PER_CLUSTER = 3
 MAX_WORK_REPORT_OPENAI_REFERENCE_IMAGES = 6
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
@@ -865,46 +865,61 @@ def _openai_cluster_lines(entries: Sequence[Dict[str, Any]]) -> List[str]:
     return result
 
 
-def _openai_cluster_context_lines(entries: Sequence[Dict[str, Any]], text: str) -> List[str]:
-    rows = list(entries or [])
-    if not rows or not _collapse(text):
+def _work_report_events(text: str) -> List[Dict[str, Any]]:
+    if not _collapse(text):
         return []
-    work_events = [
+    return [
         event
         for event in _parse_kakao_events(text)
         if _looks_like_work_item(_collapse(event.get("text") or ""))
     ]
+
+
+def _cluster_nearby_events(
+    cluster: Sequence[Dict[str, Any]],
+    work_events: Sequence[Dict[str, Any]],
+) -> List[Tuple[int, Dict[str, Any]]]:
+    rows = list(cluster or [])
+    events = list(work_events or [])
+    if not rows or not events:
+        return []
+    cluster_date = _collapse(rows[0].get("date") or "")
+    cluster_minutes = [int(row.get("minute_of_day") or -1) for row in rows if int(row.get("minute_of_day") or -1) >= 0]
+    center_minute = round(sum(cluster_minutes) / len(cluster_minutes)) if cluster_minutes else -1
+    nearby: List[Tuple[int, Dict[str, Any]]] = []
+    for event in events:
+        event_date = _collapse(event.get("date") or "")
+        event_minute = int(event.get("minute_of_day") or -1)
+        if cluster_date and event_date and cluster_date != event_date:
+            continue
+        if center_minute >= 0 and event_minute >= 0:
+            gap = abs(event_minute - center_minute)
+            if gap > WORK_REPORT_OPENAI_CLUSTER_CONTEXT_MINUTES:
+                continue
+        else:
+            gap = 999
+        nearby.append((gap, event))
+    if not nearby and cluster_date:
+        for event in events:
+            if _collapse(event.get("date") or "") != cluster_date:
+                continue
+            event_minute = int(event.get("minute_of_day") or -1)
+            gap = abs(event_minute - center_minute) if center_minute >= 0 and event_minute >= 0 else 999
+            nearby.append((gap, event))
+    nearby.sort(key=lambda row: (int(row[0]), int(row[1].get("index") or 0)))
+    return nearby
+
+
+def _openai_cluster_context_lines(entries: Sequence[Dict[str, Any]], text: str) -> List[str]:
+    rows = list(entries or [])
+    if not rows or not _collapse(text):
+        return []
+    work_events = _work_report_events(text)
     if not work_events:
         return []
     result: List[str] = []
     for cluster_index, cluster in enumerate(_cluster_openai_image_meta(rows), start=1):
-        cluster_date = _collapse(cluster[0].get("date") or "")
-        cluster_minutes = [int(row.get("minute_of_day") or -1) for row in cluster if int(row.get("minute_of_day") or -1) >= 0]
-        if cluster_minutes:
-            center_minute = round(sum(cluster_minutes) / len(cluster_minutes))
-        else:
-            center_minute = -1
-        nearby: List[Tuple[int, Dict[str, Any]]] = []
-        for event in work_events:
-            event_date = _collapse(event.get("date") or "")
-            event_minute = int(event.get("minute_of_day") or -1)
-            if cluster_date and event_date and cluster_date != event_date:
-                continue
-            if center_minute >= 0 and event_minute >= 0:
-                gap = abs(event_minute - center_minute)
-                if gap > WORK_REPORT_OPENAI_CLUSTER_CONTEXT_MINUTES:
-                    continue
-            else:
-                gap = 999
-            nearby.append((gap, event))
-        if not nearby and cluster_date:
-            for event in work_events:
-                if _collapse(event.get("date") or "") != cluster_date:
-                    continue
-                event_minute = int(event.get("minute_of_day") or -1)
-                gap = abs(event_minute - center_minute) if center_minute >= 0 and event_minute >= 0 else 999
-                nearby.append((gap, event))
-        nearby.sort(key=lambda row: (int(row[0]), int(row[1].get("index") or 0)))
+        nearby = _cluster_nearby_events(cluster, work_events)
         if not nearby:
             continue
         snippets: List[str] = []
@@ -925,6 +940,41 @@ def _openai_cluster_context_lines(entries: Sequence[Dict[str, Any]], text: str) 
         if snippets:
             result.append(f"- C{cluster_index}: " + " / ".join(snippets))
     return result
+
+
+def _item_hint_keywords(item: Dict[str, Any], *, limit: int = 6) -> List[str]:
+    stop_words = set(WORK_REPORT_ACTION_KEYWORDS) | {
+        "작업",
+        "민원",
+        "사항",
+        "요청",
+        "접수",
+        "완료",
+        "예정",
+        "관리실",
+        "시설",
+        "업체",
+        "현장",
+        "사진",
+        "이미지",
+    }
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for field in (
+        item.get("title"),
+        item.get("location_name"),
+        item.get("summary"),
+        item.get("vendor_name"),
+    ):
+        for token in _tokenize(field):
+            clean = _collapse(token).lower()
+            if len(clean) < 2 or clean in stop_words or clean in seen:
+                continue
+            seen.add(clean)
+            ordered.append(clean)
+            if len(ordered) >= limit:
+                return ordered
+    return ordered
 
 
 def _item_tokens(item: Dict[str, Any]) -> set[str]:
@@ -991,6 +1041,49 @@ def _best_item_index_for_cluster(items: Sequence[Dict[str, Any]], cluster: Seque
             best_score = score
             best_item_index = item_index
     return best_item_index if best_score > 0 else 0
+
+
+def _cluster_item_candidate_lines(
+    cluster: Sequence[Dict[str, Any]],
+    items: Sequence[Dict[str, Any]],
+    work_events: Sequence[Dict[str, Any]],
+    *,
+    limit: int = 3,
+) -> List[str]:
+    nearby = _cluster_nearby_events(cluster, work_events)[:4]
+    ranked: List[Tuple[int, int, str, str, List[str]]] = []
+    for item in list(items or []):
+        item_index = int(item.get("index") or 0)
+        if item_index <= 0:
+            continue
+        title = _collapse(item.get("title") or "")
+        location = _collapse(item.get("location_name") or "")
+        keywords = _item_hint_keywords(item, limit=5)
+        score = sum(_match_score(item, row) for row in list(cluster or []))
+        for _, event in nearby:
+            event_text = _collapse(event.get("text") or "")
+            if not event_text:
+                continue
+            if _titles_match(title, event_text):
+                score += 8
+            else:
+                score += min(4, len(_title_tokens(title) & _title_tokens(event_text)) * 2)
+            if location:
+                score += min(4, len(set(_tokenize(location)) & set(_tokenize(event_text))) * 2)
+            if keywords:
+                score += min(3, len(set(keywords) & set(_tokenize(event_text))))
+        if score > 0:
+            ranked.append((score, item_index, title, location, keywords))
+    ranked.sort(key=lambda row: (-row[0], row[1]))
+    lines: List[str] = []
+    for score, item_index, title, location, keywords in ranked[:limit]:
+        parts = [f"T{item_index} {title or '-'}", f"점수 {score}"]
+        if location:
+            parts.append(f"위치 {location}")
+        if keywords:
+            parts.append("키워드 " + ", ".join(keywords[:4]))
+        lines.append(" / ".join(parts))
+    return lines
 
 
 def _chunk_assign(entries: List[Dict[str, Any]], items: List[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
@@ -1279,6 +1372,7 @@ def _openai_item_summary_lines(items: Sequence[Dict[str, Any]]) -> List[str]:
                     f"위치 {_collapse(item.get('location_name') or '-')}",
                     f"업체 {_collapse(item.get('vendor_name') or '-')}",
                     f"요약 {_collapse(item.get('summary') or item.get('title') or '-')[:120]}",
+                    f"키워드 {', '.join(_item_hint_keywords(item)) or '-'}",
                 ]
             )
         )
@@ -1478,6 +1572,7 @@ def _openai_work_report(
 - 시간 순서는 참고만 하고, 이미지의 실제 시각적 내용이 더 중요하다.
 - 다만 이미지 파일명의 촬영시각, 사진 공지 직전/직후 대화, 같은 시각대의 연속 이미지도 함께 검토한다.
 - 같은 촬영 군집에 대해 제공된 근접 대화 후보가 있으면 그 후보를 우선 검토한다.
+- 카톡 캡처 참고 이미지(S)는 대화 순서와 설명 문구를 파악하기 위한 참고 자료다. 현장사진(I)와 같은 장면이라고 단정하지 말고, 문맥 근거로만 활용한다.
 - 촬영 군집 근처에 명시적인 작업 문구가 있으면 그 문구의 제목과 위치 표현을 우선 유지한다. 비슷한 설비라고 해서 더 일반적인 다른 작업명으로 바꾸지 않는다.
 - 같은 날 조명/센서등처럼 비슷한 작업이 여러 개 있으면, 시각적으로 비슷해 보여도 가장 가까운 시간대의 구체적인 대화 문구(동, 위치, 수량)를 우선한다.
 - 하나의 촬영 군집은 가장 강한 단일 작업 항목에 우선 매칭한다. 근거가 약하면 다른 항목으로 퍼뜨리지 말고 unmatched로 남긴다.
@@ -1703,6 +1798,7 @@ def _openai_match_image_chunks(
     if not clusters:
         return None
 
+    work_events = _work_report_events(text)
     item_lines = _openai_item_summary_lines(items)
     assigned_rows: Dict[int, List[Dict[str, Any]]] = {int(item.get("index") or 0): [] for item in items if int(item.get("index") or 0) > 0}
     unmatched_image_indexes: set[int] = set()
@@ -1727,6 +1823,7 @@ def _openai_match_image_chunks(
 - 하나의 군집은 하나의 작업 항목에만 매칭한다.
 - 확신이 낮으면 unmatched_cluster_indexes로 남긴다.
 - 실제 이미지 내용, 파일명의 촬영시각, 같은 시각대 연속 촬영 여부, 근접 대화 후보를 함께 본다.
+- 군집 설명에 우선후보 Tn이 있으면 먼저 검토하되, 실제 시각 정보가 명백히 다르면 따르지 않아도 된다.
 - 비슷한 작업명이 여러 개면 동/위치/사물 종류가 더 구체적으로 맞는 항목을 우선한다.
 - title이 비슷해도 배경, 창호, 조명 종류, 자전거/습득물/키패드처럼 보이는 핵심 물체가 다르면 다른 작업으로 본다.
 - 군집 안 여러 장이 같은 장소의 연속 상태를 보여주면 한 항목 안에서 before/during/after 흐름으로 이어질 수 있는 작업을 우선한다.
@@ -1745,11 +1842,14 @@ def _openai_match_image_chunks(
             file_names = ", ".join(str(row.get("filename") or "") for row in cluster[:4])
             time_line = _openai_cluster_lines(cluster)
             nearby_line = _openai_cluster_context_lines(cluster, text)
+            candidate_lines = _cluster_item_candidate_lines(cluster, items, work_events)
             cluster_parts = [f"[C{local_index}] 전체 이미지 {', '.join(indexes)}", f"파일 {file_names or '-'}"]
             if time_line:
                 cluster_parts.append(re.sub(r"^- C1:\s*", "", str(time_line[0])))
             if nearby_line:
                 cluster_parts.append("근접 대화 " + re.sub(r"^- C1:\s*", "", str(nearby_line[0])))
+            if candidate_lines:
+                cluster_parts.append("우선후보 " + " ; ".join(candidate_lines))
             cluster_lines.append(" / ".join(part for part in cluster_parts if part))
         if cluster_lines:
             content.append({"type": "input_text", "text": "이번 배치 사진 군집:\n" + "\n".join(cluster_lines)})
