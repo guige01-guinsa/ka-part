@@ -598,13 +598,13 @@ def test_work_report_analysis_uses_notice_time_window_for_kakao_images(app_clien
     repair_item = next(row for row in item["items"] if "2개교체" in str(row["title"]))
     keypad_item = next(row for row in item["items"] if "키패드" in str(row["title"]))
     assert stock_item["images"] == []
-    assert len(repair_item["images"]) == 4
+    assert len(repair_item["images"]) == 3
     assert [str(image["filename"]) for image in repair_item["images"]] == [
         "KakaoTalk_20260702_163218930.jpg",
         "KakaoTalk_20260702_163218930_01.jpg",
-        "KakaoTalk_20260702_163218930_02.jpg",
         "KakaoTalk_20260702_163218930_03.jpg",
     ]
+    assert [str(image["stage_label"]) for image in repair_item["images"]] == ["작업 전", "작업 중", "작업 후"]
     assert [str(image["filename"]) for image in keypad_item["images"]] == ["KakaoTalk_20260702_163750937.jpg"]
 
 
@@ -746,6 +746,23 @@ def test_work_report_cluster_candidate_lines_prioritize_nearby_location_match() 
     assert lines
     assert lines[0].startswith("T1 107동 천장 센서등 교체")
     assert "위치 107동 복도" in lines[0]
+
+
+def test_work_report_finalize_image_stages_keeps_three_representatives() -> None:
+    from app.work_report_service import _finalize_image_stages
+
+    rows = [
+        {"index": 1, "filename": "before.jpg", "stage": ""},
+        {"index": 2, "filename": "during-1.jpg", "stage": ""},
+        {"index": 3, "filename": "during-2.jpg", "stage": ""},
+        {"index": 4, "filename": "after.jpg", "stage": ""},
+    ]
+
+    finalized = _finalize_image_stages(rows)
+
+    assert [int(row["index"]) for row in finalized] == [1, 2, 4]
+    assert [str(row["stage"]) for row in finalized] == ["before", "during", "after"]
+    assert [str(row["stage_label"]) for row in finalized] == ["작업 전", "작업 중", "작업 후"]
 
 
 def test_work_report_pdf_output_items_respect_selected_images() -> None:
