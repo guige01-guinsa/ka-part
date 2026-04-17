@@ -4,7 +4,7 @@
   const $ = (sel) => document.querySelector(sel);
   const STATUS_VALUES = ["접수", "처리중", "완료", "이월"];
   const MAX_CHAT_DIGEST_IMAGES = 30;
-  const MAX_WORK_REPORT_IMAGES = 100;
+  const MAX_WORK_REPORT_IMAGES = 200;
   const MAX_WORK_REPORT_SOURCE_FILES = 20;
   const MAX_FACILITY_ASSET_IMAGES = 3;
   const DEFAULT_DOCUMENT_CATEGORY_VALUES = [

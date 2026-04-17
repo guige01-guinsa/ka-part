@@ -748,6 +748,35 @@ def test_work_report_cluster_candidate_lines_prioritize_nearby_location_match() 
     assert "위치 107동 복도" in lines[0]
 
 
+def test_work_report_heuristic_anchor_filters_low_signal_lines() -> None:
+    from app.work_report_service import _looks_like_heuristic_anchor
+
+    assert _looks_like_heuristic_anchor("105동 3.4라인 피난유도선 설치", image_heavy=True) is True
+    assert _looks_like_heuristic_anchor("교체 완료", image_heavy=True) is False
+    assert _looks_like_heuristic_anchor("통화완료함. 볼륨 조정 안내드림", image_heavy=True) is False
+    assert _looks_like_heuristic_anchor("(부품사오면 교체해주시나요)", image_heavy=True) is False
+
+
+def test_work_report_match_score_does_not_use_date_only_match() -> None:
+    from app.work_report_service import _match_score
+
+    item = {
+        "title": "커뮤니티 유리 교체",
+        "summary": "커뮤니티 유리 교체",
+        "location_name": "커뮤니티",
+        "vendor_name": "",
+        "work_date": "2026-04-13",
+        "work_date_label": "4월 13일",
+    }
+    entry = {
+        "filename": "KakaoTalk_20260413_105500045.jpg",
+        "preview_text": "",
+        "metadata": {},
+    }
+
+    assert _match_score(item, entry) == 0
+
+
 def test_work_report_finalize_image_stages_keeps_three_representatives() -> None:
     from app.work_report_service import _finalize_image_stages
 

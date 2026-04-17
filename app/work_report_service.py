@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import re
+from contextvars import ContextVar
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
@@ -44,19 +45,21 @@ WORK_REPORT_STAGE_HINTS = {
     "during": ("during", "중", "작업중", "교체중", "시공중", "진행중"),
     "after": ("after", "후", "작업후", "교체후", "시공후", "조치후", "완료"),
 }
-MAX_WORK_REPORT_IMAGES = 100
+MAX_WORK_REPORT_IMAGES = 200
 MAX_WORK_REPORT_ATTACHMENTS = 30
 MAX_WORK_REPORT_OPENAI_VISUAL_IMAGES = 10
 WORK_REPORT_OPENAI_IMAGE_MAX_DIM = 1024
 WORK_REPORT_OPENAI_IMAGE_QUALITY = 82
 WORK_REPORT_OPENAI_CLUSTER_GAP_SECONDS = 180
 WORK_REPORT_OPENAI_CLUSTER_CONTEXT_MINUTES = 12
+WORK_REPORT_HEAVY_IMAGE_THRESHOLD = 40
 DEFAULT_WORK_REPORT_OPENAI_TIMEOUT_SEC = 120.0
 DEFAULT_WORK_REPORT_OPENAI_IMAGE_MATCH_TIMEOUT_SEC = 45.0
 WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES = 12
 WORK_REPORT_OPENAI_IMAGE_MATCH_MAX_CLUSTERS = 4
 WORK_REPORT_OPENAI_IMAGE_MATCH_SAMPLE_PER_CLUSTER = 3
 MAX_WORK_REPORT_OPENAI_REFERENCE_IMAGES = 6
+_WORK_REPORT_OPENAI_LAST_ERROR: ContextVar[str] = ContextVar("work_report_openai_last_error", default="")
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
     ".hwp",
@@ -104,6 +107,26 @@ def _int_env(name: str, default: int, *, minimum: int = 0) -> int:
 
 def _str_env(name: str, default: str = "") -> str:
     return str(os.getenv(name) or default or "").strip()
+
+
+def _summarize_openai_error(exc: Exception) -> str:
+    message = _collapse(str(exc))
+    lowered = message.lower()
+    if "insufficient_quota" in lowered or "exceeded your current quota" in lowered:
+        return "OpenAI 할당량이 부족해 AI 분석을 계속할 수 없습니다."
+    if "rate limit" in lowered or "429" in lowered:
+        return "OpenAI 요청 한도에 걸려 AI 분석이 지연되거나 실패했습니다."
+    if "timeout" in lowered or "timed out" in lowered:
+        return "OpenAI 응답 시간이 초과되어 AI 분석이 중단됐습니다."
+    if "api key" in lowered or "authentication" in lowered or "invalid_api_key" in lowered:
+        return "OpenAI 인증 설정을 확인해야 합니다."
+    return f"AI 분석 호출에 실패했습니다: {message[:180]}"
+
+
+def _consume_openai_error_notice() -> str:
+    message = _collapse(_WORK_REPORT_OPENAI_LAST_ERROR.get(""))
+    _WORK_REPORT_OPENAI_LAST_ERROR.set("")
+    return message
 
 
 def _extract_json_text(raw_text: Any) -> str:
@@ -302,6 +325,75 @@ def _looks_like_work_item(text: str) -> bool:
     if any(pattern in lowered for pattern in ("as요청", "as접수", "요청함", "교체예정", "타이머조정", "변경 완료", "회수함", "입고")):
         return True
     return any(keyword in normalized for keyword in WORK_REPORT_ACTION_KEYWORDS)
+
+
+def _is_question_like_line(text: str) -> bool:
+    normalized = _collapse(text)
+    lowered = normalized.lower()
+    if "?" in normalized:
+        return True
+    return any(
+        token in lowered
+        for token in (
+            "가능한지",
+            "봐줄수",
+            "봐줄 수",
+            "전화바랍니다",
+            "전화 주세요",
+            "전화주세요",
+            "원해요",
+            "원해요 ",
+            "해주시나요",
+            "있는건지",
+            "있는 건지",
+            "문의하심",
+        )
+    )
+
+
+def _is_generic_status_line(text: str) -> bool:
+    normalized = _collapse(text)
+    lowered = normalized.lower()
+    if lowered in {
+        "완료",
+        "통화 완료",
+        "통화완료",
+        "교체 완료",
+        "교체완료",
+        "보수완료",
+        "작업완료",
+        "설치완료",
+        "복구완료",
+        "사진",
+        "동영상",
+        "입고",
+    }:
+        return True
+    if any(lowered.startswith(prefix) for prefix in ("통화완료", "통화 완료", "교체 완료", "교체완료", "보수완료", "작업완료")):
+        return True
+    if not _guess_location(normalized) and any(
+        lowered.endswith(suffix)
+        for suffix in ("안내함", "안내드림", "전달요청함", "문의함", "확인함", "대기중", "대기 중")
+    ):
+        return True
+    return False
+
+
+def _looks_like_heuristic_anchor(text: str, *, image_heavy: bool = False) -> bool:
+    normalized = _collapse(text)
+    if not _looks_like_work_item(normalized):
+        return False
+    if _is_question_like_line(normalized) or _is_generic_status_line(normalized):
+        return False
+    has_location = bool(_guess_location(normalized))
+    keyword_count = len(_title_tokens(normalized))
+    if image_heavy:
+        if has_location:
+            return True
+        if any(pattern in normalized.lower() for pattern in ("as접수", "as요청", "교체예정", "회수함", "입고", "설치", "복구")):
+            return keyword_count >= 1
+        return keyword_count >= 2
+    return has_location or keyword_count >= 1
 
 
 def _should_skip_context_line(text: str) -> bool:
@@ -519,7 +611,7 @@ def _new_item(title: str, event: Dict[str, Any], *, confidence: str) -> Dict[str
     }
 
 
-def _supplement_text_only_items(existing_items: Sequence[Dict[str, Any]], text: str) -> List[Dict[str, Any]]:
+def _supplement_text_only_items(existing_items: Sequence[Dict[str, Any]], text: str, *, image_heavy: bool = False) -> List[Dict[str, Any]]:
     seeded_items = list(existing_items or [])
     added_items: List[Dict[str, Any]] = []
     seen_keys = {
@@ -529,7 +621,7 @@ def _supplement_text_only_items(existing_items: Sequence[Dict[str, Any]], text: 
     }
     for event in _parse_kakao_events(text):
         text_line = _collapse(event.get("text") or "")
-        if not text_line or not _looks_like_work_item(text_line):
+        if not text_line or not _looks_like_heuristic_anchor(text_line, image_heavy=image_heavy):
             continue
         if any(_titles_match(text_line, item.get("title") or "") for item in seeded_items + added_items):
             continue
@@ -994,11 +1086,19 @@ def _item_tokens(item: Dict[str, Any]) -> set[str]:
 
 
 def _entry_tokens(entry: Dict[str, Any]) -> set[str]:
-    tokens = set(_tokenize(entry.get("filename")))
     preview_text = _collapse(entry.get("preview_text") or "")
+    metadata = entry.get("metadata") or {}
+    is_image_like_entry = not preview_text and not metadata
+    tokens = set()
+    for token in _tokenize(entry.get("filename")):
+        clean = _collapse(token).lower()
+        if is_image_like_entry and clean.isdigit():
+            continue
+        if is_image_like_entry and clean in {"kakaotalk", "img", "image", "jpg", "jpeg", "png"}:
+            continue
+        tokens.add(clean)
     if preview_text:
         tokens.update(_tokenize(preview_text[:200]))
-    metadata = entry.get("metadata") or {}
     if isinstance(metadata, dict):
         for field in (
             metadata.get("title"),
@@ -1015,6 +1115,8 @@ def _match_score(item: Dict[str, Any], entry: Dict[str, Any]) -> int:
     item_token_set = _item_tokens(item)
     entry_token_set = _entry_tokens(entry)
     score = len(item_token_set & entry_token_set)
+    if score <= 0:
+        return 0
     item_date = str(item.get("work_date") or "")
     if item_date:
         compact = item_date.replace("-", "")
@@ -1457,6 +1559,7 @@ def _openai_json_response(
     timeout_sec: float,
     reasoning_effort: str = "",
 ) -> Dict[str, Any] | None:
+    _WORK_REPORT_OPENAI_LAST_ERROR.set("")
     request_kwargs: Dict[str, Any] = {
         "model": model,
         "input": [{"role": "user", "content": list(content or [])}],
@@ -1475,10 +1578,13 @@ def _openai_json_response(
                 raise
         raw = _extract_json_text(getattr(response, "output_text", "") or "")
         if not raw:
+            _WORK_REPORT_OPENAI_LAST_ERROR.set("AI 응답에서 JSON 결과를 읽지 못했습니다.")
             return None
         data = json.loads(raw)
+        _WORK_REPORT_OPENAI_LAST_ERROR.set("")
         return data if isinstance(data, dict) else None
-    except Exception:
+    except Exception as exc:
+        _WORK_REPORT_OPENAI_LAST_ERROR.set(_summarize_openai_error(exc))
         return None
 
 
@@ -1974,8 +2080,16 @@ def analyze_work_report(
     reference_images = list(reference_image_inputs or [])
     attachments = list(attachment_inputs or [])[:MAX_WORK_REPORT_ATTACHMENTS]
     sample_lines = list(sample_lines or [])
+    image_heavy = len(images) >= WORK_REPORT_HEAVY_IMAGE_THRESHOLD
     if not _collapse(normalized_text) and not images and not reference_images and not attachments:
         raise ValueError("text, image, or attachment is required")
+
+    openai_failure_notes: List[str] = []
+
+    def remember_openai_error() -> None:
+        notice = _consume_openai_error_notice()
+        if notice and notice not in openai_failure_notes:
+            openai_failure_notes.append(notice)
 
     chunk_trigger_images = _int_env(
         "WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES",
@@ -1994,12 +2108,16 @@ def analyze_work_report(
             sample_title=sample_title,
             sample_lines=sample_lines,
         )
+        if not base_ai_result:
+            remember_openai_error()
         if base_ai_result:
             chunked_images = _openai_match_image_chunks(
                 text=normalized_text,
                 image_inputs=images,
                 items=list(base_ai_result.get("items") or []),
             )
+            if not chunked_images:
+                remember_openai_error()
             if chunked_images:
                 merged_notice = "대량 이미지는 군집 단위로 나눠 AI가 단계적으로 매칭했습니다."
                 chunk_notice = _collapse(chunked_images.get("analysis_notice") or "")
@@ -2029,6 +2147,8 @@ def analyze_work_report(
             sample_title=sample_title,
             sample_lines=sample_lines,
         )
+        if not ai_result:
+            remember_openai_error()
     if not ai_result and images:
         base_ai_result = _openai_work_report(
             text=normalized_text,
@@ -2038,12 +2158,16 @@ def analyze_work_report(
             sample_title=sample_title,
             sample_lines=sample_lines,
         )
+        if not base_ai_result:
+            remember_openai_error()
         if base_ai_result:
             chunked_images = _openai_match_image_chunks(
                 text=normalized_text,
                 image_inputs=images,
                 items=list(base_ai_result.get("items") or []),
             )
+            if not chunked_images:
+                remember_openai_error()
             if chunked_images:
                 merged_notice = "기본 통합 분석이 지연되어 이미지 매칭을 군집 배치로 다시 수행했습니다."
                 chunk_notice = _collapse(chunked_images.get("analysis_notice") or "")
@@ -2065,7 +2189,10 @@ def analyze_work_report(
         analysis_model = _collapse(ai_result.get("analysis_model") or "gpt-5")
         report_title = _collapse(ai_result.get("report_title") or _sample_heading(sample_title, sample_lines))
         period_label = _collapse(ai_result.get("period_label") or _sample_period(sample_lines))
-        supplemental_items = _supplement_text_only_items(items, normalized_text)
+        if openai_failure_notes:
+            ai_notice = " ".join(openai_failure_notes)
+            analysis_notice = ai_notice if not analysis_notice else f"{analysis_notice} {ai_notice}"
+        supplemental_items = _supplement_text_only_items(items, normalized_text, image_heavy=image_heavy)
         if supplemental_items:
             for item in supplemental_items:
                 item["index"] = len(items) + 1
@@ -2148,7 +2275,7 @@ def analyze_work_report(
                 continue
             if event.get("kind") == "photo_notice":
                 should_hold_for_next = hold_notice_for_next_item(current_item, event)
-                if next_text and _looks_like_work_item(next_text):
+                if next_text and _looks_like_heuristic_anchor(next_text, image_heavy=image_heavy):
                     current_minute = int(event.get("minute_of_day") or -1)
                     next_minute = int(next_event.get("minute_of_day") or -1)
                     if current_minute < 0 or next_minute < 0 or 0 <= next_minute - current_minute <= 5:
@@ -2168,7 +2295,7 @@ def analyze_work_report(
                 continue
             if event.get("kind") == "file_notice":
                 should_hold_for_next = hold_notice_for_next_item(current_item, event)
-                if next_text and _looks_like_work_item(next_text):
+                if next_text and _looks_like_heuristic_anchor(next_text, image_heavy=image_heavy):
                     current_minute = int(event.get("minute_of_day") or -1)
                     next_minute = int(next_event.get("minute_of_day") or -1)
                     if current_minute < 0 or next_minute < 0 or 0 <= next_minute - current_minute <= 5:
@@ -2181,7 +2308,7 @@ def analyze_work_report(
                     pending_attachment_count += _notice_count(text_line)
                     pending_attachment_texts.append(text_line)
                 continue
-            if _looks_like_work_item(text_line):
+            if _looks_like_heuristic_anchor(text_line, image_heavy=image_heavy):
                 flush_current()
                 current_item = _new_item(text_line, event, confidence="heuristic")
                 apply_pending(current_item)
@@ -2251,7 +2378,7 @@ def analyze_work_report(
 
         report_title = _sample_heading(sample_title, sample_lines)
         period_label = _sample_period(sample_lines)
-        analysis_notice = ""
+        analysis_notice = " ".join(openai_failure_notes) if openai_failure_notes else ""
         analysis_model = "heuristic"
 
         attachment_entries = [
