@@ -611,6 +611,41 @@ def test_work_report_analysis_uses_notice_time_window_for_kakao_images(app_clien
     assert [str(image["filename"]) for image in keypad_item["images"]] == ["KakaoTalk_20260702_163750937.jpg"]
 
 
+def test_work_report_analysis_matches_generic_timestamp_images_to_nearest_items(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    response = client.post(
+        "/api/ai/work_report",
+        headers=headers,
+        data={
+            "tenant_id": "ys_thesharp",
+            "text": "\n".join(
+                [
+                    "2026년 7월 2일 수요일",
+                    "[관리실] [오전 9:10] 101동 집하장 센서등 2개교체",
+                    "[관리실] [오전 9:46] 104동 음식물처리기 키패드 교체",
+                ]
+            ),
+        },
+        files=[
+            ("images", ("KakaoTalk_20260702_091200.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+            ("images", ("KakaoTalk_20260702_091245_01.jpg", io.BytesIO(b"fake-image-2"), "image/jpeg")),
+            ("images", ("KakaoTalk_20260702_094630.jpg", io.BytesIO(b"fake-image-3"), "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 200
+    item = response.json()["item"]
+    lighting_item = next(row for row in item["items"] if "센서등" in str(row["title"]))
+    keypad_item = next(row for row in item["items"] if "키패드" in str(row["title"]))
+    assert [str(image["filename"]) for image in lighting_item["images"]] == [
+        "KakaoTalk_20260702_091200.jpg",
+        "KakaoTalk_20260702_091245_01.jpg",
+    ]
+    assert [str(image["filename"]) for image in keypad_item["images"]] == ["KakaoTalk_20260702_094630.jpg"]
+
+
 def test_work_report_visual_sampling_limits_large_cluster_batches() -> None:
     from app.work_report_service import _select_openai_visual_meta
 
@@ -803,6 +838,28 @@ def test_work_report_match_score_does_not_use_date_only_match() -> None:
     }
 
     assert _match_score(item, entry) == 0
+
+
+def test_work_report_match_score_uses_nearby_time_for_generic_kakao_filename() -> None:
+    from app.work_report_service import _match_score
+
+    item = {
+        "title": "101동 집하장 센서등 2개교체",
+        "summary": "101동 집하장 센서등 2개교체",
+        "location_name": "101동 집하장",
+        "vendor_name": "관리실",
+        "work_date": "2026-07-02",
+        "work_date_label": "7월 2일",
+        "_minute_of_day": (9 * 60) + 10,
+    }
+    entry = {
+        "filename": "KakaoTalk_20260702_091200.jpg",
+        "date": "2026-07-02",
+        "minute_of_day": (9 * 60) + 12,
+        "second_of_day": (9 * 3600) + (12 * 60),
+    }
+
+    assert _match_score(item, entry) >= 8
 
 
 def test_work_report_finalize_image_stages_keeps_all_matched_images() -> None:

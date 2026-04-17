@@ -1283,10 +1283,51 @@ def _entry_tokens(entry: Dict[str, Any]) -> set[str]:
     return tokens
 
 
+def _item_reference_minutes(item: Dict[str, Any]) -> List[int]:
+    minutes: List[int] = []
+    item_minute = int(item.get("_minute_of_day") or -1)
+    if item_minute >= 0:
+        minutes.append(item_minute)
+    for notice in list(item.get("_image_notices") or []):
+        notice_minute = int((notice or {}).get("minute_of_day") or -1)
+        if notice_minute >= 0:
+            minutes.append(notice_minute)
+    seen: set[int] = set()
+    ordered: List[int] = []
+    for minute in minutes:
+        if minute in seen:
+            continue
+        seen.add(minute)
+        ordered.append(minute)
+    return ordered
+
+
+def _temporal_match_score(item: Dict[str, Any], entry: Dict[str, Any]) -> int:
+    item_date = _collapse(item.get("work_date") or "")
+    entry_date = _collapse(entry.get("date") or "")
+    if item_date and entry_date and item_date != entry_date:
+        return 0
+    entry_minute = int(entry.get("minute_of_day") or -1)
+    if entry_minute < 0:
+        return 0
+    reference_minutes = _item_reference_minutes(item)
+    if not reference_minutes:
+        return 0
+    gap = min(abs(entry_minute - minute) for minute in reference_minutes)
+    if gap <= 3:
+        return 8
+    if gap <= 8:
+        return 5
+    if gap <= 15:
+        return 2
+    return 0
+
+
 def _match_score(item: Dict[str, Any], entry: Dict[str, Any]) -> int:
     item_token_set = _item_tokens(item)
     entry_token_set = _entry_tokens(entry)
     score = len(item_token_set & entry_token_set)
+    score += _temporal_match_score(item, entry)
     if score <= 0:
         return 0
     item_date = str(item.get("work_date") or "")
