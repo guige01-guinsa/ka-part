@@ -1619,19 +1619,6 @@ def _finalize_image_stages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]
         undecided[-1]["stage"] = "after"
         for row in undecided[1:-1]:
             row["stage"] = "during"
-    if len(ordered) >= 3:
-        before_row = next((row for row in ordered if str(row.get("stage") or "") == "before"), ordered[0])
-        during_rows = [row for row in ordered if str(row.get("stage") or "") == "during"]
-        if during_rows:
-            during_row = during_rows[(len(during_rows) - 1) // 2]
-        else:
-            middle_position = max(1, min(len(ordered) - 2, len(ordered) // 2))
-            during_row = ordered[middle_position]
-        after_row = next((row for row in reversed(ordered) if str(row.get("stage") or "") == "after"), ordered[-1])
-        ordered = [dict(before_row), dict(during_row), dict(after_row)]
-        ordered[0]["stage"] = "before"
-        ordered[1]["stage"] = "during"
-        ordered[2]["stage"] = "after"
     for row in ordered:
         stage = str(row.get("stage") or "general")
         label_map = {
