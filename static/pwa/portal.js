@@ -3996,12 +3996,41 @@
     return sections.join("");
   }
 
+  function workReportAnalysisModeLabel(report) {
+    const explicit = String(report?.analysis_mode_label || "").trim();
+    if (explicit) return explicit;
+    const model = String(report?.analysis_model || "").trim();
+    if (!model) return "-";
+    if (model === "heuristic") return "규칙 기반";
+    if (model.startsWith("gpt-")) {
+      return String(report?.analysis_reason || "").trim() ? "OpenAI + 보조 분석" : `OpenAI (${model})`;
+    }
+    return model;
+  }
+
+  function workReportAnalysisReasonLabel(report) {
+    const explicit = String(report?.analysis_reason_label || "").trim();
+    if (explicit) return explicit;
+    const reason = String(report?.analysis_reason || "").trim();
+    if (reason === "api_timeout") return "응답 시간 초과";
+    if (reason === "insufficient_quota") return "할당량 부족";
+    if (reason === "rate_limited") return "요청 한도 초과";
+    if (reason === "missing_api_key") return "API 키 미설정";
+    if (reason === "missing_sdk") return "SDK 미설치";
+    if (reason === "auth_error") return "인증 설정 오류";
+    if (reason === "invalid_json") return "응답 형식 오류";
+    if (reason === "openai_error") return "OpenAI 호출 실패";
+    return "";
+  }
+
   function renderWorkReportResult(item) {
     const report = item || {};
     const items = Array.isArray(report.items) ? report.items : [];
     const imageItems = items.filter((row) => Array.isArray(row.images) && row.images.length);
     const textOnlyItems = items.filter((row) => !Array.isArray(row.images) || !row.images.length);
     const unmatchedImages = Array.isArray(report.unmatched_images) ? report.unmatched_images : [];
+    const modeLabel = workReportAnalysisModeLabel(report);
+    const reasonLabel = workReportAnalysisReasonLabel(report);
     const sections = [
       [
         "<div class=\"subhead\">보고 개요</div>",
@@ -4011,7 +4040,8 @@
         `<span>작업 ${escapeHtml(String(report.item_count || items.length || 0))}건</span>`,
         `<span>사진 포함 ${escapeHtml(String(report.image_item_count || imageItems.length || 0))}건</span>`,
         `<span>텍스트 전용 ${escapeHtml(String(report.text_only_item_count || textOnlyItems.length || 0))}건</span>`,
-        `<span>모델 ${escapeHtml(String(report.analysis_model || "-"))}</span>`,
+        `<span>모델 ${escapeHtml(modeLabel)}</span>`,
+        reasonLabel ? `<span>사유 ${escapeHtml(reasonLabel)}</span>` : "",
         report.template_source_name ? `<span>양식 ${escapeHtml(String(report.template_source_name || ""))}</span>` : "",
         `</div>`,
       ].join(""),
@@ -4287,7 +4317,9 @@
       const result = await pollWorkReportPreviewJob(String(job.id || ""), progress);
       lastWorkReportResult = result || null;
       $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
-      setMessage("#intakeMsg", `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`);
+      const previewNotice = String(lastWorkReportResult?.analysis_notice || "").trim();
+      const previewMessage = `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`;
+      setMessage("#intakeMsg", previewNotice ? `${previewMessage} ${previewNotice}` : previewMessage, !!previewNotice);
     } catch (error) {
       progress.fail(error);
       throw error;

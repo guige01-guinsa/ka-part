@@ -519,6 +519,26 @@ async def _run_work_report_batch_preview(job_id: str) -> None:
         payload = await run_in_threadpool(_read_work_report_batch_payload, Path(str(record.get("job_dir") or "")))
         report = await run_in_threadpool(_execute_work_report_batch_preview, job_id, payload)
         complete_work_report_job(job_id, result=report)
+        result_reason = str(report.get("analysis_reason") or "").strip()
+        result_model = str(report.get("analysis_model") or "").strip()
+        log_message = "work report batch preview completed"
+        if result_reason or result_model == "heuristic":
+            logger.warning(
+                "%s: job_id=%s model=%s reason=%s items=%s",
+                log_message,
+                job_id,
+                result_model or "-",
+                result_reason or "-",
+                int(report.get("item_count") or 0),
+            )
+        else:
+            logger.info(
+                "%s: job_id=%s model=%s items=%s",
+                log_message,
+                job_id,
+                result_model or "-",
+                int(report.get("item_count") or 0),
+            )
     except Exception as exc:
         logger.exception("work report batch preview failed: job_id=%s", job_id)
         fail_work_report_job(

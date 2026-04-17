@@ -60,6 +60,42 @@ def _trim_one_line(value: Any, *, limit: int = 72) -> str:
     return f"{text[: max(1, limit - 1)].rstrip()}…"
 
 
+def _work_report_analysis_mode_label(report: Dict[str, Any]) -> str:
+    explicit = _collapse(report.get("analysis_mode_label") or "")
+    if explicit:
+        return explicit
+    model = _collapse(report.get("analysis_model") or "")
+    if model == "heuristic":
+        return "규칙 기반"
+    if model.startswith("gpt-"):
+        return f"OpenAI ({model})"
+    return model or "-"
+
+
+def _work_report_analysis_reason_label(report: Dict[str, Any]) -> str:
+    explicit = _collapse(report.get("analysis_reason_label") or "")
+    if explicit:
+        return explicit
+    reason = _collapse(report.get("analysis_reason") or "")
+    if reason == "api_timeout":
+        return "응답 시간 초과"
+    if reason == "insufficient_quota":
+        return "할당량 부족"
+    if reason == "rate_limited":
+        return "요청 한도 초과"
+    if reason == "missing_api_key":
+        return "API 키 미설정"
+    if reason == "missing_sdk":
+        return "SDK 미설치"
+    if reason == "auth_error":
+        return "인증 설정 오류"
+    if reason == "invalid_json":
+        return "응답 형식 오류"
+    if reason == "openai_error":
+        return "OpenAI 호출 실패"
+    return ""
+
+
 def _styles() -> Dict[str, ParagraphStyle]:
     font_name = _register_font()
     base_styles = getSampleStyleSheet()
@@ -668,6 +704,13 @@ def build_work_report_pdf(
     story.append(Paragraph(_escape(f"생성시각: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}"), styles["meta"]))
     if template_source_name:
         story.append(Paragraph(_escape(f"참조 양식: {template_source_name}"), styles["meta"]))
+    story.append(Paragraph(_escape(f"분석 방식: {_work_report_analysis_mode_label(report)}"), styles["meta"]))
+    analysis_reason_label = _work_report_analysis_reason_label(report)
+    if analysis_reason_label:
+        story.append(Paragraph(_escape(f"분석 사유: {analysis_reason_label}"), styles["meta"]))
+    analysis_notice = _collapse(report.get("analysis_notice") or "")
+    if analysis_notice:
+        story.append(Paragraph(_escape(f"안내: {analysis_notice}"), styles["meta"]))
     story.append(Spacer(1, 4 * mm))
 
     _, image_items, text_only_items = _work_report_output_items(report)

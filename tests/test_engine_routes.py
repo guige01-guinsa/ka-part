@@ -705,6 +705,31 @@ def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatc
     assert "단계적으로 매칭" in str(result["analysis_notice"])
 
 
+def test_work_report_analysis_exposes_timeout_diagnostics_on_heuristic_fallback(monkeypatch) -> None:
+    import app.work_report_service as service
+
+    def _fake_openai_work_report(*, text, image_inputs, reference_image_inputs, attachment_inputs, sample_title, sample_lines):
+        service._set_openai_error_state(
+            "api_timeout",
+            "OpenAI 응답 시간이 초과되어 AI 분석이 중단됐습니다.",
+            details="ReadTimeout while waiting for response body",
+        )
+        return None
+
+    monkeypatch.setattr(service, "_openai_work_report", _fake_openai_work_report)
+
+    result = service.analyze_work_report("2026년 4월 15일 오전 9:21, 관리실 : 커뮤니티 유리 깨짐 교체 작업 시작한다고 함.")
+
+    assert result["analysis_model"] == "heuristic"
+    assert result["analysis_mode_label"] == "규칙 기반"
+    assert result["analysis_reason"] == "api_timeout"
+    assert result["analysis_reason_label"] == "응답 시간 초과"
+    assert "OpenAI 응답 시간이 초과" in str(result["analysis_notice"])
+    failures = result["analysis_diagnostics"]["openai_failures"]
+    assert failures[0]["stage"] == "direct_extract"
+    assert failures[0]["reason"] == "api_timeout"
+
+
 def test_work_report_cluster_candidate_lines_prioritize_nearby_location_match() -> None:
     from app.work_report_service import _cluster_item_candidate_lines
 
@@ -952,7 +977,11 @@ def test_work_report_batch_job_can_poll_until_completed(app_client, monkeypatch)
             "period_label": "7월 4일",
             "template_title": "시설팀 주요 업무 보고",
             "analysis_model": "gpt-5.4",
+            "analysis_mode_label": "OpenAI (gpt-5.4)",
+            "analysis_reason": "",
+            "analysis_reason_label": "",
             "analysis_notice": "",
+            "analysis_diagnostics": {"openai_failures": []},
             "item_count": 1,
             "image_item_count": 1,
             "text_only_item_count": 0,
@@ -1015,6 +1044,8 @@ def test_work_report_batch_job_can_poll_until_completed(app_client, monkeypatch)
     assert detail_item is not None
     assert detail_item["status"] == "completed"
     assert detail_item["result"]["analysis_model"] == "gpt-5.4"
+    assert detail_item["result"]["analysis_mode_label"] == "OpenAI (gpt-5.4)"
+    assert detail_item["result"]["analysis_diagnostics"]["openai_failures"] == []
     assert detail_item["result"]["item_count"] == 1
     assert detail_item["result"]["template_source_name"] == ""
 

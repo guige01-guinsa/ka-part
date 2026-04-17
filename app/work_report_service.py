@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 from contextvars import ContextVar
@@ -14,6 +15,8 @@ try:
     from PIL import Image as PILImage
 except Exception:  # pragma: no cover - pillow optional at runtime
     PILImage = None
+
+logger = logging.getLogger("ka-part.work-report")
 
 WORK_REPORT_ACTION_KEYWORDS = (
     "교체",
@@ -59,7 +62,11 @@ WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES = 12
 WORK_REPORT_OPENAI_IMAGE_MATCH_MAX_CLUSTERS = 4
 WORK_REPORT_OPENAI_IMAGE_MATCH_SAMPLE_PER_CLUSTER = 3
 MAX_WORK_REPORT_OPENAI_REFERENCE_IMAGES = 6
+WORK_REPORT_OPENAI_TEXT_MAX_CHARS = 14000
+WORK_REPORT_OPENAI_TEXT_MAX_EVENTS = 160
 _WORK_REPORT_OPENAI_LAST_ERROR: ContextVar[str] = ContextVar("work_report_openai_last_error", default="")
+_WORK_REPORT_OPENAI_LAST_ERROR_REASON: ContextVar[str] = ContextVar("work_report_openai_last_error_reason", default="")
+_WORK_REPORT_OPENAI_LAST_ERROR_DETAILS: ContextVar[str] = ContextVar("work_report_openai_last_error_details", default="")
 WORK_REPORT_FILE_EXTENSIONS = (
     ".pdf",
     ".hwp",
@@ -110,24 +117,106 @@ def _str_env(name: str, default: str = "") -> str:
     return str(os.getenv(name) or default or "").strip()
 
 
+def _clear_openai_error_state() -> None:
+    _WORK_REPORT_OPENAI_LAST_ERROR.set("")
+    _WORK_REPORT_OPENAI_LAST_ERROR_REASON.set("")
+    _WORK_REPORT_OPENAI_LAST_ERROR_DETAILS.set("")
+
+
+def _classify_openai_error_message(message: str) -> str:
+    lowered = _collapse(message).lower()
+    if not lowered:
+        return ""
+    if "insufficient_quota" in lowered or "exceeded your current quota" in lowered:
+        return "insufficient_quota"
+    if "rate limit" in lowered or "429" in lowered:
+        return "rate_limited"
+    if "timeout" in lowered or "timed out" in lowered or "readtimeout" in lowered:
+        return "api_timeout"
+    if "api key" in lowered or "authentication" in lowered or "invalid_api_key" in lowered or "401" in lowered:
+        return "auth_error"
+    return "openai_error"
+
+
+def _analysis_reason_notice(reason: str, *, details: str = "") -> str:
+    reason_key = str(reason or "").strip().lower()
+    if reason_key == "insufficient_quota":
+        return "OpenAI 할당량이 부족해 AI 분석을 계속할 수 없습니다."
+    if reason_key == "rate_limited":
+        return "OpenAI 요청 한도에 걸려 AI 분석이 지연되거나 실패했습니다."
+    if reason_key == "api_timeout":
+        return "OpenAI 응답 시간이 초과되어 AI 분석이 중단됐습니다."
+    if reason_key == "missing_api_key":
+        return "OpenAI API 키가 설정되지 않아 AI 분석을 사용할 수 없습니다."
+    if reason_key == "missing_sdk":
+        return "OpenAI SDK가 준비되지 않아 AI 분석을 사용할 수 없습니다."
+    if reason_key == "auth_error":
+        return "OpenAI 인증 설정을 확인해야 합니다."
+    if reason_key == "invalid_json":
+        return "AI 응답에서 JSON 결과를 읽지 못했습니다."
+    detail_text = _collapse(details)[:180]
+    return f"AI 분석 호출에 실패했습니다: {detail_text}" if detail_text else "AI 분석 호출에 실패했습니다."
+
+
+def _analysis_reason_label(reason: str) -> str:
+    reason_key = str(reason or "").strip().lower()
+    if reason_key == "api_timeout":
+        return "응답 시간 초과"
+    if reason_key == "insufficient_quota":
+        return "할당량 부족"
+    if reason_key == "rate_limited":
+        return "요청 한도 초과"
+    if reason_key == "missing_api_key":
+        return "API 키 미설정"
+    if reason_key == "missing_sdk":
+        return "SDK 미설치"
+    if reason_key == "auth_error":
+        return "인증 설정 오류"
+    if reason_key == "invalid_json":
+        return "응답 형식 오류"
+    if reason_key == "openai_error":
+        return "OpenAI 호출 실패"
+    return ""
+
+
+def _analysis_mode_label(model: str, reason: str = "") -> str:
+    model_name = _collapse(model)
+    if model_name == "heuristic":
+        return "규칙 기반"
+    if model_name.startswith("gpt-"):
+        return "OpenAI + 보조 분석" if _collapse(reason) else f"OpenAI ({model_name})"
+    return model_name or "-"
+
+
+def _set_openai_error_state(reason: str, notice: str, *, details: str = "") -> None:
+    _WORK_REPORT_OPENAI_LAST_ERROR.set(_collapse(notice))
+    _WORK_REPORT_OPENAI_LAST_ERROR_REASON.set(_collapse(reason))
+    _WORK_REPORT_OPENAI_LAST_ERROR_DETAILS.set(_collapse(details)[:500])
+
+
 def _summarize_openai_error(exc: Exception) -> str:
     message = _collapse(str(exc))
-    lowered = message.lower()
-    if "insufficient_quota" in lowered or "exceeded your current quota" in lowered:
-        return "OpenAI 할당량이 부족해 AI 분석을 계속할 수 없습니다."
-    if "rate limit" in lowered or "429" in lowered:
-        return "OpenAI 요청 한도에 걸려 AI 분석이 지연되거나 실패했습니다."
-    if "timeout" in lowered or "timed out" in lowered:
-        return "OpenAI 응답 시간이 초과되어 AI 분석이 중단됐습니다."
-    if "api key" in lowered or "authentication" in lowered or "invalid_api_key" in lowered:
-        return "OpenAI 인증 설정을 확인해야 합니다."
-    return f"AI 분석 호출에 실패했습니다: {message[:180]}"
+    return _analysis_reason_notice(_classify_openai_error_message(message), details=message)
+
+
+def _consume_openai_error_snapshot() -> Dict[str, str]:
+    snapshot = {
+        "reason": _collapse(_WORK_REPORT_OPENAI_LAST_ERROR_REASON.get("")),
+        "notice": _collapse(_WORK_REPORT_OPENAI_LAST_ERROR.get("")),
+        "details": _collapse(_WORK_REPORT_OPENAI_LAST_ERROR_DETAILS.get("")),
+    }
+    _clear_openai_error_state()
+    return snapshot
 
 
 def _consume_openai_error_notice() -> str:
-    message = _collapse(_WORK_REPORT_OPENAI_LAST_ERROR.get(""))
-    _WORK_REPORT_OPENAI_LAST_ERROR.set("")
-    return message
+    return _consume_openai_error_snapshot().get("notice", "")
+
+
+def _append_unique_note(notes: List[str], text: str) -> None:
+    message = _collapse(text)
+    if message and message not in notes:
+        notes.append(message)
 
 
 def _report_progress(
@@ -239,13 +328,76 @@ def _time_minutes(text: str) -> int:
 def _openai_client(default_model: str = "gpt-5", env_name: str = "OPENAI_MODEL") -> Tuple[Any | None, str]:
     api_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
+        _set_openai_error_state("missing_api_key", _analysis_reason_notice("missing_api_key"))
         return None, ""
     try:
         from openai import OpenAI
-    except Exception:
+    except Exception as exc:
+        _set_openai_error_state("missing_sdk", _analysis_reason_notice("missing_sdk"), details=str(exc))
         return None, ""
     model = str(os.getenv(env_name) or os.getenv("OPENAI_MODEL") or default_model).strip() or default_model
+    _clear_openai_error_state()
     return OpenAI(api_key=api_key), model
+
+
+def _openai_event_excerpt_line(event: Dict[str, Any]) -> str:
+    body = _collapse(event.get("text") or "")
+    if not body:
+        return ""
+    sender = _collapse(event.get("sender") or "-")
+    date_label = _collapse(event.get("date_label") or event.get("date") or "-")
+    minute = int(event.get("minute_of_day") or -1)
+    time_label = f"{minute // 60:02d}:{minute % 60:02d}" if minute >= 0 else "--:--"
+    return f"- {date_label} {time_label} / {sender} / {body}"
+
+
+def _openai_text_excerpt(text: str) -> Dict[str, Any]:
+    raw = str(text or "")
+    if not _collapse(raw):
+        return {
+            "text": "",
+            "applied": False,
+            "mode": "empty",
+            "event_count": 0,
+            "char_count": 0,
+            "source_char_count": 0,
+        }
+    max_chars = _int_env("WORK_REPORT_OPENAI_TEXT_MAX_CHARS", WORK_REPORT_OPENAI_TEXT_MAX_CHARS, minimum=2000)
+    max_events = _int_env("WORK_REPORT_OPENAI_TEXT_MAX_EVENTS", WORK_REPORT_OPENAI_TEXT_MAX_EVENTS, minimum=20)
+    if len(raw) <= max_chars:
+        return {
+            "text": raw,
+            "applied": False,
+            "mode": "full",
+            "event_count": 0,
+            "char_count": len(raw),
+            "source_char_count": len(raw),
+        }
+    events = _parse_kakao_events(raw)
+    excerpt_lines: List[str] = []
+    for event in events[:max_events]:
+        line = _openai_event_excerpt_line(event)
+        if line:
+            excerpt_lines.append(line)
+    if excerpt_lines:
+        excerpt = "\n".join(excerpt_lines)
+        mode = "event_excerpt"
+        event_count = len(excerpt_lines)
+    else:
+        lines = [_collapse(line) for line in raw.splitlines() if _collapse(line)]
+        excerpt = "\n".join(lines[:max_events])
+        mode = "line_excerpt"
+        event_count = 0
+    if len(excerpt) > max_chars:
+        excerpt = f"{excerpt[: max(1, max_chars - 1)].rstrip()}…"
+    return {
+        "text": excerpt,
+        "applied": True,
+        "mode": mode,
+        "event_count": event_count,
+        "char_count": len(excerpt),
+        "source_char_count": len(raw),
+    }
 
 
 def _sample_heading(sample_title: str, sample_lines: Sequence[str]) -> str:
@@ -1579,7 +1731,7 @@ def _openai_json_response(
     timeout_sec: float,
     reasoning_effort: str = "",
 ) -> Dict[str, Any] | None:
-    _WORK_REPORT_OPENAI_LAST_ERROR.set("")
+    _clear_openai_error_state()
     request_kwargs: Dict[str, Any] = {
         "model": model,
         "input": [{"role": "user", "content": list(content or [])}],
@@ -1598,13 +1750,15 @@ def _openai_json_response(
                 raise
         raw = _extract_json_text(getattr(response, "output_text", "") or "")
         if not raw:
-            _WORK_REPORT_OPENAI_LAST_ERROR.set("AI 응답에서 JSON 결과를 읽지 못했습니다.")
+            _set_openai_error_state("invalid_json", _analysis_reason_notice("invalid_json"))
             return None
         data = json.loads(raw)
-        _WORK_REPORT_OPENAI_LAST_ERROR.set("")
+        _clear_openai_error_state()
         return data if isinstance(data, dict) else None
     except Exception as exc:
-        _WORK_REPORT_OPENAI_LAST_ERROR.set(_summarize_openai_error(exc))
+        message = _collapse(str(exc))
+        reason = _classify_openai_error_message(message)
+        _set_openai_error_state(reason, _summarize_openai_error(exc), details=message)
         return None
 
 
@@ -1664,6 +1818,7 @@ def _openai_work_report(
         )
         if len(candidate_lines) >= 80:
             break
+    text_excerpt = _openai_text_excerpt(text)
     prompt = """
 너는 아파트 관리사무소 시설팀의 주요업무보고서를 만드는 도우미다.
 입력으로 카카오톡 단체방 대화, 현장 사진, 첨부파일 목록, 샘플 보고서 개요가 들어온다.
@@ -1734,8 +1889,9 @@ def _openai_work_report(
     if sample_title or sample_lines:
         sample_excerpt = "\n".join(_collapse(line) for line in list(sample_lines)[:20] if _collapse(line))
         content.append({"type": "input_text", "text": f"샘플 제목: {sample_title or '-'}\n샘플 개요:\n{sample_excerpt or '-'}"})
-    if _collapse(text):
-        content.append({"type": "input_text", "text": f"카톡 대화 원문:\n{text}"})
+    if _collapse(text_excerpt.get("text") or ""):
+        text_heading = "카톡 대화 축약본" if text_excerpt.get("applied") else "카톡 대화 원문"
+        content.append({"type": "input_text", "text": f"{text_heading}:\n{text_excerpt.get('text') or ''}"})
     if candidate_lines:
         content.append({"type": "input_text", "text": "대화에서 보이는 작업 후보:\n" + "\n".join(candidate_lines)})
     reference_images = list(reference_image_inputs or [])
@@ -1910,6 +2066,17 @@ def _openai_work_report(
         "unmatched_attachment_indexes": sorted((set(range(1, len(attachment_inputs) + 1)) - used_attachments) | unmatched_attachment_indexes),
         "analysis_notice": _collapse(data.get("analysis_notice") or ""),
         "analysis_model": model,
+        "analysis_reason": "",
+        "analysis_diagnostics": {
+            "openai_model": model,
+            "text_compacted": bool(text_excerpt.get("applied")),
+            "text_excerpt_mode": _collapse(text_excerpt.get("mode") or ""),
+            "text_excerpt_char_count": int(text_excerpt.get("char_count") or 0),
+            "text_source_char_count": int(text_excerpt.get("source_char_count") or 0),
+            "text_excerpt_event_count": int(text_excerpt.get("event_count") or 0),
+            "representative_image_count": len(visual_meta),
+            "reference_image_count": len(reference_images),
+        },
     }
 
 
@@ -1932,6 +2099,10 @@ def _openai_match_image_chunks(
         WORK_REPORT_OPENAI_IMAGE_MATCH_SAMPLE_PER_CLUSTER,
         minimum=1,
     )
+    if len(image_inputs) >= 24:
+        sample_per_cluster = min(sample_per_cluster, 2)
+    if len(image_inputs) >= 36:
+        max_clusters = min(max_clusters, 3)
     image_lookup = {index: row for index, row in enumerate(list(image_inputs or []), start=1)}
     image_meta_rows = [_openai_image_meta(index, row) for index, row in image_lookup.items()]
     clusters = _cluster_openai_image_meta(image_meta_rows)
@@ -1943,6 +2114,7 @@ def _openai_match_image_chunks(
     assigned_rows: Dict[int, List[Dict[str, Any]]] = {int(item.get("index") or 0): [] for item in items if int(item.get("index") or 0) > 0}
     unmatched_image_indexes: set[int] = set()
     analysis_notes: List[str] = []
+    openai_failures: List[Dict[str, str]] = []
 
     prompt = """
 너는 이미 추출된 시설팀 작업 항목에 현장 사진 군집을 매칭하는 도우미다.
@@ -2056,9 +2228,21 @@ def _openai_match_image_chunks(
             }
             notice = _collapse(raw_data.get("analysis_notice") or "")
             if notice:
-                analysis_notes.append(notice)
+                _append_unique_note(analysis_notes, notice)
         else:
-            analysis_notes.append(f"이미지 배치 {batch_number}건은 AI 응답이 불안정해 보수적으로 재배치했습니다.")
+            snapshot = _consume_openai_error_snapshot()
+            if snapshot.get("notice"):
+                _append_unique_note(analysis_notes, snapshot["notice"])
+            if any(snapshot.values()):
+                openai_failures.append(
+                    {
+                        "stage": f"image_batch_{batch_number}",
+                        "reason": _collapse(snapshot.get("reason") or ""),
+                        "notice": _collapse(snapshot.get("notice") or ""),
+                        "details": _collapse(snapshot.get("details") or ""),
+                    }
+                )
+            _append_unique_note(analysis_notes, f"이미지 배치 {batch_number}건은 AI 응답이 불안정해 보수적으로 재배치했습니다.")
 
         pending_local_indexes = set(range(1, len(batch_clusters) + 1)) - matched_local_indexes - unmatched_local_indexes
         if pending_local_indexes:
@@ -2071,7 +2255,7 @@ def _openai_match_image_chunks(
                 else:
                     unmatched_local_indexes.add(local_index)
             if raw_data is None:
-                analysis_notes.append(f"이미지 배치 {batch_number}의 남은 군집은 파일명/문맥 점수로만 보수 매칭했습니다.")
+                _append_unique_note(analysis_notes, f"이미지 배치 {batch_number}의 남은 군집은 파일명/문맥 점수로만 보수 매칭했습니다.")
         for local_index in unmatched_local_indexes:
             for cluster_row in batch_clusters[local_index - 1]:
                 image_index = int(cluster_row.get("index") or 0)
@@ -2093,6 +2277,15 @@ def _openai_match_image_chunks(
         "unmatched_image_indexes": sorted(unmatched_image_indexes),
         "analysis_notice": _collapse(" ".join(note for note in analysis_notes if _collapse(note))),
         "analysis_model": model,
+        "analysis_reason": next((row["reason"] for row in openai_failures if _collapse(row.get("reason") or "")), ""),
+        "analysis_diagnostics": {
+            "openai_model": model,
+            "cluster_count": len(clusters),
+            "cluster_batch_count": total_batches,
+            "max_clusters_per_batch": max_clusters,
+            "sample_per_cluster": sample_per_cluster,
+            "openai_failures": openai_failures,
+        },
     }
 
 
@@ -2124,17 +2317,35 @@ def analyze_work_report(
         hint="입력 크기에 따라 초기 정리 시간이 조금 걸릴 수 있습니다.",
     )
 
-    def remember_openai_error() -> None:
-        notice = _consume_openai_error_notice()
-        if notice and notice not in openai_failure_notes:
-            openai_failure_notes.append(notice)
-
     chunk_trigger_images = _int_env(
         "WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES",
         WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES,
         minimum=1,
     )
     use_chunked_image_matching = bool(images) and len(images) >= chunk_trigger_images
+    openai_failures: List[Dict[str, str]] = []
+    analysis_diagnostics: Dict[str, Any] = {
+        "input_image_count": len(images),
+        "reference_image_count": len(reference_images),
+        "attachment_count": len(attachments),
+        "image_heavy": image_heavy,
+        "used_chunked_image_matching": use_chunked_image_matching,
+    }
+
+    def remember_openai_error(stage: str) -> None:
+        snapshot = _consume_openai_error_snapshot()
+        notice = _collapse(snapshot.get("notice") or "")
+        if notice:
+            _append_unique_note(openai_failure_notes, notice)
+        if any(_collapse(value) for value in snapshot.values()):
+            openai_failures.append(
+                {
+                    "stage": _collapse(stage),
+                    "reason": _collapse(snapshot.get("reason") or ""),
+                    "notice": notice,
+                    "details": _collapse(snapshot.get("details") or ""),
+                }
+            )
 
     ai_result: Dict[str, Any] | None = None
     if use_chunked_image_matching:
@@ -2153,7 +2364,9 @@ def analyze_work_report(
             sample_lines=sample_lines,
         )
         if not base_ai_result:
-            remember_openai_error()
+            remember_openai_error("chunk_seed_extract")
+        else:
+            analysis_diagnostics["seed_extract"] = dict(base_ai_result.get("analysis_diagnostics") or {})
         if base_ai_result:
             chunked_images = _openai_match_image_chunks(
                 text=normalized_text,
@@ -2162,7 +2375,9 @@ def analyze_work_report(
                 progress_callback=progress_callback,
             )
             if not chunked_images:
-                remember_openai_error()
+                remember_openai_error("chunked_image_match")
+            else:
+                analysis_diagnostics["chunked_image_match"] = dict(chunked_images.get("analysis_diagnostics") or {})
             if chunked_images:
                 merged_notice = "대량 이미지는 군집 단위로 나눠 AI가 단계적으로 매칭했습니다."
                 chunk_notice = _collapse(chunked_images.get("analysis_notice") or "")
@@ -2175,6 +2390,11 @@ def analyze_work_report(
                     "unmatched_attachment_indexes": list(base_ai_result.get("unmatched_attachment_indexes") or []),
                     "analysis_notice": analysis_notice,
                     "analysis_model": _collapse(chunked_images.get("analysis_model") or base_ai_result.get("analysis_model") or "gpt-5.4"),
+                    "analysis_reason": _collapse(chunked_images.get("analysis_reason") or base_ai_result.get("analysis_reason") or ""),
+                    "analysis_diagnostics": {
+                        "seed_extract": dict(base_ai_result.get("analysis_diagnostics") or {}),
+                        "chunked_image_match": dict(chunked_images.get("analysis_diagnostics") or {}),
+                    },
                 }
             else:
                 ai_result = base_ai_result
@@ -2199,7 +2419,9 @@ def analyze_work_report(
             sample_lines=sample_lines,
         )
         if not ai_result:
-            remember_openai_error()
+            remember_openai_error("direct_extract")
+        else:
+            analysis_diagnostics["direct_extract"] = dict(ai_result.get("analysis_diagnostics") or {})
     if not ai_result and images:
         _report_progress(
             progress_callback,
@@ -2216,7 +2438,9 @@ def analyze_work_report(
             sample_lines=sample_lines,
         )
         if not base_ai_result:
-            remember_openai_error()
+            remember_openai_error("fallback_seed_extract")
+        else:
+            analysis_diagnostics["fallback_seed_extract"] = dict(base_ai_result.get("analysis_diagnostics") or {})
         if base_ai_result:
             chunked_images = _openai_match_image_chunks(
                 text=normalized_text,
@@ -2225,7 +2449,9 @@ def analyze_work_report(
                 progress_callback=progress_callback,
             )
             if not chunked_images:
-                remember_openai_error()
+                remember_openai_error("fallback_chunked_image_match")
+            else:
+                analysis_diagnostics["fallback_chunked_image_match"] = dict(chunked_images.get("analysis_diagnostics") or {})
             if chunked_images:
                 merged_notice = "기본 통합 분석이 지연되어 이미지 매칭을 군집 배치로 다시 수행했습니다."
                 chunk_notice = _collapse(chunked_images.get("analysis_notice") or "")
@@ -2238,7 +2464,13 @@ def analyze_work_report(
                     "unmatched_attachment_indexes": list(base_ai_result.get("unmatched_attachment_indexes") or []),
                     "analysis_notice": analysis_notice,
                     "analysis_model": _collapse(chunked_images.get("analysis_model") or base_ai_result.get("analysis_model") or "gpt-5.4"),
+                    "analysis_reason": _collapse(chunked_images.get("analysis_reason") or base_ai_result.get("analysis_reason") or ""),
+                    "analysis_diagnostics": {
+                        "fallback_seed_extract": dict(base_ai_result.get("analysis_diagnostics") or {}),
+                        "fallback_chunked_image_match": dict(chunked_images.get("analysis_diagnostics") or {}),
+                    },
                 }
+    analysis_reason = ""
     if ai_result:
         _report_progress(
             progress_callback,
@@ -2251,11 +2483,17 @@ def analyze_work_report(
         unmatched_attachment_indexes = list(ai_result.get("unmatched_attachment_indexes") or [])
         analysis_notice = _collapse(ai_result.get("analysis_notice") or "")
         analysis_model = _collapse(ai_result.get("analysis_model") or "gpt-5")
+        analysis_reason = _collapse(ai_result.get("analysis_reason") or "")
         report_title = _collapse(ai_result.get("report_title") or _sample_heading(sample_title, sample_lines))
         period_label = _collapse(ai_result.get("period_label") or _sample_period(sample_lines))
         if openai_failure_notes:
             ai_notice = " ".join(openai_failure_notes)
             analysis_notice = ai_notice if not analysis_notice else f"{analysis_notice} {ai_notice}"
+        if not analysis_reason:
+            analysis_reason = next((row["reason"] for row in openai_failures if _collapse(row.get("reason") or "")), "")
+        ai_result_diagnostics = ai_result.get("analysis_diagnostics")
+        if isinstance(ai_result_diagnostics, dict) and ai_result_diagnostics:
+            analysis_diagnostics["final_openai"] = dict(ai_result_diagnostics)
         supplemental_items = _supplement_text_only_items(items, normalized_text, image_heavy=image_heavy)
         if supplemental_items:
             for item in supplemental_items:
@@ -2456,6 +2694,7 @@ def analyze_work_report(
         period_label = _sample_period(sample_lines)
         analysis_notice = " ".join(openai_failure_notes) if openai_failure_notes else ""
         analysis_model = "heuristic"
+        analysis_reason = next((row["reason"] for row in openai_failures if _collapse(row.get("reason") or "")), "")
 
         attachment_entries = [
             {
@@ -2560,12 +2799,43 @@ def analyze_work_report(
     image_items = [item for item in items if item.get("images")]
     text_only_items = [item for item in items if not item.get("images")]
     report_text = _build_text_summary(report_title, period_label, items, unmatched_images, unmatched_attachments, analysis_notice)
+    analysis_reason_label = _analysis_reason_label(analysis_reason)
+    analysis_mode_label = _analysis_mode_label(analysis_model, analysis_reason)
+    analysis_diagnostics["openai_failures"] = openai_failures
+    analysis_diagnostics["final_model"] = analysis_model
+    analysis_diagnostics["final_reason"] = analysis_reason
+    if analysis_reason or analysis_model == "heuristic":
+        logger.warning(
+            "work report analysis fallback: model=%s reason=%s items=%s images=%s ref_images=%s attachments=%s chunked=%s failures=%s",
+            analysis_model or "-",
+            analysis_reason or "-",
+            len(items),
+            len(images),
+            len(reference_images),
+            len(attachments),
+            use_chunked_image_matching,
+            len(openai_failures),
+        )
+    elif use_chunked_image_matching:
+        logger.info(
+            "work report analysis completed: model=%s items=%s images=%s ref_images=%s attachments=%s chunked=%s",
+            analysis_model or "-",
+            len(items),
+            len(images),
+            len(reference_images),
+            len(attachments),
+            use_chunked_image_matching,
+        )
     return {
         "report_title": report_title,
         "period_label": period_label,
         "template_title": _collapse(sample_title) or report_title,
         "analysis_model": analysis_model,
+        "analysis_mode_label": analysis_mode_label,
+        "analysis_reason": analysis_reason,
+        "analysis_reason_label": analysis_reason_label,
         "analysis_notice": analysis_notice,
+        "analysis_diagnostics": analysis_diagnostics,
         "item_count": len(items),
         "image_item_count": len(image_items),
         "text_only_item_count": len(text_only_items),
