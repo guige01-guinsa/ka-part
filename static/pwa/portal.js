@@ -87,6 +87,9 @@
   let lastDigestImported = false;
   let lastDigestSelectedKeys = new Set();
   let lastWorkReportResult = null;
+  let lastWorkReportBaseline = null;
+  let lastWorkReportJobId = "";
+  let lastWorkReportFeedbackSavedSignature = "";
   let currentIntakeStep = 1;
   let currentMobileWorkspace = "intake";
 
@@ -124,6 +127,12 @@
   }
 
   const WORK_REPORT_REQUEST_TIMEOUT_MS = 900000;
+  const WORK_REPORT_IMAGE_STAGE_OPTIONS = [
+    { value: "general", label: "현장 이미지" },
+    { value: "before", label: "작업 전" },
+    { value: "during", label: "작업 중" },
+    { value: "after", label: "작업 후" },
+  ];
 
   function renderWorkReportProgress(state) {
     const modeLabel = state?.mode === "pdf" ? "주요업무보고 PDF" : "주요업무보고 미리보기";
@@ -4023,6 +4032,199 @@
     return "";
   }
 
+  function deepCloneJson(value) {
+    if (value === undefined) return undefined;
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function normalizeWorkReportImageStage(stage) {
+    const value = String(stage || "").trim();
+    return WORK_REPORT_IMAGE_STAGE_OPTIONS.some((row) => row.value === value) ? value : "general";
+  }
+
+  function workReportImageStageLabel(stage) {
+    const normalized = normalizeWorkReportImageStage(stage);
+    const match = WORK_REPORT_IMAGE_STAGE_OPTIONS.find((row) => row.value === normalized);
+    return match ? match.label : "현장 이미지";
+  }
+
+  function syncWorkReportImageCollection(images) {
+    const list = Array.isArray(images) ? images : [];
+    list.sort(
+      (left, right) => Number(left?.index || 0) - Number(right?.index || 0)
+        || String(left?.filename || "").localeCompare(String(right?.filename || ""), "ko")
+    );
+    list.forEach((image) => {
+      if (!image || typeof image !== "object") return;
+      const stage = normalizeWorkReportImageStage(image.stage);
+      image.stage = stage;
+      image.stage_label = workReportImageStageLabel(stage);
+      if (image.include_in_output === undefined) {
+        image.include_in_output = true;
+      }
+    });
+    return list;
+  }
+
+  function workReportItemByIndex(report, itemIndex) {
+    if (!report || !Array.isArray(report.items)) return null;
+    return report.items.find((row) => Number(row?.index || 0) === Number(itemIndex || 0)) || null;
+  }
+
+  function workReportImageKey(image, fallbackKey = "") {
+    const index = Number(image?.index || 0);
+    if (index > 0) return `id:${index}`;
+    const filename = String(image?.filename || "").trim();
+    if (filename) return `file:${filename}`;
+    return `fallback:${fallbackKey}`;
+  }
+
+  function collectWorkReportImageAssignments(report) {
+    const snapshot = new Map();
+    const items = Array.isArray(report?.items) ? report.items : [];
+    items.forEach((item) => {
+      const itemIndex = Number(item?.index || 0);
+      const itemTitle = String(item?.title || "").trim() || "작업 항목";
+      (Array.isArray(item?.images) ? item.images : []).forEach((image, order) => {
+        const key = workReportImageKey(image, `item-${itemIndex}-${order}`);
+        snapshot.set(key, {
+          key,
+          image_index: Number(image?.index || 0),
+          filename: String(image?.filename || "").trim(),
+          item_index: itemIndex,
+          item_title: itemTitle,
+          stage: normalizeWorkReportImageStage(image?.stage),
+        });
+      });
+    });
+    (Array.isArray(report?.unmatched_images) ? report.unmatched_images : []).forEach((image, order) => {
+      const key = workReportImageKey(image, `unmatched-${order}`);
+      snapshot.set(key, {
+        key,
+        image_index: Number(image?.index || 0),
+        filename: String(image?.filename || "").trim(),
+        item_index: 0,
+        item_title: "미매칭",
+        stage: normalizeWorkReportImageStage(image?.stage),
+      });
+    });
+    return snapshot;
+  }
+
+  function buildWorkReportFeedbackSummary(report, baseline) {
+    if (!report || !baseline) {
+      return { changes: [], signature: "" };
+    }
+    const current = collectWorkReportImageAssignments(report);
+    const original = collectWorkReportImageAssignments(baseline);
+    const changes = [];
+    current.forEach((row, key) => {
+      const before = original.get(key);
+      if (!before) return;
+      const assignmentChanged = Number(before.item_index || 0) !== Number(row.item_index || 0);
+      const stageChanged = String(before.stage || "general") !== String(row.stage || "general");
+      if (!assignmentChanged && !stageChanged) return;
+      changes.push({
+        image_index: Number(row.image_index || 0),
+        filename: String(row.filename || "").trim(),
+        from_item_index: Number(before.item_index || 0),
+        from_item_title: String(before.item_title || "미매칭"),
+        to_item_index: Number(row.item_index || 0),
+        to_item_title: String(row.item_title || "미매칭"),
+        from_stage: String(before.stage || "general"),
+        from_stage_label: workReportImageStageLabel(before.stage),
+        to_stage: String(row.stage || "general"),
+        to_stage_label: workReportImageStageLabel(row.stage),
+      });
+    });
+    changes.sort(
+      (left, right) => Number(left.image_index || 0) - Number(right.image_index || 0)
+        || String(left.filename || "").localeCompare(String(right.filename || ""), "ko")
+    );
+    return {
+      changes,
+      signature: changes.length ? JSON.stringify(changes) : "",
+    };
+  }
+
+  function buildWorkReportFeedbackSnapshot(report) {
+    const items = Array.isArray(report?.items) ? report.items : [];
+    const unmatchedImages = Array.isArray(report?.unmatched_images) ? report.unmatched_images : [];
+    return {
+      report_title: String(report?.report_title || "").trim(),
+      period_label: String(report?.period_label || "").trim(),
+      analysis_model: String(report?.analysis_model || "").trim(),
+      analysis_reason: String(report?.analysis_reason || "").trim(),
+      item_count: items.length,
+      items: items.map((item) => ({
+        index: Number(item?.index || 0),
+        title: String(item?.title || "").trim(),
+        summary: String(item?.summary || "").trim(),
+        images: syncWorkReportImageCollection(Array.isArray(item?.images) ? item.images.map((row) => ({ ...row })) : []).map((image) => ({
+          index: Number(image?.index || 0),
+          filename: String(image?.filename || "").trim(),
+          stage: String(image?.stage || "general"),
+          stage_label: String(image?.stage_label || workReportImageStageLabel(image?.stage)),
+        })),
+      })),
+      unmatched_images: syncWorkReportImageCollection(unmatchedImages.map((row) => ({ ...row }))).map((image) => ({
+        index: Number(image?.index || 0),
+        filename: String(image?.filename || "").trim(),
+        stage: String(image?.stage || "general"),
+        stage_label: String(image?.stage_label || workReportImageStageLabel(image?.stage)),
+      })),
+    };
+  }
+
+  function renderWorkReportAssignmentOptions(report, selectedValue) {
+    const options = [];
+    const currentValue = String(selectedValue || "__unmatched__");
+    options.push(`<option value="__unmatched__"${currentValue === "__unmatched__" ? " selected" : ""}>미매칭으로 두기</option>`);
+    (Array.isArray(report?.items) ? report.items : []).forEach((item) => {
+      const itemIndex = Number(item?.index || 0);
+      if (itemIndex <= 0) return;
+      const label = `${itemIndex}. ${String(item?.title || "-")}`;
+      options.push(`<option value="${itemIndex}"${currentValue === String(itemIndex) ? " selected" : ""}>${escapeHtml(label)}</option>`);
+    });
+    return options.join("");
+  }
+
+  function renderWorkReportStageOptions(selectedStage) {
+    const currentValue = normalizeWorkReportImageStage(selectedStage);
+    return WORK_REPORT_IMAGE_STAGE_OPTIONS.map((option) => (
+      `<option value="${option.value}"${currentValue === option.value ? " selected" : ""}>${escapeHtml(option.label)}</option>`
+    )).join("");
+  }
+
+  function renderWorkReportImageEditor(report, image, config = {}) {
+    const row = image && typeof image === "object" ? image : {};
+    const stage = normalizeWorkReportImageStage(row.stage);
+    const stageLabel = String(row.stage_label || workReportImageStageLabel(stage));
+    const checked = row && row.include_in_output !== false ? " checked" : "";
+    const sourceType = String(config.sourceType || "item");
+    const sourceAttrs = sourceType === "unmatched"
+      ? `data-unmatched-index="${Number(config.unmatchedIndex || 0)}"`
+      : `data-item-index="${Number(config.itemIndex || 0)}" data-image-index="${Number(config.imageIndex || 0)}"`;
+    const editorAttrs = sourceType === "unmatched"
+      ? `data-source-type="unmatched" data-unmatched-index="${Number(config.unmatchedIndex || 0)}"`
+      : `data-source-type="item" data-item-index="${Number(config.itemIndex || 0)}" data-image-index="${Number(config.imageIndex || 0)}"`;
+    const assignmentValue = sourceType === "unmatched" ? "__unmatched__" : String(Number(config.itemIndex || 0));
+    const checkboxClass = sourceType === "unmatched" ? "work-report-unmatched-output-check" : "work-report-output-check";
+    return [
+      '<div class="work-report-image-select">',
+      `<input class="${checkboxClass}" type="checkbox" ${sourceAttrs}${checked}>`,
+      '<div class="work-report-image-body">',
+      `<span class="work-report-image-title">${escapeHtml(`${stageLabel} · ${String(row.filename || "-")}`)}</span>`,
+      row.manual_override ? '<span class="work-report-image-note">수동 보정</span>' : "",
+      '<div class="work-report-image-controls">',
+      `<label class="work-report-control-field"><span>연결 작업</span><select class="work-report-image-assignment" ${editorAttrs}>${renderWorkReportAssignmentOptions(report, assignmentValue)}</select></label>`,
+      `<label class="work-report-control-field"><span>단계</span><select class="work-report-image-stage" ${editorAttrs}>${renderWorkReportStageOptions(stage)}</select></label>`,
+      "</div>",
+      "</div>",
+      "</div>",
+    ].join("");
+  }
+
   function renderWorkReportResult(item) {
     const report = item || {};
     const items = Array.isArray(report.items) ? report.items : [];
@@ -4031,15 +4233,23 @@
     const unmatchedImages = Array.isArray(report.unmatched_images) ? report.unmatched_images : [];
     const modeLabel = workReportAnalysisModeLabel(report);
     const reasonLabel = workReportAnalysisReasonLabel(report);
+    const feedback = buildWorkReportFeedbackSummary(report, lastWorkReportBaseline);
+    const feedbackSaved = !!feedback.signature && feedback.signature === lastWorkReportFeedbackSavedSignature;
+    const feedbackDisabled = !feedback.changes.length || feedbackSaved;
+    const feedbackSummary = feedback.changes.length
+      ? feedbackSaved
+        ? `수동 보정 ${feedback.changes.length}건이 저장되었습니다.`
+        : `수동 보정 ${feedback.changes.length}건이 저장 대기 중입니다.`
+      : "아직 저장할 이미지 매칭 수정은 없습니다.";
     const sections = [
       [
         "<div class=\"subhead\">보고 개요</div>",
         `<div class="work-report-meta">`,
         `<span>${escapeHtml(String(report.report_title || "시설팀 주요 업무 보고"))}</span>`,
         `<span>기간 ${escapeHtml(String(report.period_label || "-"))}</span>`,
-        `<span>작업 ${escapeHtml(String(report.item_count || items.length || 0))}건</span>`,
-        `<span>사진 포함 ${escapeHtml(String(report.image_item_count || imageItems.length || 0))}건</span>`,
-        `<span>텍스트 전용 ${escapeHtml(String(report.text_only_item_count || textOnlyItems.length || 0))}건</span>`,
+        `<span>작업 ${escapeHtml(String(items.length || 0))}건</span>`,
+        `<span>사진 포함 ${escapeHtml(String(imageItems.length || 0))}건</span>`,
+        `<span>텍스트 전용 ${escapeHtml(String(textOnlyItems.length || 0))}건</span>`,
         `<span>모델 ${escapeHtml(modeLabel)}</span>`,
         reasonLabel ? `<span>사유 ${escapeHtml(reasonLabel)}</span>` : "",
         report.template_source_name ? `<span>양식 ${escapeHtml(String(report.template_source_name || ""))}</span>` : "",
@@ -4051,6 +4261,15 @@
     }
     if (imageItems.length) {
       sections.push('<div class="detail-block">미리보기에서 체크된 사진만 PDF에 출력됩니다.</div>');
+    }
+    if (imageItems.length || unmatchedImages.length) {
+      sections.push(
+        `<div class="work-report-feedback-bar${feedback.changes.length && !feedbackSaved ? " is-dirty" : ""}${feedbackSaved ? " is-saved" : ""}">`
+        + `<div class="work-report-feedback-summary"><strong>이미지 매칭 보정</strong><span>${escapeHtml(feedbackSummary)}</span></div>`
+        + `<button class="work-report-feedback-save" type="button"${feedbackDisabled ? " disabled" : ""}>${escapeHtml(feedbackSaved ? "저장 완료" : feedback.changes.length ? "매칭 수정 저장" : "저장할 변경 없음")}</button>`
+        + "</div>"
+      );
+      sections.push('<div class="detail-block">이미지 매칭이 애매하면 사진별로 연결 작업과 단계값을 직접 바꿀 수 있습니다. 저장한 수정 내역은 다음 매칭 개선용 피드백으로 누적됩니다.</div>');
     }
     if (imageItems.length) {
       sections.push("<div class=\"subhead\">사진 포함 작업 항목</div>");
@@ -4064,15 +4283,13 @@
           `<strong>${escapeHtml(`${index + 1}. ${String(row.title || "-")}`)}</strong>`,
           `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 작업자: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
           `<p>${escapeHtml(`내용설명 : ${String(row.summary || row.title || "-")}`)}</p>`,
-          Array.isArray(row.images) && row.images.length ? `<div class="work-report-image-select-list">${row.images.map((image, imageIndex) => {
-            const checked = image && image.include_in_output !== false ? " checked" : "";
-            return [
-              '<label class="work-report-image-select">',
-              `<input class="work-report-output-check" type="checkbox" data-item-index="${Number(row.index || 0)}" data-image-index="${imageIndex}"${checked}>`,
-              `<span>${escapeHtml(`${String(image.stage_label || "현장 이미지")} · ${String(image.filename || "-")}`)}</span>`,
-              '</label>',
-            ].join("");
-          }).join("")}</div>` : '<p>매칭된 이미지 없음</p>',
+          Array.isArray(row.images) && row.images.length ? `<div class="work-report-image-select-list">${row.images.map((image, imageIndex) => (
+            renderWorkReportImageEditor(report, image, {
+              sourceType: "item",
+              itemIndex: Number(row.index || 0),
+              imageIndex,
+            })
+          )).join("")}</div>` : '<p>매칭된 이미지 없음</p>',
           "</article>",
         ].join("")).join("")}</div>`
       );
@@ -4097,16 +4314,19 @@
       sections.push("<div class=\"subhead\">미매칭 자료</div>");
       sections.push(
         `<div class="work-report-image-select-list">${
-          unmatchedImages.map((row, index) => [
-            '<label class="work-report-image-select">',
-            `<input class="work-report-unmatched-output-check" type="checkbox" data-unmatched-index="${index}"${row && row.include_in_output !== false ? " checked" : ""}>`,
-            `<span>${escapeHtml(`미매칭 이미지 · ${String(row.filename || "-")}`)}</span>`,
-            "</label>",
-          ].join("")).join("")
+          unmatchedImages.map((row, index) => (
+            renderWorkReportImageEditor(report, row, {
+              sourceType: "unmatched",
+              unmatchedIndex: index,
+            })
+          )).join("")
         }</div>`
       );
     }
     if (report.report_text) {
+      if (feedback.changes.length) {
+        sections.push('<div class="detail-block">자동 생성 보고 요약은 최초 분석 기준일 수 있습니다. PDF 출력과 사진 배치는 현재 수동 보정 상태를 우선 적용합니다.</div>');
+      }
       sections.push("<div class=\"subhead\">자동 생성 보고 요약</div>");
       sections.push(`<div class="detail-block">${escapeHtml(String(report.report_text || ""))}</div>`);
     }
@@ -4115,6 +4335,9 @@
 
   function invalidateWorkReportCache() {
     lastWorkReportResult = null;
+    lastWorkReportBaseline = null;
+    lastWorkReportJobId = "";
+    lastWorkReportFeedbackSavedSignature = "";
   }
 
   function cloneWorkReportForPdf(report) {
@@ -4138,6 +4361,133 @@
     return cloned;
   }
 
+  function rerenderWorkReportPreview(message = "", isError = false) {
+    if (lastWorkReportResult) {
+      $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
+    }
+    if (message) {
+      setMessage("#intakeMsg", message, isError);
+    }
+  }
+
+  function markWorkReportImageManualOverride(image) {
+    if (!image || typeof image !== "object") return;
+    image.manual_override = true;
+    const stage = normalizeWorkReportImageStage(image.stage);
+    image.stage = stage;
+    image.stage_label = workReportImageStageLabel(stage);
+    if (image.include_in_output === undefined) {
+      image.include_in_output = true;
+    }
+  }
+
+  function moveWorkReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex, destinationValue) {
+    if (!lastWorkReportResult) return false;
+    const nextDestination = String(destinationValue || "__unmatched__");
+    const sourceKind = String(sourceType || "item");
+    const currentDestination = sourceKind === "unmatched" ? "__unmatched__" : String(Number(itemIndex || 0));
+    if (nextDestination === currentDestination) return false;
+
+    let sourceList = [];
+    let sourceRow = null;
+    let sourcePosition = -1;
+    if (sourceKind === "unmatched") {
+      sourceList = Array.isArray(lastWorkReportResult.unmatched_images) ? lastWorkReportResult.unmatched_images : [];
+      sourcePosition = Number(unmatchedIndex || -1);
+      sourceRow = sourceList[sourcePosition] || null;
+    } else {
+      const sourceItem = workReportItemByIndex(lastWorkReportResult, itemIndex);
+      if (!sourceItem) return false;
+      sourceItem.images = Array.isArray(sourceItem.images) ? sourceItem.images : [];
+      sourceList = sourceItem.images;
+      sourcePosition = Number(imageIndex || -1);
+      sourceRow = sourceList[sourcePosition] || null;
+    }
+    if (!sourceRow) return false;
+
+    let targetList = null;
+    if (nextDestination === "__unmatched__") {
+      lastWorkReportResult.unmatched_images = Array.isArray(lastWorkReportResult.unmatched_images) ? lastWorkReportResult.unmatched_images : [];
+      targetList = lastWorkReportResult.unmatched_images;
+    } else {
+      const targetItem = workReportItemByIndex(lastWorkReportResult, Number(nextDestination || 0));
+      if (!targetItem) return false;
+      targetItem.images = Array.isArray(targetItem.images) ? targetItem.images : [];
+      targetList = targetItem.images;
+    }
+
+    const [moved] = sourceList.splice(sourcePosition, 1);
+    if (!moved) return false;
+    markWorkReportImageManualOverride(moved);
+    targetList.push(moved);
+    syncWorkReportImageCollection(sourceList);
+    syncWorkReportImageCollection(targetList);
+    if (Array.isArray(lastWorkReportResult.unmatched_images)) {
+      syncWorkReportImageCollection(lastWorkReportResult.unmatched_images);
+    }
+    return true;
+  }
+
+  function updateWorkReportImageStage(sourceType, itemIndex, imageIndex, unmatchedIndex, stageValue) {
+    if (!lastWorkReportResult) return false;
+    let row = null;
+    if (String(sourceType || "item") === "unmatched") {
+      const unmatched = Array.isArray(lastWorkReportResult.unmatched_images) ? lastWorkReportResult.unmatched_images : [];
+      row = unmatched[Number(unmatchedIndex || -1)] || null;
+      if (!row) return false;
+      row.stage = normalizeWorkReportImageStage(stageValue);
+      markWorkReportImageManualOverride(row);
+      syncWorkReportImageCollection(unmatched);
+      return true;
+    }
+    const item = workReportItemByIndex(lastWorkReportResult, itemIndex);
+    if (!item) return false;
+    item.images = Array.isArray(item.images) ? item.images : [];
+    row = item.images[Number(imageIndex || -1)] || null;
+    if (!row) return false;
+    row.stage = normalizeWorkReportImageStage(stageValue);
+    markWorkReportImageManualOverride(row);
+    syncWorkReportImageCollection(item.images);
+    return true;
+  }
+
+  async function saveWorkReportFeedback(options = {}) {
+    const silent = !!options.silent;
+    if (!lastWorkReportResult || !lastWorkReportBaseline) return 0;
+    const feedback = buildWorkReportFeedbackSummary(lastWorkReportResult, lastWorkReportBaseline);
+    if (!feedback.changes.length) {
+      if (!silent) {
+        setMessage("#intakeMsg", "저장할 이미지 매칭 수정이 없습니다.");
+      }
+      return 0;
+    }
+    if (feedback.signature && feedback.signature === lastWorkReportFeedbackSavedSignature) {
+      if (!silent) {
+        setMessage("#intakeMsg", `이미지 매칭 수정 ${feedback.changes.length}건이 이미 저장되었습니다.`);
+      }
+      return feedback.changes.length;
+    }
+    const tenantId = currentTenantId();
+    if (!tenantId) throw new Error("테넌트를 선택하세요.");
+    const data = await authFetchJson("/api/ai/work_report/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tenant_id: tenantId,
+        job_id: lastWorkReportJobId,
+        corrections: feedback.changes,
+        report: buildWorkReportFeedbackSnapshot(lastWorkReportResult),
+      }),
+    });
+    lastWorkReportFeedbackSavedSignature = feedback.signature;
+    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
+    const savedCount = Number(data?.item?.correction_count || feedback.changes.length || 0);
+    if (!silent) {
+      setMessage("#intakeMsg", `이미지 매칭 수정 ${savedCount}건을 다음 매칭 개선용 피드백으로 저장했습니다.`);
+    }
+    return savedCount;
+  }
+
   function handleWorkReportImageOutputToggle(event) {
     const target = event?.target;
     if (!(target instanceof HTMLInputElement) || !target.classList.contains("work-report-output-check")) return;
@@ -4147,8 +4497,7 @@
     const item = lastWorkReportResult.items.find((row) => Number(row?.index || 0) === itemIndex);
     if (!item || !Array.isArray(item.images) || !item.images[imageIndex]) return;
     item.images[imageIndex].include_in_output = !!target.checked;
-    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
-    setMessage("#intakeMsg", "미리보기에서 선택한 사진만 PDF에 출력됩니다.");
+    rerenderWorkReportPreview("미리보기에서 선택한 사진만 PDF에 출력됩니다.");
   }
 
   function handleWorkReportItemOutputToggle(event) {
@@ -4159,8 +4508,7 @@
     const item = lastWorkReportResult.items.find((row) => Number(row?.index || 0) === itemIndex);
     if (!item) return;
     item.include_in_output = !!target.checked;
-    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
-    setMessage("#intakeMsg", "미리보기에서 체크된 항목만 PDF에 출력됩니다.");
+    rerenderWorkReportPreview("미리보기에서 체크된 항목만 PDF에 출력됩니다.");
   }
 
   function handleWorkReportUnmatchedOutputToggle(event) {
@@ -4171,8 +4519,40 @@
     const row = lastWorkReportResult.unmatched_images[unmatchedIndex];
     if (!row) return;
     row.include_in_output = !!target.checked;
-    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
-    setMessage("#intakeMsg", "미매칭 이미지도 체크된 항목만 PDF에 출력됩니다.");
+    rerenderWorkReportPreview("미매칭 이미지도 체크된 항목만 PDF에 출력됩니다.");
+  }
+
+  function handleWorkReportImageAssignmentChange(event) {
+    const target = event?.target;
+    if (!(target instanceof HTMLSelectElement) || !target.classList.contains("work-report-image-assignment")) return;
+    if (!lastWorkReportResult) return;
+    const sourceType = String(target.getAttribute("data-source-type") || "item");
+    const itemIndex = Number(target.getAttribute("data-item-index") || -1);
+    const imageIndex = Number(target.getAttribute("data-image-index") || -1);
+    const unmatchedIndex = Number(target.getAttribute("data-unmatched-index") || -1);
+    const changed = moveWorkReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex, target.value);
+    if (!changed) return;
+    rerenderWorkReportPreview("이미지 연결 작업을 수동으로 조정했습니다. 필요하면 '매칭 수정 저장'으로 다음 매칭 개선 자료로 남길 수 있습니다.");
+  }
+
+  function handleWorkReportImageStageChange(event) {
+    const target = event?.target;
+    if (!(target instanceof HTMLSelectElement) || !target.classList.contains("work-report-image-stage")) return;
+    if (!lastWorkReportResult) return;
+    const sourceType = String(target.getAttribute("data-source-type") || "item");
+    const itemIndex = Number(target.getAttribute("data-item-index") || -1);
+    const imageIndex = Number(target.getAttribute("data-image-index") || -1);
+    const unmatchedIndex = Number(target.getAttribute("data-unmatched-index") || -1);
+    const changed = updateWorkReportImageStage(sourceType, itemIndex, imageIndex, unmatchedIndex, target.value);
+    if (!changed) return;
+    rerenderWorkReportPreview("이미지 단계값을 수정했습니다. 현재 보정 결과로 PDF가 생성됩니다.");
+  }
+
+  async function handleWorkReportFeedbackSave(event) {
+    const target = event?.target;
+    if (!(target instanceof HTMLElement) || !target.closest(".work-report-feedback-save")) return;
+    event.preventDefault();
+    await saveWorkReportFeedback();
   }
 
   function workReportFormData(options = {}) {
@@ -4308,6 +4688,7 @@
         timeoutMs: WORK_REPORT_REQUEST_TIMEOUT_MS,
       });
       const job = created.item || {};
+      lastWorkReportJobId = String(job.id || "");
       progress.sync({
         elapsedSec: job.elapsed_sec,
         currentStep: job.current_step,
@@ -4316,6 +4697,8 @@
       });
       const result = await pollWorkReportPreviewJob(String(job.id || ""), progress);
       lastWorkReportResult = result || null;
+      lastWorkReportBaseline = deepCloneJson(result || null);
+      lastWorkReportFeedbackSavedSignature = "";
       $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
       const previewNotice = String(lastWorkReportResult?.analysis_notice || "").trim();
       const previewMessage = `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`;
@@ -4332,6 +4715,12 @@
     if (!lastWorkReportResult) {
       throw new Error("먼저 미리보기를 생성한 뒤, 미리보기에서 출력할 사진을 선택해 주세요.");
     }
+    let savedFeedbackCount = 0;
+    try {
+      savedFeedbackCount = await saveWorkReportFeedback({ silent: true });
+    } catch (error) {
+      setMessage("#intakeMsg", `PDF 생성은 계속 진행하지만 이미지 매칭 수정 저장은 실패했습니다. ${error.message || String(error)}`, true);
+    }
     const progress = startWorkReportProgress("pdf");
     try {
       const response = await authFetchBlob("/api/ai/work_report/pdf", {
@@ -4341,7 +4730,11 @@
       });
       downloadBlob(response.blob, response.filename || "work-report.pdf");
       progress.complete("PDF 파일 생성을 완료했습니다. 다운로드된 파일을 확인해 주세요.");
-      setMessage("#intakeMsg", "주요업무보고 PDF를 생성했습니다. 이 버튼만 사용하면 됩니다.");
+      if (savedFeedbackCount > 0) {
+        setMessage("#intakeMsg", `이미지 매칭 수정 ${savedFeedbackCount}건을 저장하고 주요업무보고 PDF를 생성했습니다.`);
+      } else {
+        setMessage("#intakeMsg", "주요업무보고 PDF를 생성했습니다. 이 버튼만 사용하면 됩니다.");
+      }
     } catch (error) {
       progress.fail(error);
       throw error;
@@ -4648,6 +5041,11 @@
       handleWorkReportItemOutputToggle(event);
       handleWorkReportImageOutputToggle(event);
       handleWorkReportUnmatchedOutputToggle(event);
+      handleWorkReportImageAssignmentChange(event);
+      handleWorkReportImageStageChange(event);
+    });
+    $("#workReportBox")?.addEventListener("click", (event) => {
+      handleWorkReportFeedbackSave(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
     });
     $("#btnAnalyzeWorkReport")?.addEventListener("click", () => analyzeWorkReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnWorkReportPdf")?.addEventListener("click", () => downloadWorkReportPdf().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));

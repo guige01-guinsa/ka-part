@@ -892,6 +892,97 @@ async def ai_work_report_pdf(
     return StreamingResponse(iter([pdf_bytes]), media_type="application/pdf", headers=headers)
 
 
+@router.post("/ai/work_report/feedback")
+def ai_work_report_feedback(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
+    corrections_raw = payload.get("corrections") or []
+    report_raw = payload.get("report") or {}
+    if corrections_raw and not isinstance(corrections_raw, list):
+        raise HTTPException(status_code=400, detail="corrections 형식이 잘못되었습니다.")
+    if report_raw and not isinstance(report_raw, dict):
+        raise HTTPException(status_code=400, detail="report 형식이 잘못되었습니다.")
+
+    corrections: List[Dict[str, Any]] = []
+    for row in list(corrections_raw or [])[:500]:
+        if not isinstance(row, dict):
+            continue
+        corrections.append(
+            {
+                "image_index": int(row.get("image_index") or 0),
+                "filename": str(row.get("filename") or "").strip()[:240],
+                "from_item_index": int(row.get("from_item_index") or 0),
+                "from_item_title": str(row.get("from_item_title") or "").strip()[:240],
+                "to_item_index": int(row.get("to_item_index") or 0),
+                "to_item_title": str(row.get("to_item_title") or "").strip()[:240],
+                "from_stage": str(row.get("from_stage") or "").strip()[:40],
+                "from_stage_label": str(row.get("from_stage_label") or "").strip()[:80],
+                "to_stage": str(row.get("to_stage") or "").strip()[:40],
+                "to_stage_label": str(row.get("to_stage_label") or "").strip()[:80],
+            }
+        )
+
+    report = dict(report_raw or {})
+    report_items = list(report.get("items") or []) if isinstance(report.get("items"), list) else []
+    unmatched_images = list(report.get("unmatched_images") or []) if isinstance(report.get("unmatched_images"), list) else []
+    report_summary = {
+        "report_title": str(report.get("report_title") or "").strip()[:160],
+        "period_label": str(report.get("period_label") or "").strip()[:120],
+        "analysis_model": str(report.get("analysis_model") or "").strip()[:80],
+        "analysis_reason": str(report.get("analysis_reason") or "").strip()[:80],
+        "item_count": len(report_items),
+        "image_item_count": sum(1 for item in report_items if isinstance(item, dict) and list(item.get("images") or [])),
+        "unmatched_image_count": len(unmatched_images),
+        "items": [
+            {
+                "index": int(item.get("index") or 0),
+                "title": str(item.get("title") or "").strip()[:240],
+                "summary": str(item.get("summary") or "").strip()[:320],
+                "images": [
+                    {
+                        "index": int(image.get("index") or 0),
+                        "filename": str(image.get("filename") or "").strip()[:240],
+                        "stage": str(image.get("stage") or "").strip()[:40],
+                        "stage_label": str(image.get("stage_label") or "").strip()[:80],
+                    }
+                    for image in list(item.get("images") or [])[:50]
+                    if isinstance(image, dict)
+                ],
+            }
+            for item in report_items[:200]
+            if isinstance(item, dict)
+        ],
+        "unmatched_images": [
+            {
+                "index": int(image.get("index") or 0),
+                "filename": str(image.get("filename") or "").strip()[:240],
+                "stage": str(image.get("stage") or "").strip()[:40],
+                "stage_label": str(image.get("stage_label") or "").strip()[:80],
+            }
+            for image in unmatched_images[:100]
+            if isinstance(image, dict)
+        ],
+    }
+    append_audit_log(
+        resolved_tenant_id,
+        "ai_work_report_feedback",
+        _actor_label(user, tenant),
+        {
+            "job_id": str(payload.get("job_id") or "").strip()[:80],
+            "correction_count": len(corrections),
+            "corrections": corrections,
+            "report": report_summary,
+        },
+    )
+    return {
+        "ok": True,
+        "item": {
+            "job_id": str(payload.get("job_id") or "").strip()[:80],
+            "correction_count": len(corrections),
+            "saved": True,
+        },
+    }
+
+
 @router.post("/ai/kakao_digest/import")
 def ai_kakao_digest_import(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     tenant_id, user, tenant = _tenant_id_from_request(request, payload)

@@ -913,6 +913,72 @@ def test_work_report_pdf_output_items_respect_selected_images() -> None:
     assert text_only_items == []
 
 
+def test_work_report_feedback_records_manual_image_corrections(app_client) -> None:
+    from app.db import list_audit_logs
+
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    response = client.post(
+        "/api/ai/work_report/feedback",
+        headers=headers,
+        json={
+            "tenant_id": "ys_thesharp",
+            "job_id": "job-manual-match-1",
+            "corrections": [
+                {
+                    "image_index": 3,
+                    "filename": "KakaoTalk_20260702_094630.jpg",
+                    "from_item_index": 0,
+                    "from_item_title": "미매칭",
+                    "to_item_index": 2,
+                    "to_item_title": "104동 음식물처리기 키패드 교체",
+                    "from_stage": "general",
+                    "from_stage_label": "현장 이미지",
+                    "to_stage": "after",
+                    "to_stage_label": "작업 후",
+                }
+            ],
+            "report": {
+                "report_title": "시설팀 주요 업무 보고",
+                "period_label": "7월 2일",
+                "analysis_model": "gpt-5.4",
+                "analysis_reason": "",
+                "items": [
+                    {
+                        "index": 2,
+                        "title": "104동 음식물처리기 키패드 교체",
+                        "summary": "104동 음식물처리기 키패드 교체 완료",
+                        "images": [
+                            {
+                                "index": 3,
+                                "filename": "KakaoTalk_20260702_094630.jpg",
+                                "stage": "after",
+                                "stage_label": "작업 후",
+                            }
+                        ],
+                    }
+                ],
+                "unmatched_images": [],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["correction_count"] == 1
+
+    logs = list_audit_logs(tenant_id="ys_thesharp", limit=1)
+    assert logs
+    assert logs[0]["action"] == "ai_work_report_feedback"
+    payload = json.loads(str(logs[0]["data_json"] or "{}"))
+    assert payload["job_id"] == "job-manual-match-1"
+    assert payload["correction_count"] == 1
+    assert payload["corrections"][0]["to_item_title"] == "104동 음식물처리기 키패드 교체"
+    assert payload["report"]["item_count"] == 1
+    assert payload["report"]["unmatched_image_count"] == 0
+
+
 def test_work_report_image_layout_uses_three_columns_for_three_images() -> None:
     from app.report_pdf import _work_report_image_layout
 
