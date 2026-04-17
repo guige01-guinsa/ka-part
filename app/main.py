@@ -18,6 +18,7 @@ from .routes.info import router as info_router
 from .routes.ops import router as ops_router
 from .routes.voice import router as voice_router
 from .voice_db import init_voice_db
+from .work_report_batch import init_work_report_batch
 
 logger = logging.getLogger("ka-part")
 PWA_NO_CACHE_PATHS = {
@@ -40,6 +41,7 @@ async def lifespan(_app: FastAPI):
     init_info_db()
     init_ops_db()
     init_voice_db()
+    init_work_report_batch()
     seeded = bootstrap_from_env()
     if seeded.get("admin") or seeded.get("tenant") or seeded.get("users"):
         logger.info(

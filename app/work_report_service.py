@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 try:
     from PIL import Image as PILImage
@@ -85,6 +85,7 @@ KAKAO_INLINE_MESSAGE_RE = re.compile(
 )
 KAKAO_BRACKET_MESSAGE_RE = re.compile(r"^\[(?P<sender>[^\]]+)\]\s*\[(?P<time>[^\]]+)\]\s*(?P<body>.+)$")
 KAKAO_SHORT_MESSAGE_RE = re.compile(r"^(?P<time>(?:오전|오후)\s*\d{1,2}:\d{2}),?\s*(?P<sender>[^:]{1,40})\s*:\s*(?P<body>.+)$")
+WorkReportProgressCallback = Callable[[Dict[str, Any]], None]
 
 
 def _collapse(value: Any) -> str:
@@ -127,6 +128,25 @@ def _consume_openai_error_notice() -> str:
     message = _collapse(_WORK_REPORT_OPENAI_LAST_ERROR.get(""))
     _WORK_REPORT_OPENAI_LAST_ERROR.set("")
     return message
+
+
+def _report_progress(
+    callback: WorkReportProgressCallback | None,
+    *,
+    current_step: int,
+    total_steps: int = 5,
+    summary: str = "",
+    hint: str = "",
+) -> None:
+    if not callback:
+        return
+    payload = {
+        "current_step": max(0, int(current_step)),
+        "total_steps": max(1, int(total_steps)),
+        "summary": _collapse(summary or ""),
+        "hint": _collapse(hint or ""),
+    }
+    callback(payload)
 
 
 def _extract_json_text(raw_text: Any) -> str:
@@ -1898,6 +1918,7 @@ def _openai_match_image_chunks(
     text: str,
     image_inputs: Sequence[Dict[str, Any]],
     items: Sequence[Dict[str, Any]],
+    progress_callback: WorkReportProgressCallback | None = None,
 ) -> Dict[str, Any] | None:
     client, model = _openai_client(default_model="gpt-5.4", env_name="WORK_REPORT_OPENAI_MODEL")
     if not client or not image_inputs or not items:
@@ -1949,7 +1970,16 @@ def _openai_match_image_chunks(
 - 매칭이 약한데 억지로 붙이지 말고 unmatched로 둔다.
 """.strip()
 
-    for batch_number, batch_clusters in enumerate(_chunk_rows(clusters, max_clusters), start=1):
+    cluster_batches = _chunk_rows(clusters, max_clusters)
+    total_batches = max(1, len(cluster_batches))
+
+    for batch_number, batch_clusters in enumerate(cluster_batches, start=1):
+        _report_progress(
+            progress_callback,
+            current_step=3,
+            summary=f"이미지 군집 {batch_number}/{total_batches}개를 매칭하고 있습니다.",
+            hint="대량 이미지는 군집 단위로 나눠 작업 항목과 연결합니다.",
+        )
         content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
         content.append({"type": "input_text", "text": "작업 항목 목록:\n" + "\n".join(item_lines)})
 
@@ -2074,6 +2104,7 @@ def analyze_work_report(
     attachment_inputs: Sequence[Dict[str, Any]] | None = None,
     sample_title: str = "",
     sample_lines: Sequence[str] | None = None,
+    progress_callback: WorkReportProgressCallback | None = None,
 ) -> Dict[str, Any]:
     normalized_text = str(text or "")
     images = list(image_inputs or [])[:MAX_WORK_REPORT_IMAGES]
@@ -2085,6 +2116,13 @@ def analyze_work_report(
         raise ValueError("text, image, or attachment is required")
 
     openai_failure_notes: List[str] = []
+
+    _report_progress(
+        progress_callback,
+        current_step=0,
+        summary="원문과 첨부 내용을 배치 분석용으로 정리하고 있습니다.",
+        hint="입력 크기에 따라 초기 정리 시간이 조금 걸릴 수 있습니다.",
+    )
 
     def remember_openai_error() -> None:
         notice = _consume_openai_error_notice()
@@ -2100,6 +2138,12 @@ def analyze_work_report(
 
     ai_result: Dict[str, Any] | None = None
     if use_chunked_image_matching:
+        _report_progress(
+            progress_callback,
+            current_step=1,
+            summary="작업 항목을 먼저 추출한 뒤 대량 이미지를 군집으로 나눌 준비를 하고 있습니다.",
+            hint="이미지가 많은 경우 텍스트 기반 작업 후보를 먼저 확정합니다.",
+        )
         base_ai_result = _openai_work_report(
             text=normalized_text,
             image_inputs=[],
@@ -2115,6 +2159,7 @@ def analyze_work_report(
                 text=normalized_text,
                 image_inputs=images,
                 items=list(base_ai_result.get("items") or []),
+                progress_callback=progress_callback,
             )
             if not chunked_images:
                 remember_openai_error()
@@ -2139,6 +2184,12 @@ def analyze_work_report(
                 ai_result["analysis_notice"] = fallback_notice if not current_notice else f"{current_notice} {fallback_notice}"
 
     if not ai_result:
+        _report_progress(
+            progress_callback,
+            current_step=1,
+            summary="원문에서 작업 항목과 문맥을 추출하고 있습니다.",
+            hint="AI 분석이 늦거나 불안정하면 보수 추출 경로를 함께 시도합니다.",
+        )
         ai_result = _openai_work_report(
             text=normalized_text,
             image_inputs=images,
@@ -2150,6 +2201,12 @@ def analyze_work_report(
         if not ai_result:
             remember_openai_error()
     if not ai_result and images:
+        _report_progress(
+            progress_callback,
+            current_step=2,
+            summary="통합 분석 대신 이미지 군집 매칭으로 다시 시도하고 있습니다.",
+            hint="대량 이미지가 한 번에 불안정할 때는 군집 단위로 재시도합니다.",
+        )
         base_ai_result = _openai_work_report(
             text=normalized_text,
             image_inputs=[],
@@ -2165,6 +2222,7 @@ def analyze_work_report(
                 text=normalized_text,
                 image_inputs=images,
                 items=list(base_ai_result.get("items") or []),
+                progress_callback=progress_callback,
             )
             if not chunked_images:
                 remember_openai_error()
@@ -2182,6 +2240,12 @@ def analyze_work_report(
                     "analysis_model": _collapse(chunked_images.get("analysis_model") or base_ai_result.get("analysis_model") or "gpt-5.4"),
                 }
     if ai_result:
+        _report_progress(
+            progress_callback,
+            current_step=3,
+            summary="작업 항목과 현장 사진의 대응 관계를 정리하고 있습니다.",
+            hint="사진이 적어도 단계 정보와 위치 문맥을 다시 정리합니다.",
+        )
         items = list(ai_result.get("items") or [])
         unmatched_image_indexes = list(ai_result.get("unmatched_image_indexes") or [])
         unmatched_attachment_indexes = list(ai_result.get("unmatched_attachment_indexes") or [])
@@ -2200,6 +2264,12 @@ def analyze_work_report(
             supplement_notice = f"텍스트 전용 작업 {len(supplemental_items)}건을 추가로 보강했습니다."
             analysis_notice = supplement_notice if not analysis_notice else f"{analysis_notice} {supplement_notice}"
     else:
+        _report_progress(
+            progress_callback,
+            current_step=1,
+            summary="AI 응답이 없어 원문 기반 보수 추출로 전환했습니다.",
+            hint="이미지와 대화 내용을 시간 순서대로 다시 정리하고 있습니다.",
+        )
         events = _parse_kakao_events(normalized_text)
         explicit_items: List[Dict[str, Any]] = []
         current_item: Optional[Dict[str, Any]] = None
@@ -2341,6 +2411,12 @@ def analyze_work_report(
         if current_item and (pending_image_notices or pending_attachment_count > 0 or pending_attachment_texts):
             apply_pending(current_item)
         flush_current()
+        _report_progress(
+            progress_callback,
+            current_step=3,
+            summary="원문에서 찾은 작업 후보와 사진/첨부를 보수적으로 매칭하고 있습니다.",
+            hint="근거가 약한 사진은 억지로 붙이지 않고 미매칭으로 남깁니다.",
+        )
         image_entries = [
             {
                 "index": index,
@@ -2449,6 +2525,13 @@ def analyze_work_report(
                 item.pop("_attachment_notice_texts", None)
                 item.pop("_attachment_notice_tokens", None)
                 item.pop("_minute_of_day", None)
+
+    _report_progress(
+        progress_callback,
+        current_step=4,
+        summary="미리보기 결과를 정리하고 있습니다.",
+        hint="사진 선별 출력과 PDF 재사용에 필요한 결과를 저장합니다.",
+    )
 
     dated_items = [item for item in items if item.get("work_date")]
     if dated_items:

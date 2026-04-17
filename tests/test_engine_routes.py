@@ -5,6 +5,7 @@ import io
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ def app_client(tmp_path, monkeypatch):
         "app.info_db",
         "app.legacy_import",
         "app.ops_db",
+        "app.work_report_batch",
         "app.voice_db",
         "app.voice_service",
         "app.ai_service",
@@ -664,7 +666,7 @@ def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatc
             "analysis_model": "gpt-5.4",
         }
 
-    def _fake_openai_match_image_chunks(*, text, image_inputs, items):
+    def _fake_openai_match_image_chunks(*, text, image_inputs, items, progress_callback=None):
         assert len(list(image_inputs or [])) == 13
         return {
             "items": [
@@ -909,6 +911,112 @@ def test_work_report_pdf_can_reuse_cached_preview_result(app_client, monkeypatch
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/pdf")
     assert response.content.startswith(b"%PDF")
+
+
+def test_work_report_batch_job_can_poll_until_completed(app_client, monkeypatch) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    import app.routes.engine as engine
+
+    def _fake_analyze_work_report(
+        text,
+        *,
+        image_inputs=None,
+        reference_image_inputs=None,
+        attachment_inputs=None,
+        sample_title="",
+        sample_lines=None,
+        progress_callback=None,
+    ):
+        if progress_callback:
+            progress_callback(
+                {
+                    "current_step": 1,
+                    "total_steps": 5,
+                    "summary": "원문에서 작업 항목을 추출하고 있습니다.",
+                    "hint": "대량 배치 작업을 모사하는 테스트입니다.",
+                }
+            )
+            progress_callback(
+                {
+                    "current_step": 3,
+                    "total_steps": 5,
+                    "summary": "이미지 군집 1/1개를 매칭하고 있습니다.",
+                    "hint": "현장 사진과 대화 내용을 연결합니다.",
+                }
+            )
+        return {
+            "report_title": "시설팀 주요 업무 보고",
+            "period_label": "7월 4일",
+            "template_title": "시설팀 주요 업무 보고",
+            "analysis_model": "gpt-5.4",
+            "analysis_notice": "",
+            "item_count": 1,
+            "image_item_count": 1,
+            "text_only_item_count": 0,
+            "items": [
+                {
+                    "index": 1,
+                    "title": "어린이 수영장 청소",
+                    "work_date": "2026-07-04",
+                    "work_date_label": "7월 4일",
+                    "vendor_name": "관리실",
+                    "location_name": "어린이 수영장",
+                    "summary": "어린이 수영장 청소 진행",
+                    "images": [{"index": 1, "filename": "7월4일-수영장-작업전.jpg", "stage": "general"}],
+                    "attachments": [],
+                }
+            ],
+            "image_items": [
+                {
+                    "index": 1,
+                    "title": "어린이 수영장 청소",
+                    "work_date": "2026-07-04",
+                    "work_date_label": "7월 4일",
+                    "vendor_name": "관리실",
+                    "location_name": "어린이 수영장",
+                    "summary": "어린이 수영장 청소 진행",
+                    "images": [{"index": 1, "filename": "7월4일-수영장-작업전.jpg", "stage": "general"}],
+                    "attachments": [],
+                }
+            ],
+            "text_only_items": [],
+            "unmatched_images": [],
+            "unmatched_attachments": [],
+            "source_text_preview": ["2026년 7월 4일 오전 9:00, 관리실 : 어린이 수영장 청소"],
+            "report_text": "어린이 수영장 청소",
+        }
+
+    monkeypatch.setattr(engine, "analyze_work_report", _fake_analyze_work_report)
+
+    created = client.post(
+        "/api/ai/work_report/jobs",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": "2026년 7월 4일 오전 9:00, 관리실 : 어린이 수영장 청소"},
+        files=[
+            ("images", ("7월4일-수영장-작업전.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+        ],
+    )
+    assert created.status_code == 200
+    created_item = created.json()["item"]
+    assert created_item["status"] in {"queued", "running"}
+    assert created_item["image_count"] == 1
+
+    detail_item = None
+    for _ in range(40):
+        detail = client.get(f"/api/ai/work_report/jobs/{created_item['id']}", headers=headers)
+        assert detail.status_code == 200
+        detail_item = detail.json()["item"]
+        if detail_item["status"] == "completed":
+            break
+        time.sleep(0.05)
+    assert detail_item is not None
+    assert detail_item["status"] == "completed"
+    assert detail_item["result"]["analysis_model"] == "gpt-5.4"
+    assert detail_item["result"]["item_count"] == 1
+    assert detail_item["result"]["template_source_name"] == ""
 
 
 def test_kakao_digest_import_creates_complaints(app_client) -> None:

@@ -189,31 +189,32 @@
       "PDF 렌더링",
     ];
     const steps = mode === "pdf" ? pdfSteps : previewSteps;
-    const startedAt = Date.now();
+    const state = {
+      mode,
+      steps,
+      currentStep: 0,
+      summary: mode === "pdf" ? "PDF 생성을 준비하고 있습니다." : "배치 작업을 등록하고 있습니다.",
+      hint: mode === "pdf" ? "미리보기에서 고른 항목을 PDF로 정리합니다." : "원문과 현장 사진을 서버 작업으로 넘기는 중입니다.",
+    };
     let timerId = 0;
-    let lastElapsedSec = 0;
+    let baseElapsedSec = 0;
+    let lastSyncedAt = Date.now();
+
+    const effectiveElapsedSec = () => {
+      const extraSeconds = Math.max(0, Math.floor((Date.now() - lastSyncedAt) / 1000));
+      return Math.max(0, baseElapsedSec + extraSeconds);
+    };
 
     const paint = () => {
       if (!target) return;
-      const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
-      lastElapsedSec = elapsedSec;
-      let currentStep = 0;
-      if (elapsedSec >= 4) currentStep = 1;
-      if (elapsedSec >= 10) currentStep = 2;
-      if (elapsedSec >= 18) currentStep = 3;
-      if (elapsedSec >= 32) currentStep = 4;
-      const summary = steps[Math.min(currentStep, steps.length - 1)] || "처리 중";
-      let hint = "잠시만 기다려 주세요.";
-      if (elapsedSec >= 20) hint = "사진 수와 원문 길이에 따라 시간이 더 걸릴 수 있습니다.";
-      if (elapsedSec >= 45) hint = "오래 걸리고 있지만 서버에서 계속 처리 중일 수 있습니다.";
       target.classList.remove("hidden");
       target.innerHTML = renderWorkReportProgress({
-        mode,
-        elapsedSec,
-        currentStep,
-        steps,
-        summary,
-        hint,
+        mode: state.mode,
+        elapsedSec: effectiveElapsedSec(),
+        currentStep: state.currentStep,
+        steps: state.steps,
+        summary: state.summary,
+        hint: state.hint,
       });
     };
 
@@ -229,20 +230,37 @@
     return {
       stop,
       elapsedSec() {
-        return lastElapsedSec;
+        return effectiveElapsedSec();
+      },
+      sync(serverState = {}) {
+        baseElapsedSec = Number.isFinite(Number(serverState.elapsedSec))
+          ? Math.max(0, Math.floor(Number(serverState.elapsedSec)))
+          : effectiveElapsedSec();
+        lastSyncedAt = Date.now();
+        if (Number.isFinite(Number(serverState.currentStep))) {
+          state.currentStep = Math.max(0, Math.min(steps.length - 1, Math.floor(Number(serverState.currentStep))));
+        }
+        if (serverState.summary !== undefined) {
+          const summary = String(serverState.summary || "").trim();
+          if (summary) state.summary = summary;
+        }
+        if (serverState.hint !== undefined) {
+          state.hint = String(serverState.hint || "").trim();
+        }
+        paint();
       },
       complete(message) {
         stop();
         if (!target) return;
         target.classList.remove("hidden");
-        target.innerHTML = renderWorkReportProgressTerminal(mode, lastElapsedSec, message, "done");
+        target.innerHTML = renderWorkReportProgressTerminal(mode, effectiveElapsedSec(), message, "done");
       },
       fail(error) {
         stop();
         if (!target) return;
         const message = String(error?.message || error || "처리 중 오류가 발생했습니다.").trim();
         target.classList.remove("hidden");
-        target.innerHTML = renderWorkReportProgressTerminal(mode, lastElapsedSec, message, "error");
+        target.innerHTML = renderWorkReportProgressTerminal(mode, effectiveElapsedSec(), message, "error");
       },
     };
   }
@@ -4154,6 +4172,35 @@
     return fd;
   }
 
+  function delay(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(ms || 0))));
+  }
+
+  async function pollWorkReportPreviewJob(jobId, progress) {
+    const tenantId = currentTenantId();
+    if (!jobId) throw new Error("업무보고 배치 작업 ID를 찾을 수 없습니다.");
+    for (;;) {
+      const data = await authFetchJson(`/api/ai/work_report/jobs/${encodeURIComponent(jobId)}?tenant_id=${encodeURIComponent(tenantId)}`, {
+        method: "GET",
+        timeoutMs: 60000,
+      });
+      const job = data.item || {};
+      progress.sync({
+        elapsedSec: job.elapsed_sec,
+        currentStep: job.current_step,
+        summary: job.summary || "배치 작업 진행 중입니다.",
+        hint: job.hint || "",
+      });
+      if (String(job.status || "") === "completed") {
+        return job.result || null;
+      }
+      if (String(job.status || "") === "failed") {
+        throw new Error(String(job.error_message || job.summary || "업무보고 배치 작업이 실패했습니다."));
+      }
+      await delay(Number(job.poll_after_ms || 2000));
+    }
+  }
+
   async function digestChat() {
     const tenantId = currentTenantId();
     const text = String($("#chatInput").value || "").trim();
@@ -4225,12 +4272,20 @@
   async function analyzeWorkReport() {
     const progress = startWorkReportProgress("preview");
     try {
-      const data = await authFetchJson("/api/ai/work_report", {
+      const created = await authFetchJson("/api/ai/work_report/jobs", {
         method: "POST",
         body: workReportFormData(),
         timeoutMs: WORK_REPORT_REQUEST_TIMEOUT_MS,
       });
-      lastWorkReportResult = data.item || null;
+      const job = created.item || {};
+      progress.sync({
+        elapsedSec: job.elapsed_sec,
+        currentStep: job.current_step,
+        summary: job.summary || "배치 작업을 시작했습니다.",
+        hint: job.hint || "",
+      });
+      const result = await pollWorkReportPreviewJob(String(job.id || ""), progress);
+      lastWorkReportResult = result || null;
       $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
       setMessage("#intakeMsg", `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`);
     } catch (error) {

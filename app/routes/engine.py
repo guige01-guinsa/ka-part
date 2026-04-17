@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import os
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,6 +37,17 @@ from ..engine_db import (
     update_complaint,
 )
 from ..report_pdf import build_kakao_digest_pdf, build_work_report_pdf
+from ..work_report_batch import (
+    build_work_report_job_dir,
+    complete_work_report_job,
+    create_work_report_job,
+    fail_work_report_job,
+    get_work_report_job,
+    get_work_report_job_record,
+    mark_work_report_job_running,
+    new_work_report_job_id,
+    update_work_report_job_progress,
+)
 from ..work_report_service import (
     MAX_WORK_REPORT_ATTACHMENTS,
     MAX_WORK_REPORT_IMAGES,
@@ -40,12 +55,15 @@ from ..work_report_service import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("ka-part.work-report")
 AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
 UPLOAD_ROOT = (STORAGE_ROOT / "uploads" / "complaints").resolve()
 DIGEST_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 WORK_REPORT_FILE_MAX_BYTES = 15 * 1024 * 1024
 WORK_REPORT_SAMPLE_MAX_BYTES = 30 * 1024 * 1024
 MAX_WORK_REPORT_SOURCE_FILES = 20
+WORK_REPORT_BATCH_METADATA_FILE = "job-input.json"
+WORK_REPORT_BATCH_TASKS: set[asyncio.Task[Any]] = set()
 
 
 def _access_token(request: Request) -> str:
@@ -324,6 +342,217 @@ async def _read_work_report_sources(uploads: List[UploadFile]) -> Dict[str, Any]
     }
 
 
+def _safe_work_report_batch_name(filename: str, default: str) -> str:
+    raw_name = Path(str(filename or "").strip() or default).name
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", ".", "(", ")", "[", "]"} else "_" for ch in raw_name)
+    return cleaned[:140] or default
+
+
+def _stage_work_report_batch_images(job_dir: Path, rows: List[Dict[str, Any]], folder: str) -> List[Dict[str, Any]]:
+    staged: List[Dict[str, Any]] = []
+    target_root = (job_dir / folder).resolve()
+    target_root.mkdir(parents=True, exist_ok=True)
+    for index, row in enumerate(list(rows or []), start=1):
+        filename = _safe_work_report_batch_name(str(row.get("filename") or ""), f"{folder}-{index}.bin")
+        target_path = (target_root / f"{index:03d}-{filename}").resolve()
+        if not str(target_path).startswith(str(job_dir.resolve())):
+            raise ValueError("invalid batch image path")
+        raw = bytes(row.get("bytes") or b"")
+        target_path.write_bytes(raw)
+        staged.append(
+            {
+                "filename": str(row.get("filename") or filename),
+                "content_type": str(row.get("content_type") or "image/jpeg"),
+                "size_bytes": int(row.get("size_bytes") or len(raw)),
+                "relative_path": str(target_path.relative_to(job_dir.resolve())).replace("\\", "/"),
+            }
+        )
+    return staged
+
+
+def _write_work_report_batch_payload(
+    job_dir: Path,
+    *,
+    text: str,
+    source: Dict[str, Any],
+    image_inputs: List[Dict[str, Any]],
+    attachment_inputs: List[Dict[str, Any]],
+    sample: Dict[str, Any],
+) -> None:
+    target_dir = job_dir.resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "text": str(text or ""),
+        "source_name": str(source.get("source_name") or ""),
+        "source_names": [str(value or "") for value in source.get("source_names") or []],
+        "source_text": str(source.get("source_text") or ""),
+        "reference_images": _stage_work_report_batch_images(target_dir, list(source.get("source_images") or []), "reference_images"),
+        "images": _stage_work_report_batch_images(target_dir, list(image_inputs or []), "images"),
+        "attachments": [
+            {
+                "filename": str(row.get("filename") or ""),
+                "content_type": str(row.get("content_type") or "application/octet-stream"),
+                "size_bytes": int(row.get("size_bytes") or 0),
+                "preview_text": str(row.get("preview_text") or ""),
+            }
+            for row in list(attachment_inputs or [])
+        ],
+        "sample": {
+            "title": str(sample.get("title") or ""),
+            "lines": [str(line or "") for line in sample.get("lines") or []],
+            "source_name": str(sample.get("source_name") or ""),
+            "kind": str(sample.get("kind") or ""),
+        },
+    }
+    metadata_path = (target_dir / WORK_REPORT_BATCH_METADATA_FILE).resolve()
+    if not str(metadata_path).startswith(str(target_dir)):
+        raise ValueError("invalid work report metadata path")
+    metadata_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _read_work_report_batch_payload(job_dir: Path) -> Dict[str, Any]:
+    target_dir = job_dir.resolve()
+    metadata_path = (target_dir / WORK_REPORT_BATCH_METADATA_FILE).resolve()
+    if not str(metadata_path).startswith(str(target_dir)) or not metadata_path.exists():
+        raise ValueError("업무보고 배치 입력을 찾을 수 없습니다.")
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError("업무보고 배치 입력 형식이 잘못되었습니다.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("업무보고 배치 입력 형식이 잘못되었습니다.")
+
+    def load_images(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            relative_path = str(row.get("relative_path") or "").strip()
+            if not relative_path:
+                continue
+            file_path = (target_dir / relative_path).resolve()
+            if not str(file_path).startswith(str(target_dir)) or not file_path.exists():
+                continue
+            items.append(
+                {
+                    "filename": str(row.get("filename") or file_path.name),
+                    "content_type": str(row.get("content_type") or "image/jpeg"),
+                    "size_bytes": int(row.get("size_bytes") or file_path.stat().st_size),
+                    "bytes": file_path.read_bytes(),
+                }
+            )
+        return items
+
+    return {
+        "text": str(payload.get("text") or ""),
+        "source_name": str(payload.get("source_name") or ""),
+        "source_names": [str(value or "") for value in payload.get("source_names") or []],
+        "source_text": str(payload.get("source_text") or ""),
+        "reference_images": load_images(list(payload.get("reference_images") or [])),
+        "images": load_images(list(payload.get("images") or [])),
+        "attachments": [
+            {
+                "filename": str(row.get("filename") or ""),
+                "content_type": str(row.get("content_type") or "application/octet-stream"),
+                "size_bytes": int(row.get("size_bytes") or 0),
+                "preview_text": str(row.get("preview_text") or ""),
+            }
+            for row in list(payload.get("attachments") or [])
+            if isinstance(row, dict)
+        ],
+        "sample": {
+            "title": str((payload.get("sample") or {}).get("title") or ""),
+            "lines": [str(line or "") for line in ((payload.get("sample") or {}).get("lines") or [])],
+            "source_name": str((payload.get("sample") or {}).get("source_name") or ""),
+            "kind": str((payload.get("sample") or {}).get("kind") or ""),
+        },
+    }
+
+
+def _execute_work_report_batch_preview(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    text_parts = [str(payload.get("text") or "").strip(), str(payload.get("source_text") or "").strip()]
+    source_text = "\n".join(part for part in text_parts if part)
+
+    def progress_callback(state: Dict[str, Any]) -> None:
+        update_work_report_job_progress(
+            job_id,
+            current_step=int(state.get("current_step") or 0),
+            total_steps=int(state.get("total_steps") or 5),
+            summary=str(state.get("summary") or ""),
+            hint=str(state.get("hint") or ""),
+        )
+
+    progress_callback(
+        {
+            "current_step": 0,
+            "total_steps": 5,
+            "summary": "업로드된 원문과 사진을 배치 작업으로 불러오고 있습니다.",
+            "hint": "대량 이미지는 서버 작업 폴더에서 순차적으로 다시 읽습니다.",
+        }
+    )
+    report = analyze_work_report(
+        source_text,
+        image_inputs=list(payload.get("images") or []),
+        reference_image_inputs=list(payload.get("reference_images") or []),
+        attachment_inputs=list(payload.get("attachments") or []),
+        sample_title=str((payload.get("sample") or {}).get("title") or "").strip(),
+        sample_lines=[str(line or "") for line in ((payload.get("sample") or {}).get("lines") or [])],
+        progress_callback=progress_callback,
+    )
+    report["template_source_name"] = str((payload.get("sample") or {}).get("source_name") or "").strip()
+    report["template_kind"] = str((payload.get("sample") or {}).get("kind") or "").strip()
+    return report
+
+
+async def _run_work_report_batch_preview(job_id: str) -> None:
+    record = get_work_report_job_record(job_id)
+    if not record:
+        return
+    mark_work_report_job_running(
+        job_id,
+        current_step=0,
+        total_steps=5,
+        summary="업무보고 미리보기 배치 작업을 시작했습니다.",
+        hint="원문과 사진 수에 따라 몇 분 정도 걸릴 수 있습니다.",
+    )
+    try:
+        payload = await run_in_threadpool(_read_work_report_batch_payload, Path(str(record.get("job_dir") or "")))
+        report = await run_in_threadpool(_execute_work_report_batch_preview, job_id, payload)
+        complete_work_report_job(job_id, result=report)
+    except Exception as exc:
+        logger.exception("work report batch preview failed: job_id=%s", job_id)
+        fail_work_report_job(
+            job_id,
+            error_message=str(exc),
+            summary="업무보고 미리보기 배치 작업이 실패했습니다.",
+            hint="같은 입력으로 다시 시도해 주세요. 반복되면 최근 입력 묶음을 알려 주세요.",
+        )
+
+
+def _track_work_report_batch_task(task: asyncio.Task[Any]) -> None:
+    WORK_REPORT_BATCH_TASKS.add(task)
+    task.add_done_callback(lambda done: WORK_REPORT_BATCH_TASKS.discard(done))
+
+
+def _spawn_work_report_batch_preview(job_id: str) -> None:
+    task = asyncio.create_task(_run_work_report_batch_preview(job_id))
+    _track_work_report_batch_task(task)
+
+
+def _authorized_work_report_job(request: Request, job_id: str) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    record = get_work_report_job_record(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="work report job not found")
+    user, tenant = _resolve_context(request)
+    job_tenant_id = str(record.get("tenant_id") or "").strip().lower()
+    if tenant and str(tenant.get("id") or "").strip().lower() != job_tenant_id:
+        raise HTTPException(status_code=404, detail="work report job not found")
+    if user and int(user.get("is_admin") or 0) != 1:
+        if str(user.get("tenant_id") or "").strip().lower() != job_tenant_id:
+            raise HTTPException(status_code=404, detail="work report job not found")
+    return record, user, tenant
+
+
 @router.post("/ai/classify")
 def ai_classify(request: Request, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     tenant_id, user, tenant = _tenant_id_from_request(request, payload)
@@ -469,6 +698,99 @@ async def ai_work_report(
             "sample": str(sample.get("source_name") or ""),
         },
     )
+    return {"ok": True, "item": item}
+
+
+@router.post("/ai/work_report/jobs")
+async def ai_work_report_job_create(
+    request: Request,
+    tenant_id: str = Form(default=""),
+    text: str = Form(default=""),
+    source_file: UploadFile | None = File(default=None),
+    source_files: List[UploadFile] = File(default=[]),
+    images: List[UploadFile] = File(default=[]),
+    attachments: List[UploadFile] = File(default=[]),
+    sample_file: UploadFile | None = File(default=None),
+) -> Dict[str, Any]:
+    payload = {"tenant_id": tenant_id}
+    resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
+    merged_source_files = ([source_file] if source_file else []) + list(source_files or [])
+    source = await _read_work_report_sources(merged_source_files)
+    source_text_parts = [str(text or "").strip(), str(source.get("source_text") or "").strip()]
+    source_text = "\n".join(part for part in source_text_parts if part)
+    image_inputs = await _read_work_report_images(list(images or []))
+    reference_image_inputs = list(source.get("source_images") or [])
+    if len(image_inputs) > MAX_WORK_REPORT_IMAGES:
+        raise HTTPException(status_code=400, detail=f"현장 사진은 최대 {MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.")
+    attachment_inputs = await _read_work_report_attachments(list(attachments or []))
+    sample = await _read_work_report_sample(sample_file)
+    if not source_text and not image_inputs and not reference_image_inputs and not attachment_inputs:
+        raise HTTPException(status_code=400, detail="text, image, or attachment is required")
+
+    job_id = new_work_report_job_id()
+    job_dir = build_work_report_job_dir(resolved_tenant_id, job_id)
+    try:
+        _write_work_report_batch_payload(
+            job_dir,
+            text=str(text or ""),
+            source=source,
+            image_inputs=image_inputs,
+            attachment_inputs=attachment_inputs,
+            sample=sample,
+        )
+        item = create_work_report_job(
+            job_id=job_id,
+            tenant_id=resolved_tenant_id,
+            actor_label=_actor_label(user, tenant),
+            job_dir=job_dir,
+            source_file_count=len(source.get("source_names") or []),
+            image_count=len(image_inputs),
+            reference_image_count=len(reference_image_inputs),
+            attachment_count=len(attachment_inputs),
+        )
+    except ValueError as exc:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
+
+    log_usage(resolved_tenant_id, "ai.work_report.batch")
+    append_audit_log(
+        resolved_tenant_id,
+        "ai_work_report_batch_create",
+        _actor_label(user, tenant),
+        {
+            "job_id": job_id,
+            "lines": len(source_text.splitlines()),
+            "images": len(image_inputs),
+            "reference_images": len(reference_image_inputs),
+            "attachments": len(attachment_inputs),
+            "source_file": str(source.get("source_name") or ""),
+            "source_file_count": len(source.get("source_names") or []),
+            "sample": str(sample.get("source_name") or ""),
+        },
+    )
+    try:
+        _spawn_work_report_batch_preview(job_id)
+    except Exception as exc:
+        logger.exception("failed to spawn work report batch preview: job_id=%s", job_id)
+        fail_work_report_job(
+            job_id,
+            error_message=str(exc),
+            summary="업무보고 미리보기 배치 작업을 시작하지 못했습니다.",
+            hint="잠시 후 다시 시도해 주세요.",
+        )
+        item = get_work_report_job(job_id) or item
+    return {"ok": True, "item": item}
+
+
+@router.get("/ai/work_report/jobs/{job_id}")
+def ai_work_report_job_detail(request: Request, job_id: str) -> Dict[str, Any]:
+    record, _user, _tenant = _authorized_work_report_job(request, job_id)
+    item = get_work_report_job(str(record.get("id") or ""), include_result=True)
+    if not item:
+        raise HTTPException(status_code=404, detail="work report job not found")
     return {"ok": True, "item": item}
 
 
