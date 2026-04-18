@@ -139,6 +139,39 @@ body {
   line-height: 1.6;
 }
 
+.build-info-strip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: rgba(255, 249, 238, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(248, 240, 226, 0.88);
+  font-size: 12px;
+  line-height: 1.45;
+  backdrop-filter: blur(10px);
+}
+
+.build-info-strip strong {
+  color: #fff7ed;
+  font-size: 12px;
+}
+
+.build-info-strip a {
+  color: #fff7ed;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.build-info-strip.is-error {
+  background: rgba(134, 49, 25, 0.18);
+  border-color: rgba(255, 214, 204, 0.18);
+}
+
 .hero-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1929,6 +1962,11 @@ body {
     margin-top: 10px;
     font-size: 13px;
     line-height: 1.5;
+  }
+
+  .build-info-strip {
+    width: 100%;
+    font-size: 11px;
   }
 
   .hero-metrics {

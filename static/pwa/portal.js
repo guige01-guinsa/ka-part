@@ -52,6 +52,7 @@
   let me = null;
   let tenants = [];
   let adminWorkReportLearning = { items: [], meta: {} };
+  let buildInfo = null;
   let selectedComplaintId = 0;
   let selectedComplaint = null;
   let lastAiResult = null;
@@ -1096,11 +1097,54 @@
     wrap.innerHTML = chips.join("");
   }
 
+  function renderBuildInfoStrip() {
+    const el = $("#buildInfoStrip");
+    if (!el) return;
+    if (!buildInfo) {
+      el.classList.remove("is-error");
+      el.textContent = "서버 빌드 정보를 확인하는 중입니다.";
+      return;
+    }
+    if (buildInfo.error) {
+      el.classList.add("is-error");
+      el.innerHTML = [
+        "<strong>빌드 확인 실패</strong>",
+        `<span>${escapeHtml(buildInfo.error)}</span>`,
+        '<a href="/diag/build" target="_blank" rel="noopener">진단 페이지</a>',
+      ].join("");
+      return;
+    }
+    const releaseId = String(buildInfo.release_id || "-").trim() || "-";
+    const commit = String(buildInfo.git_commit_short || buildInfo.git_commit || "-").trim() || "-";
+    const assetVersion = String(buildInfo?.static_assets?.pwa_asset_version || "-").trim() || "-";
+    const startedAt = String(buildInfo.started_at_utc || "").trim();
+    el.classList.remove("is-error");
+    el.innerHTML = [
+      "<strong>현재 서버 빌드</strong>",
+      `<span>release ${escapeHtml(releaseId)}</span>`,
+      `<span>commit ${escapeHtml(commit)}</span>`,
+      `<span>asset ${escapeHtml(assetVersion)}</span>`,
+      startedAt ? `<span>started ${escapeHtml(formatDateTime(startedAt))}</span>` : "",
+      '<a href="/diag/build" target="_blank" rel="noopener">진단 페이지</a>',
+    ].join("");
+  }
+
+  async function loadBuildInfo() {
+    try {
+      buildInfo = await api("/api/build_info", { noAuth: true });
+    } catch (error) {
+      buildInfo = { error: error?.message || String(error) };
+    }
+    renderBuildInfoStrip();
+    return buildInfo;
+  }
+
   function applyHero() {
     renderTenantBadge();
     const role = isAdmin() ? "최고관리자" : (me?.user?.is_site_admin ? "현장관리자" : (me?.user?.role || "staff"));
     const tenantLabel = me?.tenant?.name || me?.user?.tenant_id || "선택 필요";
     $("#heroLine").textContent = `${role} 계정으로 접속 중입니다. 현재 작업 테넌트는 ${tenantLabel}입니다. 민원 접수와 함께 공지, 문서, 일정, 업체 관리까지 한 화면에서 운영할 수 있습니다.`;
+    renderBuildInfoStrip();
   }
 
   function renderAiSuggestion(result) {
@@ -5242,6 +5286,7 @@
   }
 
   async function reloadAll() {
+    await loadBuildInfo();
     await loadDocumentCatalog();
     await loadDashboard();
     await loadComplaints();
@@ -5563,6 +5608,8 @@
   }
 
   async function init() {
+    renderBuildInfoStrip();
+    loadBuildInfo().catch(() => {});
     me = await api("/api/auth/me");
     renderRoleOptions("#newUserRole", "desk");
     renderRoleOptions("#editUserRole", "desk");

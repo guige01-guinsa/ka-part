@@ -41,6 +41,7 @@ bash ./scripts/dev-test.sh
 - 업무보고 학습 데이터셋 export는 `python scripts/export_work_report_learning_dataset.py --tenant-id <tenant_id> --output <path>`로 수행합니다. 형식은 [docs/work-report-learning-dataset.md](C:/ka-part/render-sync/docs/work-report-learning-dataset.md)에 정리합니다.
 - 운영 중 현황은 최고관리자 화면과 `/api/admin/work_report_learning`에서 최근 평가 지표와 배포 판정을 함께 확인할 수 있습니다.
 - 캐시/배포 진단은 `/api/build_info` JSON 또는 `/diag/build` 페이지에서 현재 서버가 보는 release, commit, 정적 자산 버전을 확인하면 됩니다.
+- 로그인된 PWA 화면 상단에도 현재 `release / commit / asset`가 작은 진단 배지로 표시됩니다.
 
 기본 로컬 시드값:
 
