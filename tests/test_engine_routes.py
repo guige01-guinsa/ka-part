@@ -696,7 +696,16 @@ def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatc
 
     openai_calls: list[int] = []
 
-    def _fake_openai_work_report(*, text, image_inputs, reference_image_inputs, attachment_inputs, sample_title, sample_lines):
+    def _fake_openai_work_report(
+        *,
+        text,
+        image_inputs,
+        reference_image_inputs,
+        attachment_inputs,
+        sample_title,
+        sample_lines,
+        feedback_profile=None,
+    ):
         openai_calls.append(len(list(image_inputs or [])))
         return {
             "report_title": "시설팀 주요 업무 보고",
@@ -721,7 +730,7 @@ def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatc
             "analysis_model": "gpt-5.4",
         }
 
-    def _fake_openai_match_image_chunks(*, text, image_inputs, items, progress_callback=None):
+    def _fake_openai_match_image_chunks(*, text, image_inputs, items, progress_callback=None, feedback_profile=None):
         assert len(list(image_inputs or [])) == 13
         return {
             "items": [
@@ -763,7 +772,16 @@ def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatc
 def test_work_report_analysis_exposes_timeout_diagnostics_on_heuristic_fallback(monkeypatch) -> None:
     import app.work_report_service as service
 
-    def _fake_openai_work_report(*, text, image_inputs, reference_image_inputs, attachment_inputs, sample_title, sample_lines):
+    def _fake_openai_work_report(
+        *,
+        text,
+        image_inputs,
+        reference_image_inputs,
+        attachment_inputs,
+        sample_title,
+        sample_lines,
+        feedback_profile=None,
+    ):
         service._set_openai_error_state(
             "api_timeout",
             "OpenAI 응답 시간이 초과되어 AI 분석이 중단됐습니다.",
@@ -1324,6 +1342,7 @@ def test_work_report_batch_job_can_poll_until_completed(app_client, monkeypatch)
     def _fake_analyze_work_report(
         text,
         *,
+        tenant_id="",
         image_inputs=None,
         reference_image_inputs=None,
         attachment_inputs=None,
@@ -1424,6 +1443,117 @@ def test_work_report_batch_job_can_poll_until_completed(app_client, monkeypatch)
     assert detail_item["result"]["analysis_diagnostics"]["openai_failures"] == []
     assert detail_item["result"]["item_count"] == 1
     assert detail_item["result"]["template_source_name"] == ""
+
+
+def test_work_report_batch_cleanup_preserves_result_but_removes_staged_files(app_client, monkeypatch) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    import app.routes.engine as engine
+    import app.work_report_batch as batch
+
+    def _fake_analyze_work_report(
+        text,
+        *,
+        tenant_id="",
+        image_inputs=None,
+        reference_image_inputs=None,
+        attachment_inputs=None,
+        sample_title="",
+        sample_lines=None,
+        progress_callback=None,
+    ):
+        return {
+            "report_title": "시설팀 주요 업무 보고",
+            "period_label": "7월 4일",
+            "template_title": "시설팀 주요 업무 보고",
+            "analysis_model": "gpt-5.4",
+            "analysis_mode_label": "OpenAI (gpt-5.4)",
+            "analysis_reason": "",
+            "analysis_reason_label": "",
+            "analysis_notice": "",
+            "analysis_diagnostics": {"openai_failures": []},
+            "item_count": 1,
+            "image_item_count": 1,
+            "text_only_item_count": 0,
+            "items": [
+                {
+                    "index": 1,
+                    "title": "어린이 수영장 청소",
+                    "work_date": "2026-07-04",
+                    "work_date_label": "7월 4일",
+                    "vendor_name": "관리실",
+                    "location_name": "어린이 수영장",
+                    "summary": "어린이 수영장 청소 진행",
+                    "images": [{"index": 1, "filename": "7월4일-수영장-작업전.jpg", "stage": "general"}],
+                    "attachments": [],
+                }
+            ],
+            "image_items": [],
+            "text_only_items": [],
+            "unmatched_images": [],
+            "unmatched_attachments": [],
+            "source_text_preview": ["2026년 7월 4일 오전 9:00, 관리실 : 어린이 수영장 청소"],
+            "report_text": "어린이 수영장 청소",
+        }
+
+    monkeypatch.setattr(engine, "analyze_work_report", _fake_analyze_work_report)
+
+    created = client.post(
+        "/api/ai/work_report/jobs",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": "2026년 7월 4일 오전 9:00, 관리실 : 어린이 수영장 청소"},
+        files=[
+            ("images", ("7월4일-수영장-작업전.jpg", io.BytesIO(b"fake-image-1"), "image/jpeg")),
+        ],
+    )
+    assert created.status_code == 200
+    created_item = created.json()["item"]
+
+    detail_item = None
+    for _ in range(40):
+        detail = client.get(f"/api/ai/work_report/jobs/{created_item['id']}", headers=headers)
+        assert detail.status_code == 200
+        detail_item = detail.json()["item"]
+        if detail_item["status"] == "completed":
+            break
+        time.sleep(0.05)
+
+    assert detail_item is not None
+    assert detail_item["status"] == "completed"
+    record = batch.get_work_report_job_record(created_item["id"])
+    assert record is not None
+    job_dir = Path(str(record["job_dir"]))
+    result_path = Path(str(record["result_path"]))
+    assert result_path.exists()
+    assert not (job_dir / "images").exists()
+    assert not (job_dir / "reference_images").exists()
+    assert not (job_dir / "job-input.json").exists()
+
+
+def test_work_report_batch_job_create_returns_507_when_storage_is_full(app_client, monkeypatch) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    import app.routes.engine as engine
+
+    monkeypatch.setattr(engine, "reclaim_work_report_job_storage", lambda: None)
+
+    def _raise_no_space(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(engine, "_write_work_report_batch_payload", _raise_no_space)
+
+    response = client.post(
+        "/api/ai/work_report/jobs",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": "2026년 7월 4일 오전 9:00, 관리실 : 어린이 수영장 청소"},
+    )
+
+    assert response.status_code == 507
+    assert "저장 공간" in response.json()["detail"]
 
 
 def test_kakao_digest_import_creates_complaints(app_client) -> None:

@@ -47,6 +47,7 @@ from ..work_report_batch import (
     get_work_report_job_record,
     mark_work_report_job_running,
     new_work_report_job_id,
+    reclaim_work_report_job_storage,
     update_work_report_job_progress,
 )
 from ..work_report_service import (
@@ -447,6 +448,7 @@ def _read_work_report_batch_payload(job_dir: Path) -> Dict[str, Any]:
         return items
 
     return {
+        "tenant_id": str(payload.get("tenant_id") or "").strip().lower(),
         "text": str(payload.get("text") or ""),
         "source_name": str(payload.get("source_name") or ""),
         "source_names": [str(value or "") for value in payload.get("source_names") or []],
@@ -470,6 +472,17 @@ def _read_work_report_batch_payload(job_dir: Path) -> Dict[str, Any]:
             "kind": str((payload.get("sample") or {}).get("kind") or ""),
         },
     }
+
+
+def _is_no_space_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        if getattr(current, "errno", None) == 28:
+            return True
+        if "No space left on device" in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _execute_work_report_batch_preview(job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -755,6 +768,7 @@ async def ai_work_report_job_create(
     job_id = new_work_report_job_id()
     job_dir = build_work_report_job_dir(resolved_tenant_id, job_id)
     try:
+        await run_in_threadpool(reclaim_work_report_job_storage)
         _write_work_report_batch_payload(
             job_dir,
             tenant_id=resolved_tenant_id,
@@ -777,6 +791,19 @@ async def ai_work_report_job_create(
     except ValueError as exc:
         shutil.rmtree(job_dir, ignore_errors=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        if _is_no_space_error(exc):
+            logger.warning(
+                "work report batch preview staging failed due to storage exhaustion: tenant_id=%s job_id=%s",
+                resolved_tenant_id,
+                job_id,
+            )
+            raise HTTPException(
+                status_code=507,
+                detail="서버 임시 저장 공간이 부족합니다. 잠시 후 다시 시도해 주세요.",
+            ) from exc
+        raise
     except Exception:
         shutil.rmtree(job_dir, ignore_errors=True)
         raise

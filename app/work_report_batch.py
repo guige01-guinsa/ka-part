@@ -114,6 +114,63 @@ def _cleanup_old_jobs(con: sqlite3.Connection) -> None:
         con.execute("DELETE FROM work_report_jobs WHERE id=?", (job_id,))
 
 
+def _cleanup_job_dir_contents(job_dir: Path, *, keep_paths: set[Path] | None = None) -> None:
+    target_dir = _safe_job_dir(job_dir)
+    keep = {path.resolve() for path in (keep_paths or set())}
+    if not target_dir.exists():
+        return
+    for child in target_dir.iterdir():
+        resolved_child = child.resolve()
+        if resolved_child in keep:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            try:
+                child.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _cleanup_finished_job_artifacts_for_record(record: Dict[str, Any]) -> None:
+    status = str(record.get("status") or "").strip().lower()
+    if status not in {"completed", "failed"}:
+        return
+    raw_job_dir = str(record.get("job_dir") or "").strip()
+    if not raw_job_dir:
+        return
+    try:
+        job_dir = _safe_job_dir(Path(raw_job_dir))
+    except Exception:
+        return
+    if status == "failed":
+        shutil.rmtree(job_dir, ignore_errors=True)
+        return
+    keep_paths: set[Path] = set()
+    raw_result_path = str(record.get("result_path") or "").strip()
+    if raw_result_path:
+        try:
+            keep_paths.add(_safe_job_dir(Path(raw_result_path)))
+        except Exception:
+            pass
+    _cleanup_job_dir_contents(job_dir, keep_paths=keep_paths)
+
+
+def _cleanup_finished_job_artifacts(con: sqlite3.Connection) -> None:
+    rows = con.execute(
+        """
+        SELECT id, status, job_dir, result_path
+        FROM work_report_jobs
+        WHERE status IN ('completed', 'failed')
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            _cleanup_finished_job_artifacts_for_record(dict(row))
+        except Exception:
+            pass
+
+
 def _mark_interrupted_jobs_failed(con: sqlite3.Connection) -> None:
     ts = now_iso()
     con.execute(
@@ -143,6 +200,18 @@ def init_work_report_batch() -> None:
         _ensure_schema(con)
         _cleanup_old_jobs(con)
         _mark_interrupted_jobs_failed(con)
+        _cleanup_finished_job_artifacts(con)
+        con.commit()
+    finally:
+        con.close()
+
+
+def reclaim_work_report_job_storage() -> None:
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        _cleanup_old_jobs(con)
+        _cleanup_finished_job_artifacts(con)
         con.commit()
     finally:
         con.close()
@@ -316,6 +385,9 @@ def complete_work_report_job(
         finished_at=now_iso(),
         error_message="",
     )
+    cleanup_record = dict(record)
+    cleanup_record.update({"status": "completed", "result_path": str(result_path)})
+    _cleanup_finished_job_artifacts_for_record(cleanup_record)
 
 
 def fail_work_report_job(
@@ -325,6 +397,7 @@ def fail_work_report_job(
     summary: str = "미리보기 배치 작업이 실패했습니다.",
     hint: str = "같은 입력으로 다시 시도해 주세요.",
 ) -> None:
+    record = get_work_report_job_record(job_id)
     _update_job(
         job_id,
         status="failed",
@@ -333,6 +406,10 @@ def fail_work_report_job(
         error_message=str(error_message or "").strip() or "미리보기 배치 작업이 실패했습니다.",
         finished_at=now_iso(),
     )
+    if record:
+        cleanup_record = dict(record)
+        cleanup_record["status"] = "failed"
+        _cleanup_finished_job_artifacts_for_record(cleanup_record)
 
 
 def get_work_report_job_record(job_id: str) -> Dict[str, Any] | None:
