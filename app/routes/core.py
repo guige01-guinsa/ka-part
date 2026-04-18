@@ -8,6 +8,7 @@ from typing import Any, Dict, Tuple
 from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from ..build_info import build_info_payload
 from ..db import (
     append_audit_log,
     cleanup_expired_sessions,
@@ -298,6 +299,18 @@ def _admin_work_report_learning_snapshot(*, tenant_id: str = "", limit: int = 30
 @router.api_route("/health", methods=["GET", "HEAD"])
 def health() -> Dict[str, Any]:
     return {"ok": True, "service": "ka-part-complaint-engine"}
+
+
+@router.get("/build_info")
+def build_info() -> JSONResponse:
+    return JSONResponse(
+        content=build_info_payload(),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @router.get("/auth/bootstrap_status")

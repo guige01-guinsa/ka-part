@@ -3,9 +3,10 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from .build_info import build_info_html
 from .db import bootstrap_from_env, init_db
 from .engine_db import init_engine_db
 from .facility_db import init_facility_db
@@ -29,6 +30,8 @@ PWA_NO_CACHE_PATHS = {
     "/pwa/public.html",
     "/pwa/manifest.webmanifest",
     "/pwa/sw.js",
+    "/diag/build",
+    "/api/build_info",
 }
 PWA_VERSIONED_ASSET_SUFFIXES = (".css", ".js", ".png", ".svg", ".woff", ".woff2", ".ttf")
 
@@ -110,6 +113,11 @@ app.mount("/pwa", StaticFiles(directory="static/pwa", html=True), name="pwa")
 @app.get("/")
 def root():
     return RedirectResponse(url="/pwa/public.html")
+
+
+@app.get("/diag/build")
+def diag_build() -> HTMLResponse:
+    return HTMLResponse(build_info_html())
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])

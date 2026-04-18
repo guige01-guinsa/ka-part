@@ -132,6 +132,25 @@ def test_session_admin_can_run_new_mvp_engine_and_legacy_api_is_gone(app_client)
     assert client.get("/api/v1/complaints").status_code == 404
 
 
+def test_build_info_endpoints_expose_release_and_asset_versions(app_client) -> None:
+    client = app_client
+
+    api_response = client.get("/api/build_info")
+    assert api_response.status_code == 200
+    api_payload = api_response.json()
+    assert api_payload["release_id"] == "2026-04-18-cachediag-1"
+    assert api_payload["static_assets"]["pwa_asset_version"] == "20260418e"
+    assert api_payload["frontend_expectations"]["build_info_page"] == "/diag/build"
+    assert api_response.headers["cache-control"].startswith("no-store")
+
+    html_response = client.get("/diag/build")
+    assert html_response.status_code == 200
+    assert "text/html" in html_response.headers["content-type"]
+    assert "2026-04-18-cachediag-1" in html_response.text
+    assert "20260418e" in html_response.text
+    assert "/api/build_info" in html_response.text
+
+
 def test_api_key_flow_supports_complaints_dashboard_and_chat_digest(app_client) -> None:
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)
