@@ -248,6 +248,30 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS work_report_image_feedback (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          job_id TEXT,
+          actor TEXT,
+          feedback_type TEXT NOT NULL,
+          image_index INTEGER NOT NULL DEFAULT 0,
+          filename TEXT NOT NULL,
+          from_item_index INTEGER NOT NULL DEFAULT 0,
+          from_item_title TEXT,
+          to_item_index INTEGER NOT NULL DEFAULT 0,
+          to_item_title TEXT,
+          from_stage TEXT,
+          to_stage TEXT,
+          review_reason TEXT,
+          review_confidence TEXT,
+          candidate_items_json TEXT,
+          report_title TEXT,
+          period_label TEXT,
+          analysis_model TEXT,
+          analysis_reason TEXT,
+          created_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status, id);
         CREATE INDEX IF NOT EXISTS idx_staff_users_tenant ON staff_users(tenant_id, is_active, id);
         CREATE INDEX IF NOT EXISTS idx_staff_users_site_code ON staff_users(site_code, is_active, id);
@@ -255,6 +279,8 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_auth_sessions_token ON auth_sessions(token_hash);
         CREATE INDEX IF NOT EXISTS idx_usage_logs_tenant_date ON usage_logs(tenant_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_date ON audit_logs(tenant_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_work_report_feedback_tenant_date ON work_report_image_feedback(tenant_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_work_report_feedback_tenant_target ON work_report_image_feedback(tenant_id, to_item_title, created_at DESC);
         """
     )
     _ensure_column(con, "staff_users", "tenant_id", "tenant_id TEXT REFERENCES tenants(id) ON DELETE SET NULL")
@@ -897,6 +923,85 @@ def append_audit_log(tenant_id: Optional[str], action: str, actor: str, data: Op
         con.close()
 
 
+def append_work_report_image_feedback(
+    tenant_id: str,
+    actor: str,
+    *,
+    job_id: str = "",
+    corrections: List[Dict[str, Any]] | None = None,
+    report: Dict[str, Any] | None = None,
+) -> int:
+    rows = [dict(row) for row in list(corrections or []) if isinstance(row, dict)]
+    if not rows:
+        return 0
+    clean_tenant_id = _clean_tenant_id(tenant_id)
+    clean_actor = str(actor or "").strip()[:120] or None
+    report_data = dict(report or {})
+    report_title = str(report_data.get("report_title") or "").strip()[:160]
+    period_label = str(report_data.get("period_label") or "").strip()[:120]
+    analysis_model = str(report_data.get("analysis_model") or "").strip()[:80]
+    analysis_reason = str(report_data.get("analysis_reason") or "").strip()[:80]
+    now = now_iso()
+    payload_rows: List[Tuple[Any, ...]] = []
+    for row in rows:
+        candidate_items_json = json.dumps(
+            [
+                {
+                    "item_index": int(candidate.get("item_index") or 0),
+                    "title": str(candidate.get("title") or "").strip()[:240],
+                    "score": int(candidate.get("score") or 0),
+                }
+                for candidate in list(row.get("candidate_items") or [])[:3]
+                if isinstance(candidate, dict)
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        payload_rows.append(
+            (
+                clean_tenant_id,
+                str(job_id or "").strip()[:80] or None,
+                clean_actor,
+                str(row.get("feedback_type") or "").strip()[:40] or "confirm_current",
+                int(row.get("image_index") or 0),
+                str(row.get("filename") or "").strip()[:240],
+                int(row.get("from_item_index") or 0),
+                str(row.get("from_item_title") or "").strip()[:240] or None,
+                int(row.get("to_item_index") or 0),
+                str(row.get("to_item_title") or "").strip()[:240] or None,
+                str(row.get("from_stage") or "").strip()[:40] or None,
+                str(row.get("to_stage") or "").strip()[:40] or None,
+                str(row.get("review_reason") or "").strip()[:240] or None,
+                str(row.get("review_confidence") or "").strip()[:40] or None,
+                candidate_items_json,
+                report_title or None,
+                period_label or None,
+                analysis_model or None,
+                analysis_reason or None,
+                now,
+            )
+        )
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        con.executemany(
+            """
+            INSERT INTO work_report_image_feedback(
+              tenant_id, job_id, actor, feedback_type, image_index, filename,
+              from_item_index, from_item_title, to_item_index, to_item_title,
+              from_stage, to_stage, review_reason, review_confidence, candidate_items_json,
+              report_title, period_label, analysis_model, analysis_reason, created_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            payload_rows,
+        )
+        con.commit()
+    finally:
+        con.close()
+    return len(payload_rows)
+
+
 def list_usage_logs(*, tenant_id: str = "", limit: int = 100) -> List[Dict[str, Any]]:
     con = _connect()
     try:
@@ -936,6 +1041,30 @@ def list_audit_logs(*, tenant_id: str = "", limit: int = 100) -> List[Dict[str, 
         sql += " ORDER BY id DESC LIMIT ?"
         params.append(lim)
         rows = con.execute(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def list_work_report_image_feedback(*, tenant_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        lim = max(1, min(1000, int(limit)))
+        rows = con.execute(
+            """
+            SELECT
+              id, tenant_id, job_id, actor, feedback_type, image_index, filename,
+              from_item_index, from_item_title, to_item_index, to_item_title,
+              from_stage, to_stage, review_reason, review_confidence, candidate_items_json,
+              report_title, period_label, analysis_model, analysis_reason, created_at
+            FROM work_report_image_feedback
+            WHERE tenant_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (_clean_tenant_id(tenant_id), lim),
+        ).fetchall()
         return [dict(row) for row in rows]
     finally:
         con.close()

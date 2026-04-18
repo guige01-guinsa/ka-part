@@ -961,6 +961,57 @@ def test_work_report_analysis_exposes_review_queue_for_ambiguous_generic_image(m
     assert first_item["images"][0]["review_needed"] is True
 
 
+def test_work_report_analysis_uses_tenant_feedback_to_rerank_ambiguous_candidates(monkeypatch) -> None:
+    import app.work_report_service as service
+
+    monkeypatch.setattr(service, "_openai_work_report", lambda **kwargs: None)
+
+    db_module = importlib.import_module("app.db")
+    monkeypatch.setattr(
+        db_module,
+        "list_work_report_image_feedback",
+        lambda *, tenant_id, limit=100: [
+            {
+                "feedback_type": "reassign_item",
+                "to_item_index": 2,
+                "to_item_title": "104동 집하장 센서등 1개교체",
+                "from_item_index": 1,
+                "from_item_title": "101동 집하장 센서등 2개교체",
+                "review_confidence": "low",
+                "candidate_items_json": json.dumps(
+                    [
+                        {"item_index": 1, "title": "101동 집하장 센서등 2개교체", "score": 13},
+                        {"item_index": 2, "title": "104동 집하장 센서등 1개교체", "score": 13},
+                    ],
+                    ensure_ascii=False,
+                ),
+            }
+        ],
+    )
+
+    result = service.analyze_work_report(
+        "\n".join(
+            [
+                "2026년 7월 2일 수요일",
+                "[관리실] [오전 9:10] 101동 집하장 센서등 2개교체",
+                "[관리실] [오전 9:12] 104동 집하장 센서등 1개교체",
+            ]
+        ),
+        tenant_id="ys_thesharp",
+        image_inputs=[
+            {
+                "filename": "KakaoTalk_20260702_091100.jpg",
+                "bytes": b"fake-image",
+                "content_type": "image/jpeg",
+            }
+        ],
+    )
+
+    second_item = next(row for row in result["items"] if "104동" in str(row["title"]))
+    assert [str(image["filename"]) for image in second_item["images"]] == ["KakaoTalk_20260702_091100.jpg"]
+    assert result["analysis_diagnostics"]["tenant_feedback_rows_used"] == 1
+
+
 def test_work_report_finalize_image_stages_keeps_all_matched_images() -> None:
     from app.work_report_service import _finalize_image_stages
 
@@ -1013,7 +1064,7 @@ def test_work_report_pdf_output_items_respect_selected_images() -> None:
 
 
 def test_work_report_feedback_records_manual_image_corrections(app_client) -> None:
-    from app.db import list_audit_logs
+    from app.db import list_audit_logs, list_work_report_image_feedback
 
     client = app_client
     api_key = _bootstrap_admin_and_tenant(client)
@@ -1078,6 +1129,13 @@ def test_work_report_feedback_records_manual_image_corrections(app_client) -> No
     assert payload["corrections"][0]["to_item_title"] == "104동 음식물처리기 키패드 교체"
     assert payload["report"]["item_count"] == 1
     assert payload["report"]["unmatched_image_count"] == 0
+
+    feedback_rows = list_work_report_image_feedback(tenant_id="ys_thesharp", limit=1)
+    assert feedback_rows
+    assert feedback_rows[0]["feedback_type"] == "reassign_item"
+    assert feedback_rows[0]["to_item_title"] == "104동 음식물처리기 키패드 교체"
+    stored_candidates = json.loads(str(feedback_rows[0]["candidate_items_json"] or "[]"))
+    assert stored_candidates == []
 
 
 def test_work_report_image_layout_uses_three_columns_for_three_images() -> None:

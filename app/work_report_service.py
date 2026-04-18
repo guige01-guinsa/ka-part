@@ -43,6 +43,20 @@ WORK_REPORT_ACTION_KEYWORDS = (
     "구입",
 )
 WORK_REPORT_VENDOR_HINTS = ("업체", "업 체", "시공사", "협력업체", "담당", "작업자")
+WORK_REPORT_FEEDBACK_STOP_TOKENS = {
+    "관리실",
+    "작업",
+    "공사",
+    "교체",
+    "보수",
+    "수리",
+    "설치",
+    "조치",
+    "완료",
+    "진행",
+    "접수",
+    "현장",
+}
 WORK_REPORT_STAGE_HINTS = {
     "before": ("before", "전", "작업전", "교체전", "시공전", "조치전", "보수전"),
     "during": ("during", "중", "작업중", "교체중", "시공중", "진행중"),
@@ -1272,6 +1286,127 @@ def _item_tokens(item: Dict[str, Any]) -> set[str]:
     return tokens
 
 
+def _feedback_title_tokens(value: Any) -> set[str]:
+    tokens: set[str] = set()
+    for token in _tokenize(value):
+        clean = _collapse(token).lower()
+        if not clean or clean in WORK_REPORT_FEEDBACK_STOP_TOKENS:
+            continue
+        tokens.add(clean)
+    return tokens
+
+
+def _load_work_report_feedback_profile(tenant_id: str) -> Dict[str, Any]:
+    clean_tenant_id = _collapse(tenant_id).lower()
+    if not clean_tenant_id:
+        return {"tenant_id": "", "rows_used": 0, "positive_tokens": {}, "negative_tokens": {}}
+    try:
+        from .db import list_work_report_image_feedback
+
+        rows = list_work_report_image_feedback(tenant_id=clean_tenant_id, limit=300)
+    except Exception:
+        logger.exception("failed to load work report feedback profile: tenant_id=%s", clean_tenant_id)
+        return {"tenant_id": clean_tenant_id, "rows_used": 0, "positive_tokens": {}, "negative_tokens": {}}
+
+    positive_tokens: Dict[str, float] = {}
+    negative_tokens: Dict[str, float] = {}
+    rows_used = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        feedback_type = _collapse(row.get("feedback_type") or "")
+        if feedback_type == "change_stage":
+            continue
+        review_confidence = _collapse(row.get("review_confidence") or "")
+        weight = 1.0
+        if feedback_type == "reassign_item":
+            weight = 3.0
+        elif feedback_type == "confirm_current":
+            weight = 1.8
+        elif feedback_type == "mark_unmatched":
+            weight = 1.4
+        if review_confidence == "low":
+            weight *= 1.2
+        elif review_confidence == "high":
+            weight *= 0.9
+
+        to_item_index = int(row.get("to_item_index") or 0)
+        chosen_tokens = _feedback_title_tokens(row.get("to_item_title") or "")
+        from_tokens = _feedback_title_tokens(row.get("from_item_title") or "")
+        candidate_tokens: List[set[str]] = []
+        try:
+            candidate_items = json.loads(str(row.get("candidate_items_json") or "[]"))
+        except Exception:
+            candidate_items = []
+        if isinstance(candidate_items, list):
+            for candidate in candidate_items:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_item_index = int(candidate.get("item_index") or 0)
+                tokens = _feedback_title_tokens(candidate.get("title") or "")
+                if not tokens:
+                    continue
+                if candidate_item_index == to_item_index and chosen_tokens:
+                    continue
+                candidate_tokens.append(tokens)
+        rejected_tokens: set[str] = set()
+        for tokens in candidate_tokens:
+            rejected_tokens.update(tokens)
+        if feedback_type == "reassign_item" and from_tokens:
+            rejected_tokens.update(from_tokens)
+        if feedback_type == "mark_unmatched":
+            for tokens in candidate_tokens:
+                for token in tokens:
+                    negative_tokens[token] = negative_tokens.get(token, 0.0) + weight
+            rows_used += 1
+            continue
+        positive_signal = chosen_tokens - rejected_tokens if chosen_tokens else set()
+        negative_signal = rejected_tokens - chosen_tokens if rejected_tokens else set()
+        if not positive_signal and chosen_tokens:
+            positive_signal = set(chosen_tokens)
+        if chosen_tokens:
+            for token in positive_signal:
+                positive_tokens[token] = positive_tokens.get(token, 0.0) + weight
+        for token in negative_signal:
+            negative_tokens[token] = negative_tokens.get(token, 0.0) + (weight * 0.9)
+        rows_used += 1
+    return {
+        "tenant_id": clean_tenant_id,
+        "rows_used": rows_used,
+        "positive_tokens": positive_tokens,
+        "negative_tokens": negative_tokens,
+    }
+
+
+def _tenant_feedback_bonus(item: Dict[str, Any], feedback_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    profile = dict(feedback_profile or {})
+    if int(profile.get("rows_used") or 0) <= 0:
+        return {"bonus": 0, "positive_tokens": [], "negative_tokens": []}
+    item_tokens = {token for token in _item_tokens(item) if token not in WORK_REPORT_FEEDBACK_STOP_TOKENS}
+    if not item_tokens:
+        return {"bonus": 0, "positive_tokens": [], "negative_tokens": []}
+    positive_map = dict(profile.get("positive_tokens") or {})
+    negative_map = dict(profile.get("negative_tokens") or {})
+    positive_hits = sorted((token for token in item_tokens if float(positive_map.get(token) or 0.0) > 0.0), key=lambda token: (-float(positive_map.get(token) or 0.0), token))
+    negative_hits = sorted((token for token in item_tokens if float(negative_map.get(token) or 0.0) > 0.0), key=lambda token: (-float(negative_map.get(token) or 0.0), token))
+    raw_score = sum(float(positive_map.get(token) or 0.0) for token in positive_hits[:4]) - sum(float(negative_map.get(token) or 0.0) for token in negative_hits[:4])
+    if raw_score >= 6.0:
+        bonus = 4
+    elif raw_score >= 3.0:
+        bonus = 2
+    elif raw_score <= -5.0:
+        bonus = -3
+    elif raw_score <= -2.0:
+        bonus = -1
+    else:
+        bonus = 0
+    return {
+        "bonus": bonus,
+        "positive_tokens": positive_hits[:3],
+        "negative_tokens": negative_hits[:3],
+    }
+
+
 def _entry_tokens(entry: Dict[str, Any]) -> set[str]:
     preview_text = _collapse(entry.get("preview_text") or "")
     metadata = entry.get("metadata") or {}
@@ -1348,7 +1483,11 @@ def _temporal_match_score(item: Dict[str, Any], entry: Dict[str, Any]) -> int:
     return int(_temporal_match_details(item, entry).get("score") or 0)
 
 
-def _match_score_breakdown(item: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]:
+def _match_score_breakdown(
+    item: Dict[str, Any],
+    entry: Dict[str, Any],
+    feedback_profile: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     item_token_set = _item_tokens(item)
     entry_token_set = _entry_tokens(entry)
     token_overlap = len(item_token_set & entry_token_set)
@@ -1361,6 +1500,9 @@ def _match_score_breakdown(item: Dict[str, Any], entry: Dict[str, Any]) -> Dict[
         "date_bonus": 0,
         "month_day_bonus": 0,
         "vendor_bonus": 0,
+        "feedback_bonus": 0,
+        "feedback_positive_tokens": [],
+        "feedback_negative_tokens": [],
         "score": 0,
     }
     if base_score <= 0:
@@ -1381,12 +1523,21 @@ def _match_score_breakdown(item: Dict[str, Any], entry: Dict[str, Any]) -> Dict[
     if vendor and vendor in _collapse(filename):
         score += 2
         result["vendor_bonus"] = 2
+    feedback = _tenant_feedback_bonus(item, feedback_profile)
+    result["feedback_bonus"] = int(feedback.get("bonus") or 0)
+    result["feedback_positive_tokens"] = list(feedback.get("positive_tokens") or [])
+    result["feedback_negative_tokens"] = list(feedback.get("negative_tokens") or [])
+    score += int(feedback.get("bonus") or 0)
     result["score"] = score
     return result
 
 
-def _match_score(item: Dict[str, Any], entry: Dict[str, Any]) -> int:
-    return int(_match_score_breakdown(item, entry).get("score") or 0)
+def _match_score(
+    item: Dict[str, Any],
+    entry: Dict[str, Any],
+    feedback_profile: Optional[Dict[str, Any]] = None,
+) -> int:
+    return int(_match_score_breakdown(item, entry, feedback_profile=feedback_profile).get("score") or 0)
 
 
 def _image_candidate_reason_parts(breakdown: Dict[str, Any]) -> List[str]:
@@ -1404,6 +1555,8 @@ def _image_candidate_reason_parts(breakdown: Dict[str, Any]) -> List[str]:
         parts.append("파일명 월/일 단서 일치")
     if int(breakdown.get("vendor_bonus") or 0) > 0:
         parts.append("업체명 단서 일치")
+    if int(breakdown.get("feedback_bonus") or 0) > 0:
+        parts.append("누적 피드백 보정")
     if not parts:
         parts.append("명확한 단서는 약함")
     return parts
@@ -1423,13 +1576,14 @@ def _image_candidate_matches(
     entry: Dict[str, Any],
     *,
     limit: int = 3,
+    feedback_profile: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     ranked: List[Dict[str, Any]] = []
     for item in list(items or []):
         item_index = int(item.get("index") or 0)
         if item_index <= 0:
             continue
-        breakdown = _match_score_breakdown(item, entry)
+        breakdown = _match_score_breakdown(item, entry, feedback_profile=feedback_profile)
         score = int(breakdown.get("score") or 0)
         if score <= 0:
             continue
@@ -1473,14 +1627,18 @@ def _image_review_decision(current_item_index: int, candidates: Sequence[Dict[st
     return {"needed": False, "reason": "", "confidence": confidence}
 
 
-def _best_item_index_for_cluster(items: Sequence[Dict[str, Any]], cluster: Sequence[Dict[str, Any]]) -> int:
+def _best_item_index_for_cluster(
+    items: Sequence[Dict[str, Any]],
+    cluster: Sequence[Dict[str, Any]],
+    feedback_profile: Optional[Dict[str, Any]] = None,
+) -> int:
     best_item_index = 0
     best_score = 0
     for item in list(items or []):
         item_index = int(item.get("index") or 0)
         if item_index <= 0:
             continue
-        score = sum(_match_score(item, row) for row in list(cluster or []))
+        score = sum(_match_score(item, row, feedback_profile=feedback_profile) for row in list(cluster or []))
         if score > best_score:
             best_score = score
             best_item_index = item_index
@@ -1493,6 +1651,7 @@ def _cluster_item_candidate_lines(
     work_events: Sequence[Dict[str, Any]],
     *,
     limit: int = 3,
+    feedback_profile: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     nearby = _cluster_nearby_events(cluster, work_events)[:4]
     ranked: List[Tuple[int, int, str, str, List[str]]] = []
@@ -1503,7 +1662,7 @@ def _cluster_item_candidate_lines(
         title = _collapse(item.get("title") or "")
         location = _collapse(item.get("location_name") or "")
         keywords = _item_hint_keywords(item, limit=5)
-        score = sum(_match_score(item, row) for row in list(cluster or []))
+        score = sum(_match_score(item, row, feedback_profile=feedback_profile) for row in list(cluster or []))
         for _, event in nearby:
             event_text = _collapse(event.get("text") or "")
             if not event_text:
@@ -1547,6 +1706,7 @@ def _assign_entries(
     entries: List[Dict[str, Any]],
     *,
     allow_chunk_fallback: bool = True,
+    feedback_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[int, List[Dict[str, Any]]]:
     assigned: Dict[int, List[Dict[str, Any]]] = {int(item["index"]): [] for item in items}
     unmatched: List[Dict[str, Any]] = []
@@ -1554,7 +1714,7 @@ def _assign_entries(
         best_item = None
         best_score = 0
         for item in items:
-            score = _match_score(item, entry)
+            score = _match_score(item, entry, feedback_profile=feedback_profile)
             if score > best_score:
                 best_score = score
                 best_item = item
@@ -1842,6 +2002,7 @@ def _attach_image_review_metadata(
     items: Sequence[Dict[str, Any]],
     unmatched_images: Sequence[Dict[str, Any]],
     image_entries: Sequence[Dict[str, Any]],
+    feedback_profile: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     entry_lookup = {int(row.get("index") or 0): dict(row) for row in list(image_entries or []) if int(row.get("index") or 0) > 0}
     image_row_lookup: Dict[int, Tuple[Dict[str, Any], int, str]] = {}
@@ -1862,7 +2023,7 @@ def _attach_image_review_metadata(
         entry = entry_lookup.get(int(image_index))
         if not entry:
             continue
-        candidates = _image_candidate_matches(items, entry, limit=3)
+        candidates = _image_candidate_matches(items, entry, limit=3, feedback_profile=feedback_profile)
         decision = _image_review_decision(current_item_index, candidates)
         row["review_candidates"] = candidates
         row["review_needed"] = bool(decision.get("needed"))
@@ -2291,6 +2452,7 @@ def _openai_match_image_chunks(
     image_inputs: Sequence[Dict[str, Any]],
     items: Sequence[Dict[str, Any]],
     progress_callback: WorkReportProgressCallback | None = None,
+    feedback_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any] | None:
     client, model = _openai_client(default_model="gpt-5.4", env_name="WORK_REPORT_OPENAI_MODEL")
     if not client or not image_inputs or not items:
@@ -2368,7 +2530,7 @@ def _openai_match_image_chunks(
             file_names = ", ".join(str(row.get("filename") or "") for row in cluster[:4])
             time_line = _openai_cluster_lines(cluster)
             nearby_line = _openai_cluster_context_lines(cluster, text)
-            candidate_lines = _cluster_item_candidate_lines(cluster, items, work_events)
+            candidate_lines = _cluster_item_candidate_lines(cluster, items, work_events, feedback_profile=feedback_profile)
             cluster_parts = [f"[C{local_index}] 전체 이미지 {', '.join(indexes)}", f"파일 {file_names or '-'}"]
             if time_line:
                 cluster_parts.append(re.sub(r"^- C1:\s*", "", str(time_line[0])))
@@ -2453,7 +2615,7 @@ def _openai_match_image_chunks(
         if pending_local_indexes:
             for local_index in sorted(pending_local_indexes):
                 cluster = batch_clusters[local_index - 1]
-                fallback_item_index = _best_item_index_for_cluster(items, cluster)
+                fallback_item_index = _best_item_index_for_cluster(items, cluster, feedback_profile=feedback_profile)
                 if fallback_item_index and fallback_item_index in assigned_rows:
                     for cluster_row in cluster:
                         assigned_rows[fallback_item_index].append(dict(cluster_row))
@@ -2497,6 +2659,7 @@ def _openai_match_image_chunks(
 def analyze_work_report(
     text: str,
     *,
+    tenant_id: str = "",
     image_inputs: Sequence[Dict[str, Any]] | None = None,
     reference_image_inputs: Sequence[Dict[str, Any]] | None = None,
     attachment_inputs: Sequence[Dict[str, Any]] | None = None,
@@ -2537,6 +2700,9 @@ def analyze_work_report(
         "used_chunked_image_matching": use_chunked_image_matching,
     }
     image_entries = _work_report_image_entries(images)
+    tenant_feedback_profile = _load_work_report_feedback_profile(tenant_id)
+    analysis_diagnostics["tenant_feedback_rows_used"] = int(tenant_feedback_profile.get("rows_used") or 0)
+    analysis_diagnostics["tenant_feedback_enabled"] = bool(_collapse(tenant_feedback_profile.get("tenant_id") or ""))
 
     def remember_openai_error(stage: str) -> None:
         snapshot = _consume_openai_error_snapshot()
@@ -2579,6 +2745,7 @@ def analyze_work_report(
                 image_inputs=images,
                 items=list(base_ai_result.get("items") or []),
                 progress_callback=progress_callback,
+                feedback_profile=tenant_feedback_profile,
             )
             if not chunked_images:
                 remember_openai_error("chunked_image_match")
@@ -2653,6 +2820,7 @@ def analyze_work_report(
                 image_inputs=images,
                 items=list(base_ai_result.get("items") or []),
                 progress_callback=progress_callback,
+                feedback_profile=tenant_feedback_profile,
             )
             if not chunked_images:
                 remember_openai_error("fallback_chunked_image_match")
@@ -2915,7 +3083,7 @@ def analyze_work_report(
             ):
                 attachment_matches, remaining_attachments = _assign_entries_by_expected_counts(items, attachment_entries, "_expected_attachment_count")
             if remaining_images:
-                score_matches = _assign_entries(items, remaining_images, allow_chunk_fallback=False)
+                score_matches = _assign_entries(items, remaining_images, allow_chunk_fallback=False, feedback_profile=tenant_feedback_profile)
                 for item_index, rows in score_matches.items():
                     image_matches[item_index].extend(rows)
                 matched_indexes = {
@@ -2930,7 +3098,7 @@ def analyze_work_report(
                     if int(row.get("index") or 0) > 0 and int(row.get("index") or 0) not in matched_indexes
                 ]
             if remaining_attachments:
-                score_matches = _assign_entries(items, remaining_attachments)
+                score_matches = _assign_entries(items, remaining_attachments, feedback_profile=tenant_feedback_profile)
                 for item_index, rows in score_matches.items():
                     attachment_matches[item_index].extend(rows)
                 matched_attachment_indexes = {
@@ -2997,7 +3165,7 @@ def analyze_work_report(
         for index in unmatched_attachment_indexes
         if 0 < int(index) <= len(attachments)
     ]
-    review_queue = _attach_image_review_metadata(items, unmatched_images, image_entries)
+    review_queue = _attach_image_review_metadata(items, unmatched_images, image_entries, feedback_profile=tenant_feedback_profile)
     for item in items:
         item.pop("_minute_of_day", None)
     image_items = [item for item in items if item.get("images")]

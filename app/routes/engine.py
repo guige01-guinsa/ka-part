@@ -17,6 +17,7 @@ from ..ai_service import MAX_CHAT_DIGEST_IMAGES, analyze_chat_digest, classify_c
 from ..db import (
     STORAGE_ROOT,
     append_audit_log,
+    append_work_report_image_feedback,
     ensure_service_user,
     get_auth_user_by_token,
     get_tenant,
@@ -373,6 +374,7 @@ def _stage_work_report_batch_images(job_dir: Path, rows: List[Dict[str, Any]], f
 def _write_work_report_batch_payload(
     job_dir: Path,
     *,
+    tenant_id: str,
     text: str,
     source: Dict[str, Any],
     image_inputs: List[Dict[str, Any]],
@@ -382,6 +384,7 @@ def _write_work_report_batch_payload(
     target_dir = job_dir.resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
     payload = {
+        "tenant_id": str(tenant_id or "").strip().lower(),
         "text": str(text or ""),
         "source_name": str(source.get("source_name") or ""),
         "source_names": [str(value or "") for value in source.get("source_names") or []],
@@ -492,6 +495,7 @@ def _execute_work_report_batch_preview(job_id: str, payload: Dict[str, Any]) -> 
     )
     report = analyze_work_report(
         source_text,
+        tenant_id=str(payload.get("tenant_id") or ""),
         image_inputs=list(payload.get("images") or []),
         reference_image_inputs=list(payload.get("reference_images") or []),
         attachment_inputs=list(payload.get("attachments") or []),
@@ -693,6 +697,7 @@ async def ai_work_report(
         item = await run_in_threadpool(
             analyze_work_report,
             source_text,
+            tenant_id=resolved_tenant_id,
             image_inputs=image_inputs,
             reference_image_inputs=reference_image_inputs,
             attachment_inputs=attachment_inputs,
@@ -752,6 +757,7 @@ async def ai_work_report_job_create(
     try:
         _write_work_report_batch_payload(
             job_dir,
+            tenant_id=resolved_tenant_id,
             text=str(text or ""),
             source=source,
             image_inputs=image_inputs,
@@ -855,6 +861,7 @@ async def ai_work_report_pdf(
         report = cached_report or await run_in_threadpool(
             analyze_work_report,
             source_text,
+            tenant_id=resolved_tenant_id,
             image_inputs=image_inputs,
             reference_image_inputs=reference_image_inputs,
             attachment_inputs=attachment_inputs,
@@ -936,6 +943,7 @@ def ai_work_report_feedback(request: Request, payload: Dict[str, Any] = Body(...
     report = dict(report_raw or {})
     report_items = list(report.get("items") or []) if isinstance(report.get("items"), list) else []
     unmatched_images = list(report.get("unmatched_images") or []) if isinstance(report.get("unmatched_images"), list) else []
+    actor_label = _actor_label(user, tenant)
     report_summary = {
         "report_title": str(report.get("report_title") or "").strip()[:160],
         "period_label": str(report.get("period_label") or "").strip()[:120],
@@ -974,13 +982,21 @@ def ai_work_report_feedback(request: Request, payload: Dict[str, Any] = Body(...
             if isinstance(image, dict)
         ],
     }
+    saved_feedback_count = append_work_report_image_feedback(
+        resolved_tenant_id,
+        actor_label,
+        job_id=str(payload.get("job_id") or "").strip()[:80],
+        corrections=corrections,
+        report=report_summary,
+    )
     append_audit_log(
         resolved_tenant_id,
         "ai_work_report_feedback",
-        _actor_label(user, tenant),
+        actor_label,
         {
             "job_id": str(payload.get("job_id") or "").strip()[:80],
             "correction_count": len(corrections),
+            "saved_feedback_count": saved_feedback_count,
             "corrections": corrections,
             "report": report_summary,
         },
@@ -989,7 +1005,7 @@ def ai_work_report_feedback(request: Request, payload: Dict[str, Any] = Body(...
         "ok": True,
         "item": {
             "job_id": str(payload.get("job_id") or "").strip()[:80],
-            "correction_count": len(corrections),
+            "correction_count": saved_feedback_count,
             "saved": True,
         },
     }
