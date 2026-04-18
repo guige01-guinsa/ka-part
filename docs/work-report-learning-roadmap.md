@@ -47,6 +47,7 @@
 - 오프라인 평가는 `scripts/evaluate_work_report_feedback.py`와 `docs/work-report-evaluation.md` 기준으로 운영한다.
 - 최근 사람 검토 예시는 이미지 군집 매칭과 통합 추출 프롬프트에 같이 넣어 같은 단지의 선택 경향을 보수적으로 참고한다.
 - 학습 데이터 export는 `scripts/export_work_report_learning_dataset.py`와 `docs/work-report-learning-dataset.md` 기준으로 운영한다.
+- 관리자 화면과 `/api/admin/work_report_learning`에서 단지별 평가 지표, few-shot 개수, 배포 판정 현황을 확인할 수 있다.
 
 ## 운영 메모
 

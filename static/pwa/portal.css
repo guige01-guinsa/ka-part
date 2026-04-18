@@ -821,6 +821,37 @@ body {
   margin-top: 16px;
 }
 
+.learning-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.learning-status-pill.ready {
+  background: rgba(13, 106, 103, 0.14);
+  color: var(--accent-strong);
+}
+
+.learning-status-pill.pending {
+  background: rgba(185, 92, 44, 0.12);
+  color: #8f4c26;
+}
+
+.learning-table-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .attachment-actions {
   justify-content: flex-start;
   align-items: center;

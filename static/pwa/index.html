@@ -10,7 +10,7 @@
   />
   <meta name="theme-color" content="#133936" />
   <link rel="manifest" href="/pwa/manifest.webmanifest?v=14" />
-  <link rel="stylesheet" href="/pwa/portal.css?v=20260416d" />
+  <link rel="stylesheet" href="/pwa/portal.css?v=20260418e" />
 </head>
 <body class="portal-shell">
   <div class="page-orb orb-a" aria-hidden="true"></div>
@@ -1521,6 +1521,30 @@
         <button id="btnLoadTenants" class="ghost-btn" type="button">목록 새로고침</button>
       </div>
       <div id="adminMsg" class="inline-message" aria-live="polite"></div>
+      <div class="detail-block">
+        <div class="subhead">
+          <h3>업무보고 학습 현황</h3>
+          <span id="adminLearningMeta">최근 300건 기준으로 불러옵니다.</span>
+        </div>
+        <div id="adminLearningSummary" class="ops-metrics"></div>
+        <div id="adminLearningMsg" class="inline-message" aria-live="polite"></div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>tenant_id</th>
+                <th>피드백</th>
+                <th>학습셋 / few-shot</th>
+                <th>배포 판정</th>
+                <th>top-1 / top-3</th>
+                <th>개입 / 미매칭 오판</th>
+                <th>최근 피드백</th>
+              </tr>
+            </thead>
+            <tbody id="adminLearningTableBody"></tbody>
+          </table>
+        </div>
+      </div>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
@@ -1571,6 +1595,6 @@
   </nav>
 
   <script src="/pwa/auth.js?v=20260407a"></script>
-  <script src="/pwa/portal.js?v=20260418a"></script>
+  <script src="/pwa/portal.js?v=20260418e"></script>
 </body>
 </html>

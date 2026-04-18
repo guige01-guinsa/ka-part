@@ -1070,6 +1070,26 @@ def list_work_report_image_feedback(*, tenant_id: str, limit: int = 100) -> List
         con.close()
 
 
+def list_work_report_image_feedback_stats(*, tenant_id: str = "") -> List[Dict[str, Any]]:
+    con = _connect()
+    try:
+        _ensure_schema(con)
+        sql = """
+            SELECT tenant_id, COUNT(*) AS total_feedback_rows, MAX(created_at) AS latest_feedback_at
+            FROM work_report_image_feedback
+        """
+        params: List[Any] = []
+        clean_tenant_id = str(tenant_id or "").strip().lower()
+        if clean_tenant_id:
+            sql += " WHERE tenant_id=?"
+            params.append(_clean_tenant_id(clean_tenant_id))
+        sql += " GROUP BY tenant_id ORDER BY tenant_id ASC"
+        rows = con.execute(sql, tuple(params)).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
 def create_staff_user(
     *,
     login_id: str,

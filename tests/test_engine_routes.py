@@ -1138,6 +1138,80 @@ def test_work_report_feedback_records_manual_image_corrections(app_client) -> No
     assert stored_candidates == []
 
 
+def test_admin_work_report_learning_dashboard_summarizes_feedback(app_client) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    saved = client.post(
+        "/api/ai/work_report/feedback",
+        headers=headers,
+        json={
+            "tenant_id": "ys_thesharp",
+            "job_id": "job-learning-dashboard-1",
+            "corrections": [
+                {
+                    "feedback_type": "reassign_item",
+                    "image_index": 1,
+                    "filename": "KakaoTalk_20260702_091100.jpg",
+                    "from_item_index": 1,
+                    "from_item_title": "101동 집하장 센서등 2개교체",
+                    "to_item_index": 2,
+                    "to_item_title": "104동 집하장 센서등 1개교체",
+                    "from_stage": "before",
+                    "to_stage": "after",
+                    "review_reason": "점수 차가 작습니다",
+                    "review_confidence": "low",
+                    "candidate_items": [
+                        {"item_index": 1, "title": "101동 집하장 센서등 2개교체", "score": 13},
+                        {"item_index": 2, "title": "104동 집하장 센서등 1개교체", "score": 13},
+                    ],
+                },
+                {
+                    "feedback_type": "confirm_current",
+                    "image_index": 2,
+                    "filename": "KakaoTalk_20260702_092100.jpg",
+                    "from_item_index": 2,
+                    "from_item_title": "104동 집하장 센서등 1개교체",
+                    "to_item_index": 2,
+                    "to_item_title": "104동 집하장 센서등 1개교체",
+                    "from_stage": "after",
+                    "to_stage": "after",
+                    "review_reason": "현재 선택이 맞습니다",
+                    "review_confidence": "medium",
+                    "candidate_items": [
+                        {"item_index": 2, "title": "104동 집하장 센서등 1개교체", "score": 14},
+                    ],
+                },
+            ],
+            "report": {
+                "report_title": "시설팀 주요 업무 보고",
+                "period_label": "7월 2일",
+                "analysis_model": "gpt-5.4",
+                "analysis_reason": "",
+            },
+        },
+    )
+    assert saved.status_code == 200
+
+    response = client.get("/api/admin/work_report_learning?tenant_id=ys_thesharp&limit=300")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["meta"]["tenant_count"] == 1
+    assert payload["meta"]["total_feedback_rows"] == 2
+    item = payload["items"][0]
+    assert item["tenant_id"] == "ys_thesharp"
+    assert item["total_feedback_rows"] == 2
+    assert item["inspected_feedback_rows"] == 2
+    assert item["inspected_learning_dataset_rows"] == 2
+    assert item["few_shot_example_count"] >= 1
+    assert item["summary"]["choice_feedback_rows"] == 2
+    assert item["readiness"]["ready"] is False
+    assert item["latest_feedback_at"]
+
+
 def test_work_report_image_layout_uses_three_columns_for_three_images() -> None:
     from app.report_pdf import _work_report_image_layout
 

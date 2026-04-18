@@ -41,9 +41,17 @@
     { value: "reader", label: "읽기전용" },
     { value: "integration", label: "연동계정" },
   ];
+  const WORK_REPORT_LEARNING_CHECK_LABELS = {
+    choice_feedback_rows: "선택 피드백 부족",
+    top1_accuracy: "top-1 부족",
+    top3_hit_rate: "top-3 부족",
+    human_intervention_rate: "사람 개입률 높음",
+    unmatched_false_positive_rate: "미매칭 오판 높음",
+  };
 
   let me = null;
   let tenants = [];
+  let adminWorkReportLearning = { items: [], meta: {} };
   let selectedComplaintId = 0;
   let selectedComplaint = null;
   let lastAiResult = null;
@@ -305,6 +313,18 @@
     if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
     if (size >= 1024) return `${Math.round(size / 1024)}KB`;
     return `${size}B`;
+  }
+
+  function formatNumber(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "0";
+    return new Intl.NumberFormat("ko-KR").format(number);
+  }
+
+  function formatPercent(value) {
+    const number = Number(value || 0);
+    if (!Number.isFinite(number)) return "-";
+    return `${(number * 100).toFixed(1)}%`;
   }
 
   function isMobileViewport() {
@@ -1214,6 +1234,17 @@
   async function loadTenants() {
     if (!isAdmin()) return [];
     const data = await api("/api/admin/tenants");
+    let learningError = "";
+    try {
+      const learningData = await api("/api/admin/work_report_learning?limit=300");
+      adminWorkReportLearning = {
+        items: Array.isArray(learningData.items) ? learningData.items : [],
+        meta: learningData?.meta && typeof learningData.meta === "object" ? learningData.meta : {},
+      };
+    } catch (error) {
+      learningError = error?.message || String(error);
+      adminWorkReportLearning = { items: [], meta: {} };
+    }
     tenants = Array.isArray(data.items) ? data.items : [];
     const select = $("#tenantSelect");
     if (select) {
@@ -1226,6 +1257,8 @@
     }
     syncUserTenantDisplay();
     renderTenantsTable();
+    renderAdminWorkReportLearning();
+    setMessage("#adminLearningMsg", learningError, !!learningError);
     return tenants;
   }
 
@@ -1251,6 +1284,81 @@
         await loadTenants();
       });
     });
+  }
+
+  function renderAdminWorkReportLearning() {
+    const summaryEl = $("#adminLearningSummary");
+    const tableBody = $("#adminLearningTableBody");
+    const metaEl = $("#adminLearningMeta");
+    const snapshot = adminWorkReportLearning && typeof adminWorkReportLearning === "object" ? adminWorkReportLearning : { items: [], meta: {} };
+    const items = Array.isArray(snapshot.items) ? snapshot.items : [];
+    const meta = snapshot?.meta && typeof snapshot.meta === "object" ? snapshot.meta : {};
+    const tenantCount = Number(meta.tenant_count || items.length || 0);
+    const limitPerTenant = Number(meta.limit_per_tenant || 300);
+    const latestFeedbackAt = String(meta.latest_feedback_at || "").trim();
+
+    if (metaEl) {
+      const parts = [`최근 ${formatNumber(limitPerTenant)}건 기준`];
+      parts.push(`누적 피드백 ${formatNumber(meta.total_feedback_rows || 0)}건`);
+      parts.push(`ready ${formatNumber(meta.deploy_ready_tenants || 0)}/${formatNumber(tenantCount)}`);
+      if (latestFeedbackAt) {
+        parts.push(`최근 ${formatDateTime(latestFeedbackAt)}`);
+      }
+      metaEl.textContent = parts.join(" · ");
+    }
+
+    if (summaryEl) {
+      summaryEl.innerHTML = [
+        { label: "누적 피드백", value: formatNumber(meta.total_feedback_rows || 0), note: "전체 저장 건수" },
+        { label: "평가 학습셋", value: formatNumber(meta.inspected_learning_dataset_rows || 0), note: `최근 ${formatNumber(limitPerTenant)}건 기준` },
+        { label: "피드백 보유 단지", value: formatNumber(meta.tenants_with_feedback || 0), note: `전체 ${formatNumber(tenantCount)}개 단지` },
+        { label: "배포 가능 단지", value: formatNumber(meta.deploy_ready_tenants || 0), note: "평가 기준 통과" },
+      ].map((card) => (
+        `<article class="metric-card"><span>${escapeHtml(card.label)}</span><strong>${escapeHtml(card.value)}</strong><span>${escapeHtml(card.note)}</span></article>`
+      )).join("");
+    }
+
+    if (!tableBody) return;
+    if (!items.length) {
+      tableBody.innerHTML = '<tr><td colspan="7">업무보고 학습 데이터가 아직 없습니다.</td></tr>';
+      return;
+    }
+    tableBody.innerHTML = items.map((item) => {
+      const summary = item?.summary && typeof item.summary === "object" ? item.summary : {};
+      const readiness = item?.readiness && typeof item.readiness === "object" ? item.readiness : {};
+      const failedChecks = Array.isArray(readiness.checks)
+        ? readiness.checks.filter((check) => !check?.ok).map((check) => WORK_REPORT_LEARNING_CHECK_LABELS[String(check?.name || "")] || String(check?.name || ""))
+        : [];
+      const ready = !!readiness.ready;
+      return `
+        <tr>
+          <td class="mono">
+            ${escapeHtml(item.tenant_id || "-")}
+            <span class="learning-table-note">${escapeHtml(item.tenant_name || "-")}${item.site_code ? ` / ${escapeHtml(item.site_code)}` : ""}</span>
+          </td>
+          <td>
+            전체 ${escapeHtml(formatNumber(item.total_feedback_rows || 0))}건
+            <span class="learning-table-note">최근 평가 ${escapeHtml(formatNumber(item.inspected_feedback_rows || 0))}건</span>
+          </td>
+          <td>
+            ${escapeHtml(formatNumber(item.inspected_learning_dataset_rows || 0))}행 / few-shot ${escapeHtml(formatNumber(item.few_shot_example_count || 0))}개
+          </td>
+          <td>
+            <span class="learning-status-pill ${ready ? "ready" : "pending"}">${escapeHtml(ready ? "READY" : "대기")}</span>
+            <span class="learning-table-note">${escapeHtml(failedChecks.length ? `미달: ${failedChecks.join(", ")}` : "기준 충족")}</span>
+          </td>
+          <td>
+            ${escapeHtml(formatPercent(summary.top1_accuracy || 0))}
+            <span class="learning-table-note">top-3 ${escapeHtml(formatPercent(summary.top3_hit_rate || 0))}</span>
+          </td>
+          <td>
+            ${escapeHtml(formatPercent(summary.human_intervention_rate || 0))}
+            <span class="learning-table-note">미매칭 오판 ${escapeHtml(formatPercent(summary.unmatched_false_positive_rate || 0))}</span>
+          </td>
+          <td>${escapeHtml(formatDateTime(item.latest_feedback_at || ""))}</td>
+        </tr>
+      `;
+    }).join("");
   }
 
   function syncOpsWriteState() {

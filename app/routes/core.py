@@ -25,6 +25,8 @@ from ..db import (
     list_staff_users,
     list_tenants,
     list_usage_logs,
+    list_work_report_image_feedback,
+    list_work_report_image_feedback_stats,
     mark_staff_user_login,
     revoke_all_user_sessions,
     revoke_auth_session,
@@ -35,6 +37,8 @@ from ..db import (
     verify_password,
 )
 from ..legacy_import import import_legacy_source
+from ..work_report_evaluation import evaluate_deploy_readiness, summarize_feedback_rows
+from ..work_report_learning import build_feedback_few_shot_examples, build_feedback_learning_dataset
 
 router = APIRouter()
 
@@ -213,6 +217,82 @@ def _assert_admin_guard(target: Dict[str, Any], *, deactivating: bool = False, d
         return
     if count_staff_admins(active_only=True) <= 1:
         raise HTTPException(status_code=400, detail="마지막 활성 최고관리자는 비활성화하거나 삭제할 수 없습니다.")
+
+
+def _admin_work_report_learning_snapshot(*, tenant_id: str = "", limit: int = 300, active_only: bool = False) -> Dict[str, Any]:
+    clean_tenant_id = str(tenant_id or "").strip().lower()
+    tenants = list_tenants(active_only=active_only)
+    if clean_tenant_id:
+        tenants = [item for item in tenants if str(item.get("id") or "").strip().lower() == clean_tenant_id]
+        if not tenants:
+            raise HTTPException(status_code=404, detail="tenant not found")
+
+    stats_by_tenant = {
+        str(row.get("tenant_id") or "").strip().lower(): dict(row)
+        for row in list_work_report_image_feedback_stats(tenant_id=clean_tenant_id)
+        if isinstance(row, dict)
+    }
+    inspected_limit = max(20, min(1000, int(limit)))
+    items = []
+    total_feedback_rows = 0
+    inspected_learning_dataset_rows = 0
+    deploy_ready_tenants = 0
+    tenants_with_feedback = 0
+    latest_feedback_at = ""
+
+    for tenant in tenants:
+        current_tenant_id = str(tenant.get("id") or "").strip().lower()
+        rows = list_work_report_image_feedback(tenant_id=current_tenant_id, limit=inspected_limit)
+        summary = summarize_feedback_rows(rows)
+        readiness = evaluate_deploy_readiness(summary)
+        few_shot_examples = build_feedback_few_shot_examples(rows, limit=6)
+        learning_dataset_rows = len(build_feedback_learning_dataset(rows))
+        stats = stats_by_tenant.get(current_tenant_id, {})
+        total_rows = int(stats.get("total_feedback_rows") or 0)
+        latest_row_feedback_at = str(stats.get("latest_feedback_at") or "").strip()
+        total_feedback_rows += total_rows
+        inspected_learning_dataset_rows += learning_dataset_rows
+        if total_rows > 0:
+            tenants_with_feedback += 1
+        if readiness.get("ready"):
+            deploy_ready_tenants += 1
+        if latest_row_feedback_at and latest_row_feedback_at > latest_feedback_at:
+            latest_feedback_at = latest_row_feedback_at
+        items.append(
+            {
+                "tenant_id": current_tenant_id,
+                "tenant_name": str(tenant.get("name") or "").strip(),
+                "site_code": str(tenant.get("site_code") or "").strip(),
+                "status": str(tenant.get("status") or "").strip(),
+                "total_feedback_rows": total_rows,
+                "inspected_feedback_rows": len(rows),
+                "inspected_learning_dataset_rows": learning_dataset_rows,
+                "few_shot_example_count": len(few_shot_examples),
+                "latest_feedback_at": latest_row_feedback_at,
+                "summary": summary,
+                "readiness": readiness,
+            }
+        )
+    items.sort(
+        key=lambda item: (
+            -int(item.get("total_feedback_rows") or 0),
+            -int(item.get("inspected_feedback_rows") or 0),
+            str(item.get("tenant_name") or ""),
+            str(item.get("tenant_id") or ""),
+        )
+    )
+    return {
+        "items": items,
+        "meta": {
+            "limit_per_tenant": inspected_limit,
+            "tenant_count": len(items),
+            "tenants_with_feedback": tenants_with_feedback,
+            "deploy_ready_tenants": deploy_ready_tenants,
+            "total_feedback_rows": total_feedback_rows,
+            "inspected_learning_dataset_rows": inspected_learning_dataset_rows,
+            "latest_feedback_at": latest_feedback_at,
+        },
+    }
 
 
 @router.api_route("/health", methods=["GET", "HEAD"])
@@ -683,6 +763,18 @@ def admin_usage(request: Request, tenant_id: str = Query(default=""), limit: int
 def admin_audit(request: Request, tenant_id: str = Query(default=""), limit: int = Query(default=100, ge=1, le=500)) -> Dict[str, Any]:
     _user, _token = _require_admin(request)
     return {"ok": True, "items": list_audit_logs(tenant_id=tenant_id, limit=limit)}
+
+
+@router.get("/admin/work_report_learning")
+def admin_work_report_learning(
+    request: Request,
+    tenant_id: str = Query(default=""),
+    limit: int = Query(default=300, ge=20, le=1000),
+    active_only: bool = Query(default=False),
+) -> Dict[str, Any]:
+    _user, _token = _require_admin(request)
+    snapshot = _admin_work_report_learning_snapshot(tenant_id=tenant_id, limit=limit, active_only=active_only)
+    return {"ok": True, "items": snapshot.get("items") or [], "meta": snapshot.get("meta") or {}}
 
 
 @router.post("/admin/legacy/import")
