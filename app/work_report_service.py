@@ -1296,21 +1296,57 @@ def _feedback_title_tokens(value: Any) -> set[str]:
     return tokens
 
 
+def _feedback_few_shot_lines(feedback_profile: Optional[Dict[str, Any]], *, limit: int = 4) -> List[str]:
+    profile = dict(feedback_profile or {})
+    examples = [dict(row) for row in list(profile.get("few_shot_examples") or []) if isinstance(row, dict)]
+    if not examples:
+        return []
+    lines: List[str] = []
+    for index, example in enumerate(examples[: max(1, int(limit or 1))], start=1):
+        label = _collapse(example.get("decision_label") or example.get("feedback_type") or f"예시 {index}")
+        filename = _collapse(example.get("filename") or "")
+        from_title = _collapse(example.get("from_item_title") or "")
+        to_title = _collapse(example.get("to_item_title") or "")
+        candidate_titles = [
+            _collapse(candidate.get("title") or "")
+            for candidate in list(example.get("candidate_items") or [])[:3]
+            if isinstance(candidate, dict) and _collapse(candidate.get("title") or "")
+        ]
+        parts = [f"[E{index}] {label}"]
+        if filename:
+            parts.append(f"파일 {filename}")
+        if candidate_titles:
+            parts.append("후보 " + " | ".join(candidate_titles))
+        if from_title and from_title != to_title:
+            parts.append(f"기존선택 {from_title}")
+        if _collapse(example.get("feedback_type") or "") == "mark_unmatched":
+            parts.append("사람선택 unmatched")
+        elif to_title:
+            parts.append(f"사람선택 {to_title}")
+        review_reason = _collapse(example.get("review_reason") or "")
+        if review_reason:
+            parts.append(f"사유 {review_reason}")
+        lines.append(" / ".join(parts))
+    return lines
+
+
 def _load_work_report_feedback_profile(tenant_id: str) -> Dict[str, Any]:
     clean_tenant_id = _collapse(tenant_id).lower()
     if not clean_tenant_id:
-        return {"tenant_id": "", "rows_used": 0, "positive_tokens": {}, "negative_tokens": {}}
+        return {"tenant_id": "", "rows_used": 0, "positive_tokens": {}, "negative_tokens": {}, "few_shot_examples": []}
     try:
         from .db import list_work_report_image_feedback
+        from .work_report_learning import build_feedback_few_shot_examples
 
         rows = list_work_report_image_feedback(tenant_id=clean_tenant_id, limit=300)
     except Exception:
         logger.exception("failed to load work report feedback profile: tenant_id=%s", clean_tenant_id)
-        return {"tenant_id": clean_tenant_id, "rows_used": 0, "positive_tokens": {}, "negative_tokens": {}}
+        return {"tenant_id": clean_tenant_id, "rows_used": 0, "positive_tokens": {}, "negative_tokens": {}, "few_shot_examples": []}
 
     positive_tokens: Dict[str, float] = {}
     negative_tokens: Dict[str, float] = {}
     rows_used = 0
+    few_shot_examples = build_feedback_few_shot_examples(rows, limit=8)
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -1375,6 +1411,7 @@ def _load_work_report_feedback_profile(tenant_id: str) -> Dict[str, Any]:
         "rows_used": rows_used,
         "positive_tokens": positive_tokens,
         "negative_tokens": negative_tokens,
+        "few_shot_examples": few_shot_examples,
     }
 
 
@@ -2167,6 +2204,7 @@ def _openai_work_report(
     attachment_inputs: List[Dict[str, Any]],
     sample_title: str,
     sample_lines: Sequence[str],
+    feedback_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any] | None:
     client, model = _openai_client(default_model="gpt-5.4", env_name="WORK_REPORT_OPENAI_MODEL")
     if not client:
@@ -2185,6 +2223,7 @@ def _openai_work_report(
         if len(candidate_lines) >= 80:
             break
     text_excerpt = _openai_text_excerpt(text)
+    few_shot_lines = _feedback_few_shot_lines(feedback_profile, limit=4)
     prompt = """
 너는 아파트 관리사무소 시설팀의 주요업무보고서를 만드는 도우미다.
 입력으로 카카오톡 단체방 대화, 현장 사진, 첨부파일 목록, 샘플 보고서 개요가 들어온다.
@@ -2250,6 +2289,7 @@ def _openai_work_report(
 - 이미지가 많으면 대표 이미지만 직접 시각 검토하고, 나머지는 같은 촬영시각 군집과 파일명 정보를 근거로 조심스럽게 확장한다.
 - 첨부파일은 매칭 근거로만 사용하고, 제목을 새로 만들기 위한 과도한 추측 근거로 사용하지 않는다.
 - 잘못된 매칭보다 보수적인 매칭이 낫다. 확신이 낮으면 unmatched로 남기고 analysis_notice에 적는다.
+- 최근 사람 검토 예시가 주어지면 같은 단지에서 실제로 수정·확정된 사례로 보고 참고하되, 현재 입력 근거가 더 분명하면 현재 입력을 우선한다.
 """.strip()
     content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
     if sample_title or sample_lines:
@@ -2260,6 +2300,8 @@ def _openai_work_report(
         content.append({"type": "input_text", "text": f"{text_heading}:\n{text_excerpt.get('text') or ''}"})
     if candidate_lines:
         content.append({"type": "input_text", "text": "대화에서 보이는 작업 후보:\n" + "\n".join(candidate_lines)})
+    if few_shot_lines:
+        content.append({"type": "input_text", "text": "최근 사람 검토 예시:\n" + "\n".join(few_shot_lines)})
     reference_images = list(reference_image_inputs or [])
     if reference_images:
         reference_meta = _select_openai_visual_meta(reference_images, limit=MAX_WORK_REPORT_OPENAI_REFERENCE_IMAGES)
@@ -2442,6 +2484,7 @@ def _openai_work_report(
             "text_excerpt_event_count": int(text_excerpt.get("event_count") or 0),
             "representative_image_count": len(visual_meta),
             "reference_image_count": len(reference_images),
+            "few_shot_example_count": len(few_shot_lines),
         },
     }
 
@@ -2482,6 +2525,7 @@ def _openai_match_image_chunks(
     unmatched_image_indexes: set[int] = set()
     analysis_notes: List[str] = []
     openai_failures: List[Dict[str, str]] = []
+    few_shot_lines = _feedback_few_shot_lines(feedback_profile, limit=4)
 
     prompt = """
 너는 이미 추출된 시설팀 작업 항목에 현장 사진 군집을 매칭하는 도우미다.
@@ -2507,6 +2551,7 @@ def _openai_match_image_chunks(
 - title이 비슷해도 배경, 창호, 조명 종류, 자전거/습득물/키패드처럼 보이는 핵심 물체가 다르면 다른 작업으로 본다.
 - 군집 안 여러 장이 같은 장소의 연속 상태를 보여주면 한 항목 안에서 before/during/after 흐름으로 이어질 수 있는 작업을 우선한다.
 - 매칭이 약한데 억지로 붙이지 말고 unmatched로 둔다.
+- 최근 사람 검토 예시가 주어지면 같은 단지에서 실제로 수정·확정된 사례로 보고 참고하되, 현재 군집 근거가 더 분명하면 현재 근거를 우선한다.
 """.strip()
 
     cluster_batches = _chunk_rows(clusters, max_clusters)
@@ -2521,6 +2566,8 @@ def _openai_match_image_chunks(
         )
         content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
         content.append({"type": "input_text", "text": "작업 항목 목록:\n" + "\n".join(item_lines)})
+        if few_shot_lines:
+            content.append({"type": "input_text", "text": "최근 사람 검토 예시:\n" + "\n".join(few_shot_lines)})
 
         cluster_lines: List[str] = []
         for local_index, cluster in enumerate(batch_clusters, start=1):
@@ -2651,6 +2698,7 @@ def _openai_match_image_chunks(
             "cluster_batch_count": total_batches,
             "max_clusters_per_batch": max_clusters,
             "sample_per_cluster": sample_per_cluster,
+            "few_shot_example_count": len(few_shot_lines),
             "openai_failures": openai_failures,
         },
     }
@@ -2703,6 +2751,7 @@ def analyze_work_report(
     tenant_feedback_profile = _load_work_report_feedback_profile(tenant_id)
     analysis_diagnostics["tenant_feedback_rows_used"] = int(tenant_feedback_profile.get("rows_used") or 0)
     analysis_diagnostics["tenant_feedback_enabled"] = bool(_collapse(tenant_feedback_profile.get("tenant_id") or ""))
+    analysis_diagnostics["tenant_few_shot_example_count"] = len(list(tenant_feedback_profile.get("few_shot_examples") or []))
 
     def remember_openai_error(stage: str) -> None:
         snapshot = _consume_openai_error_snapshot()
@@ -2734,6 +2783,7 @@ def analyze_work_report(
             attachment_inputs=attachments,
             sample_title=sample_title,
             sample_lines=sample_lines,
+            feedback_profile=tenant_feedback_profile,
         )
         if not base_ai_result:
             remember_openai_error("chunk_seed_extract")
@@ -2790,6 +2840,7 @@ def analyze_work_report(
             attachment_inputs=attachments,
             sample_title=sample_title,
             sample_lines=sample_lines,
+            feedback_profile=tenant_feedback_profile,
         )
         if not ai_result:
             remember_openai_error("direct_extract")
@@ -2809,6 +2860,7 @@ def analyze_work_report(
             attachment_inputs=attachments,
             sample_title=sample_title,
             sample_lines=sample_lines,
+            feedback_profile=tenant_feedback_profile,
         )
         if not base_ai_result:
             remember_openai_error("fallback_seed_extract")

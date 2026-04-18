@@ -38,6 +38,7 @@ bash ./scripts/dev-test.sh
 - `dev-run`에 `-SeedDemo`를 주면 로컬 테스트용 관리자/테넌트가 자동 생성됩니다.
 - 업무보고 이미지 매칭 개선 순서는 [docs/work-report-learning-roadmap.md](C:/ka-part/render-sync/docs/work-report-learning-roadmap.md)에 기록합니다.
 - 업무보고 이미지 매칭 평가는 `python scripts/evaluate_work_report_feedback.py --tenant-id <tenant_id>`로 확인합니다. 기준은 [docs/work-report-evaluation.md](C:/ka-part/render-sync/docs/work-report-evaluation.md)에 정리합니다.
+- 업무보고 학습 데이터셋 export는 `python scripts/export_work_report_learning_dataset.py --tenant-id <tenant_id> --output <path>`로 수행합니다. 형식은 [docs/work-report-learning-dataset.md](C:/ka-part/render-sync/docs/work-report-learning-dataset.md)에 정리합니다.
 
 기본 로컬 시드값:
 
