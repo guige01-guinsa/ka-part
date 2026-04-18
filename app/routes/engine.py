@@ -908,6 +908,7 @@ def ai_work_report_feedback(request: Request, payload: Dict[str, Any] = Body(...
             continue
         corrections.append(
             {
+                "feedback_type": str(row.get("feedback_type") or "").strip()[:40],
                 "image_index": int(row.get("image_index") or 0),
                 "filename": str(row.get("filename") or "").strip()[:240],
                 "from_item_index": int(row.get("from_item_index") or 0),
@@ -918,6 +919,17 @@ def ai_work_report_feedback(request: Request, payload: Dict[str, Any] = Body(...
                 "from_stage_label": str(row.get("from_stage_label") or "").strip()[:80],
                 "to_stage": str(row.get("to_stage") or "").strip()[:40],
                 "to_stage_label": str(row.get("to_stage_label") or "").strip()[:80],
+                "review_reason": str(row.get("review_reason") or "").strip()[:240],
+                "review_confidence": str(row.get("review_confidence") or "").strip()[:40],
+                "candidate_items": [
+                    {
+                        "item_index": int(candidate.get("item_index") or 0),
+                        "title": str(candidate.get("title") or "").strip()[:240],
+                        "score": int(candidate.get("score") or 0),
+                    }
+                    for candidate in list(row.get("candidate_items") or [])[:3]
+                    if isinstance(candidate, dict)
+                ],
             }
         )
 

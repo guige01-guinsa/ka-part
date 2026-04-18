@@ -862,6 +862,105 @@ def test_work_report_match_score_uses_nearby_time_for_generic_kakao_filename() -
     assert _match_score(item, entry) >= 8
 
 
+def test_work_report_image_candidate_matches_return_ranked_top_three_with_reasons() -> None:
+    from app.work_report_service import _image_candidate_matches
+
+    items = [
+        {
+            "index": 1,
+            "title": "101동 집하장 센서등 2개교체",
+            "summary": "101동 집하장 센서등 2개교체",
+            "location_name": "101동 집하장",
+            "vendor_name": "관리실",
+            "work_date": "2026-07-02",
+            "work_date_label": "7월 2일",
+            "_minute_of_day": (9 * 60) + 10,
+        },
+        {
+            "index": 2,
+            "title": "104동 음식물처리기 키패드 교체",
+            "summary": "104동 음식물처리기 키패드 교체",
+            "location_name": "104동 음식물처리기",
+            "vendor_name": "관리실",
+            "work_date": "2026-07-02",
+            "work_date_label": "7월 2일",
+            "_minute_of_day": (9 * 60) + 18,
+        },
+        {
+            "index": 3,
+            "title": "지하주차장 출입문 보수",
+            "summary": "지하주차장 출입문 보수",
+            "location_name": "지하주차장",
+            "vendor_name": "관리실",
+            "work_date": "2026-07-02",
+            "work_date_label": "7월 2일",
+            "_minute_of_day": (9 * 60) + 24,
+        },
+    ]
+    entry = {
+        "index": 1,
+        "filename": "KakaoTalk_20260702_091200.jpg",
+        "date": "2026-07-02",
+        "minute_of_day": (9 * 60) + 12,
+        "second_of_day": (9 * 3600) + (12 * 60),
+    }
+
+    candidates = _image_candidate_matches(items, entry, limit=3)
+
+    assert [int(row["item_index"]) for row in candidates] == [1, 2, 3]
+    assert candidates[0]["rank"] == 1
+    assert candidates[0]["score"] >= candidates[1]["score"] >= candidates[2]["score"]
+    assert "촬영 시각" in str(candidates[0]["reason_text"])
+
+
+def test_work_report_image_review_decision_flags_low_gap_candidates() -> None:
+    from app.work_report_service import _image_review_decision
+
+    decision = _image_review_decision(
+        1,
+        [
+            {"item_index": 1, "score": 7},
+            {"item_index": 2, "score": 6},
+            {"item_index": 3, "score": 1},
+        ],
+    )
+
+    assert decision["needed"] is True
+    assert decision["confidence"] == "low"
+    assert "점수 차가 작습니다" in str(decision["reason"])
+
+
+def test_work_report_analysis_exposes_review_queue_for_ambiguous_generic_image(monkeypatch) -> None:
+    import app.work_report_service as service
+
+    monkeypatch.setattr(service, "_openai_work_report", lambda **kwargs: None)
+
+    result = service.analyze_work_report(
+        "\n".join(
+            [
+                "2026년 7월 2일 수요일",
+                "[관리실] [오전 9:10] 101동 집하장 센서등 2개교체",
+                "[관리실] [오전 9:12] 104동 집하장 센서등 1개교체",
+            ]
+        ),
+        image_inputs=[
+            {
+                "filename": "KakaoTalk_20260702_091100.jpg",
+                "bytes": b"fake-image",
+                "content_type": "image/jpeg",
+            }
+        ],
+    )
+
+    assert result["review_queue_count"] == 1
+    review = result["review_queue"][0]
+    assert review["filename"] == "KakaoTalk_20260702_091100.jpg"
+    assert len(review["candidate_items"]) >= 2
+    assert "점수 차가 작습니다" in str(review["review_reason"])
+    first_item = result["items"][0]
+    assert first_item["images"][0]["review_needed"] is True
+
+
 def test_work_report_finalize_image_stages_keeps_all_matched_images() -> None:
     from app.work_report_service import _finalize_image_stages
 
@@ -928,6 +1027,7 @@ def test_work_report_feedback_records_manual_image_corrections(app_client) -> No
             "job_id": "job-manual-match-1",
             "corrections": [
                 {
+                    "feedback_type": "reassign_item",
                     "image_index": 3,
                     "filename": "KakaoTalk_20260702_094630.jpg",
                     "from_item_index": 0,
@@ -974,6 +1074,7 @@ def test_work_report_feedback_records_manual_image_corrections(app_client) -> No
     payload = json.loads(str(logs[0]["data_json"] or "{}"))
     assert payload["job_id"] == "job-manual-match-1"
     assert payload["correction_count"] == 1
+    assert payload["corrections"][0]["feedback_type"] == "reassign_item"
     assert payload["corrections"][0]["to_item_title"] == "104동 음식물처리기 키패드 교체"
     assert payload["report"]["item_count"] == 1
     assert payload["report"]["unmatched_image_count"] == 0

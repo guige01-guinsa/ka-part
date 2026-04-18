@@ -917,6 +917,17 @@ def _entry_stage(filename: str) -> str:
     return ""
 
 
+def _stage_label(stage: str) -> str:
+    normalized = _collapse(stage).lower() or "general"
+    label_map = {
+        "before": "작업 전",
+        "during": "작업 중",
+        "after": "작업 후",
+        "general": "현장 이미지",
+    }
+    return label_map.get(normalized, "현장 이미지")
+
+
 def _entry_time_fields(filename: str) -> Dict[str, int | str]:
     stem = _collapse(Path(str(filename or "")).stem)
     match = re.search(r"(?P<date>\d{8})_(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})", stem)
@@ -945,6 +956,10 @@ def _openai_image_meta(index: int, entry: Dict[str, Any]) -> Dict[str, Any]:
         "second_of_day": int(time_fields.get("second_of_day") or -1),
         "stage_hint": _entry_stage(filename),
     }
+
+
+def _work_report_image_entries(image_inputs: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [_openai_image_meta(index, row) for index, row in enumerate(list(image_inputs or []), start=1)]
 
 
 def _cluster_openai_image_meta(entries: Sequence[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
@@ -1302,46 +1317,160 @@ def _item_reference_minutes(item: Dict[str, Any]) -> List[int]:
     return ordered
 
 
-def _temporal_match_score(item: Dict[str, Any], entry: Dict[str, Any]) -> int:
+def _temporal_match_details(item: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]:
     item_date = _collapse(item.get("work_date") or "")
     entry_date = _collapse(entry.get("date") or "")
     if item_date and entry_date and item_date != entry_date:
-        return 0
+        return {"score": 0, "gap_minutes": -1, "matched_date": False}
     entry_minute = int(entry.get("minute_of_day") or -1)
     if entry_minute < 0:
-        return 0
+        return {"score": 0, "gap_minutes": -1, "matched_date": True}
     reference_minutes = _item_reference_minutes(item)
     if not reference_minutes:
-        return 0
+        return {"score": 0, "gap_minutes": -1, "matched_date": True}
     gap = min(abs(entry_minute - minute) for minute in reference_minutes)
     if gap <= 3:
-        return 8
-    if gap <= 8:
-        return 5
-    if gap <= 15:
-        return 2
-    return 0
+        score = 8
+    elif gap <= 8:
+        score = 5
+    elif gap <= 15:
+        score = 2
+    else:
+        score = 0
+    return {
+        "score": score,
+        "gap_minutes": gap,
+        "matched_date": True,
+    }
+
+
+def _temporal_match_score(item: Dict[str, Any], entry: Dict[str, Any]) -> int:
+    return int(_temporal_match_details(item, entry).get("score") or 0)
+
+
+def _match_score_breakdown(item: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str, Any]:
+    item_token_set = _item_tokens(item)
+    entry_token_set = _entry_tokens(entry)
+    token_overlap = len(item_token_set & entry_token_set)
+    temporal = _temporal_match_details(item, entry)
+    base_score = token_overlap + int(temporal.get("score") or 0)
+    result: Dict[str, Any] = {
+        "token_overlap": token_overlap,
+        "temporal_score": int(temporal.get("score") or 0),
+        "gap_minutes": int(temporal.get("gap_minutes") or -1),
+        "date_bonus": 0,
+        "month_day_bonus": 0,
+        "vendor_bonus": 0,
+        "score": 0,
+    }
+    if base_score <= 0:
+        return result
+    score = base_score
+    item_date = str(item.get("work_date") or "")
+    filename = str(entry.get("filename") or "")
+    if item_date:
+        compact = item_date.replace("-", "")
+        if compact in filename:
+            score += 3
+            result["date_bonus"] = 3
+        month_day = item_date[5:]
+        if month_day and month_day.replace("-", "") in filename:
+            score += 2
+            result["month_day_bonus"] = 2
+    vendor = _collapse(item.get("vendor_name") or "")
+    if vendor and vendor in _collapse(filename):
+        score += 2
+        result["vendor_bonus"] = 2
+    result["score"] = score
+    return result
 
 
 def _match_score(item: Dict[str, Any], entry: Dict[str, Any]) -> int:
-    item_token_set = _item_tokens(item)
-    entry_token_set = _entry_tokens(entry)
-    score = len(item_token_set & entry_token_set)
-    score += _temporal_match_score(item, entry)
-    if score <= 0:
-        return 0
-    item_date = str(item.get("work_date") or "")
-    if item_date:
-        compact = item_date.replace("-", "")
-        if compact in str(entry.get("filename") or ""):
-            score += 3
-        month_day = item_date[5:]
-        if month_day and month_day.replace("-", "") in str(entry.get("filename") or ""):
-            score += 2
-    vendor = _collapse(item.get("vendor_name") or "")
-    if vendor and vendor in _collapse(entry.get("filename") or ""):
-        score += 2
-    return score
+    return int(_match_score_breakdown(item, entry).get("score") or 0)
+
+
+def _image_candidate_reason_parts(breakdown: Dict[str, Any]) -> List[str]:
+    parts: List[str] = []
+    token_overlap = int(breakdown.get("token_overlap") or 0)
+    if token_overlap > 0:
+        parts.append(f"키워드 {token_overlap}개 일치")
+    temporal_score = int(breakdown.get("temporal_score") or 0)
+    gap_minutes = int(breakdown.get("gap_minutes") or -1)
+    if temporal_score > 0 and gap_minutes >= 0:
+        parts.append(f"촬영 시각 {gap_minutes}분 차이")
+    if int(breakdown.get("date_bonus") or 0) > 0:
+        parts.append("파일명 날짜 일치")
+    elif int(breakdown.get("month_day_bonus") or 0) > 0:
+        parts.append("파일명 월/일 단서 일치")
+    if int(breakdown.get("vendor_bonus") or 0) > 0:
+        parts.append("업체명 단서 일치")
+    if not parts:
+        parts.append("명확한 단서는 약함")
+    return parts
+
+
+def _image_match_confidence(top_score: int, second_score: int) -> str:
+    gap = max(0, int(top_score) - int(second_score))
+    if top_score >= 10 and gap >= 4:
+        return "high"
+    if top_score >= 6 and gap >= 3:
+        return "medium"
+    return "low"
+
+
+def _image_candidate_matches(
+    items: Sequence[Dict[str, Any]],
+    entry: Dict[str, Any],
+    *,
+    limit: int = 3,
+) -> List[Dict[str, Any]]:
+    ranked: List[Dict[str, Any]] = []
+    for item in list(items or []):
+        item_index = int(item.get("index") or 0)
+        if item_index <= 0:
+            continue
+        breakdown = _match_score_breakdown(item, entry)
+        score = int(breakdown.get("score") or 0)
+        if score <= 0:
+            continue
+        ranked.append(
+            {
+                "item_index": item_index,
+                "title": _collapse(item.get("title") or ""),
+                "location_name": _collapse(item.get("location_name") or ""),
+                "work_date_label": _collapse(item.get("work_date_label") or item.get("work_date") or ""),
+                "score": score,
+                "reason_parts": _image_candidate_reason_parts(breakdown),
+                "reason_text": " / ".join(_image_candidate_reason_parts(breakdown)),
+            }
+        )
+    ranked.sort(key=lambda row: (-int(row.get("score") or 0), int(row.get("item_index") or 0)))
+    top_rows = ranked[: max(1, int(limit or 1))]
+    for position, row in enumerate(top_rows):
+        row["rank"] = position + 1
+        next_score = int(top_rows[position + 1].get("score") or 0) if position + 1 < len(top_rows) else 0
+        row["confidence"] = _image_match_confidence(int(row.get("score") or 0), next_score)
+    return top_rows
+
+
+def _image_review_decision(current_item_index: int, candidates: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    if not candidates:
+        return {"needed": False, "reason": "", "confidence": ""}
+    top = dict(candidates[0])
+    top_score = int(top.get("score") or 0)
+    second_score = int(candidates[1].get("score") or 0) if len(candidates) > 1 else 0
+    top_item_index = int(top.get("item_index") or 0)
+    gap = top_score - second_score
+    confidence = _image_match_confidence(top_score, second_score)
+    if current_item_index <= 0 and top_score >= 3:
+        return {"needed": True, "reason": "미매칭으로 남았지만 추천 후보가 있습니다.", "confidence": confidence}
+    if current_item_index > 0 and top_item_index > 0 and top_item_index != current_item_index and top_score >= max(3, second_score):
+        return {"needed": True, "reason": "현재 매칭과 추천 1순위가 다릅니다.", "confidence": confidence}
+    if second_score > 0 and gap <= 2:
+        return {"needed": True, "reason": "후보 1순위와 2순위 점수 차가 작습니다.", "confidence": "low"}
+    if top_score <= 4:
+        return {"needed": True, "reason": "매칭 점수가 낮아 확신이 낮습니다.", "confidence": "low"}
+    return {"needed": False, "reason": "", "confidence": confidence}
 
 
 def _best_item_index_for_cluster(items: Sequence[Dict[str, Any]], cluster: Sequence[Dict[str, Any]]) -> int:
@@ -1662,14 +1791,8 @@ def _finalize_image_stages(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]
             row["stage"] = "during"
     for row in ordered:
         stage = str(row.get("stage") or "general")
-        label_map = {
-            "before": "작업 전",
-            "during": "작업 중",
-            "after": "작업 후",
-            "general": "현장 이미지",
-        }
         row["stage"] = stage
-        row["stage_label"] = label_map.get(stage, "현장 이미지")
+        row["stage_label"] = _stage_label(stage)
     return ordered
 
 
@@ -1713,6 +1836,60 @@ def _apply_image_matches_to_items(
         clone["images"] = _finalize_image_stages(image_rows)
         normalized_items.append(clone)
     return normalized_items
+
+
+def _attach_image_review_metadata(
+    items: Sequence[Dict[str, Any]],
+    unmatched_images: Sequence[Dict[str, Any]],
+    image_entries: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    entry_lookup = {int(row.get("index") or 0): dict(row) for row in list(image_entries or []) if int(row.get("index") or 0) > 0}
+    image_row_lookup: Dict[int, Tuple[Dict[str, Any], int, str]] = {}
+    for item in list(items or []):
+        item_index = int(item.get("index") or 0)
+        item_title = _collapse(item.get("title") or "")
+        for image in list(item.get("images") or []):
+            image_index = int(image.get("index") or 0)
+            if image_index > 0:
+                image_row_lookup[image_index] = (image, item_index, item_title)
+    for image in list(unmatched_images or []):
+        image_index = int(image.get("index") or 0)
+        if image_index > 0:
+            image_row_lookup[image_index] = (image, 0, "미매칭")
+
+    review_queue: List[Dict[str, Any]] = []
+    for image_index, (row, current_item_index, current_item_title) in image_row_lookup.items():
+        entry = entry_lookup.get(int(image_index))
+        if not entry:
+            continue
+        candidates = _image_candidate_matches(items, entry, limit=3)
+        decision = _image_review_decision(current_item_index, candidates)
+        row["review_candidates"] = candidates
+        row["review_needed"] = bool(decision.get("needed"))
+        row["review_reason"] = _collapse(decision.get("reason") or "")
+        row["review_confidence"] = _collapse(decision.get("confidence") or "")
+        row["review_current_item_index"] = current_item_index
+        row["review_current_item_title"] = current_item_title or "미매칭"
+        if candidates:
+            row["review_recommended_item_index"] = int(candidates[0].get("item_index") or 0)
+            row["review_recommended_item_title"] = _collapse(candidates[0].get("title") or "")
+        else:
+            row["review_recommended_item_index"] = 0
+            row["review_recommended_item_title"] = ""
+        if row["review_needed"]:
+            review_queue.append(
+                {
+                    "image_index": image_index,
+                    "filename": _collapse(row.get("filename") or entry.get("filename") or ""),
+                    "current_item_index": current_item_index,
+                    "current_item_title": current_item_title or "미매칭",
+                    "review_reason": _collapse(row.get("review_reason") or ""),
+                    "review_confidence": _collapse(row.get("review_confidence") or ""),
+                    "candidate_items": candidates,
+                }
+            )
+    review_queue.sort(key=lambda row: (0 if _collapse(row.get("review_confidence") or "") == "low" else 1, int(row.get("image_index") or 0)))
+    return review_queue
 
 
 def _build_text_summary(report_title: str, period_label: str, items: List[Dict[str, Any]], unmatched_images: List[Dict[str, Any]], unmatched_attachments: List[Dict[str, Any]], analysis_notice: str) -> str:
@@ -2359,6 +2536,7 @@ def analyze_work_report(
         "image_heavy": image_heavy,
         "used_chunked_image_matching": use_chunked_image_matching,
     }
+    image_entries = _work_report_image_entries(images)
 
     def remember_openai_error(stage: str) -> None:
         snapshot = _consume_openai_error_snapshot()
@@ -2683,15 +2861,6 @@ def analyze_work_report(
             summary="원문에서 찾은 작업 후보와 사진/첨부를 보수적으로 매칭하고 있습니다.",
             hint="근거가 약한 사진은 억지로 붙이지 않고 미매칭으로 남깁니다.",
         )
-        image_entries = [
-            {
-                "index": index,
-                "filename": row.get("filename"),
-                "stage": _entry_stage(str(row.get("filename") or "")),
-                **_entry_time_fields(str(row.get("filename") or "")),
-            }
-            for index, row in enumerate(images, start=1)
-        ]
         explicit_image_matches, remaining_images = _assign_images_by_notices(explicit_items, image_entries)
         items = _merge_explicit_items(explicit_items, explicit_image_matches)
         if not items and attachments:
@@ -2791,7 +2960,6 @@ def analyze_work_report(
                 item.pop("_image_notices", None)
                 item.pop("_attachment_notice_texts", None)
                 item.pop("_attachment_notice_tokens", None)
-                item.pop("_minute_of_day", None)
 
     _report_progress(
         progress_callback,
@@ -2815,7 +2983,12 @@ def analyze_work_report(
             period_label = f"{start_month}월 {start_day}일 ~ {end_month}월 {end_day}일"
 
     unmatched_images = [
-        {"index": index, "filename": images[index - 1].get("filename")}
+        {
+            "index": index,
+            "filename": images[index - 1].get("filename"),
+            "stage": _collapse(image_entries[index - 1].get("stage_hint") or "") or "general",
+            "stage_label": _stage_label(_collapse(image_entries[index - 1].get("stage_hint") or "") or "general"),
+        }
         for index in unmatched_image_indexes
         if 0 < int(index) <= len(images)
     ]
@@ -2824,6 +2997,9 @@ def analyze_work_report(
         for index in unmatched_attachment_indexes
         if 0 < int(index) <= len(attachments)
     ]
+    review_queue = _attach_image_review_metadata(items, unmatched_images, image_entries)
+    for item in items:
+        item.pop("_minute_of_day", None)
     image_items = [item for item in items if item.get("images")]
     text_only_items = [item for item in items if not item.get("images")]
     report_text = _build_text_summary(report_title, period_label, items, unmatched_images, unmatched_attachments, analysis_notice)
@@ -2832,6 +3008,7 @@ def analyze_work_report(
     analysis_diagnostics["openai_failures"] = openai_failures
     analysis_diagnostics["final_model"] = analysis_model
     analysis_diagnostics["final_reason"] = analysis_reason
+    analysis_diagnostics["review_queue_count"] = len(review_queue)
     if analysis_reason or analysis_model == "heuristic":
         logger.warning(
             "work report analysis fallback: model=%s reason=%s items=%s images=%s ref_images=%s attachments=%s chunked=%s failures=%s",
@@ -2870,6 +3047,8 @@ def analyze_work_report(
         "items": items,
         "image_items": image_items,
         "text_only_items": text_only_items,
+        "review_queue_count": len(review_queue),
+        "review_queue": review_queue,
         "unmatched_images": unmatched_images,
         "unmatched_attachments": unmatched_attachments,
         "source_text_preview": [_collapse(line) for line in normalized_text.splitlines() if _collapse(line)][:16],

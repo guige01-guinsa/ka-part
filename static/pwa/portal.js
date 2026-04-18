@@ -4094,6 +4094,14 @@
           item_index: itemIndex,
           item_title: itemTitle,
           stage: normalizeWorkReportImageStage(image?.stage),
+          manual_override: !!image?.manual_override,
+          review_reason: String(image?.review_reason || "").trim(),
+          review_confidence: String(image?.review_confidence || "").trim(),
+          review_candidates: Array.isArray(image?.review_candidates) ? image.review_candidates.map((candidate) => ({
+            item_index: Number(candidate?.item_index || 0),
+            title: String(candidate?.title || "").trim(),
+            score: Number(candidate?.score || 0),
+          })) : [],
         });
       });
     });
@@ -4106,6 +4114,14 @@
         item_index: 0,
         item_title: "미매칭",
         stage: normalizeWorkReportImageStage(image?.stage),
+        manual_override: !!image?.manual_override,
+        review_reason: String(image?.review_reason || "").trim(),
+        review_confidence: String(image?.review_confidence || "").trim(),
+        review_candidates: Array.isArray(image?.review_candidates) ? image.review_candidates.map((candidate) => ({
+          item_index: Number(candidate?.item_index || 0),
+          title: String(candidate?.title || "").trim(),
+          score: Number(candidate?.score || 0),
+        })) : [],
       });
     });
     return snapshot;
@@ -4123,8 +4139,18 @@
       if (!before) return;
       const assignmentChanged = Number(before.item_index || 0) !== Number(row.item_index || 0);
       const stageChanged = String(before.stage || "general") !== String(row.stage || "general");
-      if (!assignmentChanged && !stageChanged) return;
+      const manualConfirmed = !!row.manual_override && !before.manual_override && !assignmentChanged && !stageChanged;
+      if (!assignmentChanged && !stageChanged && !manualConfirmed) return;
+      let feedbackType = "confirm_current";
+      if (assignmentChanged && Number(row.item_index || 0) <= 0) {
+        feedbackType = "mark_unmatched";
+      } else if (assignmentChanged) {
+        feedbackType = "reassign_item";
+      } else if (stageChanged) {
+        feedbackType = "change_stage";
+      }
       changes.push({
+        feedback_type: feedbackType,
         image_index: Number(row.image_index || 0),
         filename: String(row.filename || "").trim(),
         from_item_index: Number(before.item_index || 0),
@@ -4135,6 +4161,9 @@
         from_stage_label: workReportImageStageLabel(before.stage),
         to_stage: String(row.stage || "general"),
         to_stage_label: workReportImageStageLabel(row.stage),
+        review_reason: String(row.review_reason || "").trim(),
+        review_confidence: String(row.review_confidence || "").trim(),
+        candidate_items: Array.isArray(row.review_candidates) ? row.review_candidates.slice(0, 3) : [],
       });
     });
     changes.sort(
@@ -4165,6 +4194,9 @@
           filename: String(image?.filename || "").trim(),
           stage: String(image?.stage || "general"),
           stage_label: String(image?.stage_label || workReportImageStageLabel(image?.stage)),
+          manual_override: !!image?.manual_override,
+          review_reason: String(image?.review_reason || "").trim(),
+          review_confidence: String(image?.review_confidence || "").trim(),
         })),
       })),
       unmatched_images: syncWorkReportImageCollection(unmatchedImages.map((row) => ({ ...row }))).map((image) => ({
@@ -4172,6 +4204,9 @@
         filename: String(image?.filename || "").trim(),
         stage: String(image?.stage || "general"),
         stage_label: String(image?.stage_label || workReportImageStageLabel(image?.stage)),
+        manual_override: !!image?.manual_override,
+        review_reason: String(image?.review_reason || "").trim(),
+        review_confidence: String(image?.review_confidence || "").trim(),
       })),
     };
   }
@@ -4225,12 +4260,111 @@
     ].join("");
   }
 
+  function workReportReviewConfidenceLabel(value) {
+    const normalized = String(value || "").trim();
+    if (normalized === "high") return "확신 높음";
+    if (normalized === "medium") return "확신 보통";
+    if (normalized === "low") return "검토 필요";
+    return "";
+  }
+
+  function collectWorkReportReviewQueue(report) {
+    const queue = [];
+    (Array.isArray(report?.items) ? report.items : []).forEach((item) => {
+      const itemIndex = Number(item?.index || 0);
+      (Array.isArray(item?.images) ? item.images : []).forEach((image, imageIndex) => {
+        if (!image || image.manual_override || image.review_needed !== true) return;
+        queue.push({
+          sourceType: "item",
+          itemIndex,
+          imageIndex,
+          unmatchedIndex: -1,
+          currentItemIndex: itemIndex,
+          currentItemTitle: String(item?.title || "").trim() || "작업 항목",
+          image,
+        });
+      });
+    });
+    (Array.isArray(report?.unmatched_images) ? report.unmatched_images : []).forEach((image, unmatchedIndex) => {
+      if (!image || image.manual_override || image.review_needed !== true) return;
+      queue.push({
+        sourceType: "unmatched",
+        itemIndex: 0,
+        imageIndex: -1,
+        unmatchedIndex,
+        currentItemIndex: 0,
+        currentItemTitle: "미매칭",
+        image,
+      });
+    });
+    queue.sort((left, right) => {
+      const leftPriority = String(left?.image?.review_confidence || "") === "low" ? 0 : 1;
+      const rightPriority = String(right?.image?.review_confidence || "") === "low" ? 0 : 1;
+      return leftPriority - rightPriority || Number(left?.image?.index || 0) - Number(right?.image?.index || 0);
+    });
+    return queue;
+  }
+
+  function renderWorkReportReviewCandidate(review, candidate) {
+    const row = candidate && typeof candidate === "object" ? candidate : {};
+    const reasonText = Array.isArray(row.reason_parts) && row.reason_parts.length
+      ? row.reason_parts.join(" / ")
+      : String(row.reason_text || "").trim();
+    const commonAttrs = [
+      `data-source-type="${escapeHtml(String(review.sourceType || "item"))}"`,
+      `data-item-index="${Number(review.itemIndex || 0)}"`,
+      `data-image-index="${Number(review.imageIndex || 0)}"`,
+      `data-unmatched-index="${Number(review.unmatchedIndex || -1)}"`,
+    ].join(" ");
+    return [
+      `<button class="work-report-review-option" type="button" ${commonAttrs} data-destination-item-index="${Number(row.item_index || 0)}">`,
+      `<strong>${escapeHtml(`${Number(row.rank || 0)}순위 · ${String(row.title || "-")}`)}</strong>`,
+      `<span>${escapeHtml(`점수 ${Number(row.score || 0)}${row.location_name ? ` / 위치 ${String(row.location_name)}` : ""}`)}</span>`,
+      reasonText ? `<small>${escapeHtml(reasonText)}</small>` : "",
+      "</button>",
+    ].join("");
+  }
+
+  function renderWorkReportReviewCard(review) {
+    const image = review?.image && typeof review.image === "object" ? review.image : {};
+    const stageLabel = String(image.stage_label || workReportImageStageLabel(image.stage));
+    const confidenceLabel = workReportReviewConfidenceLabel(image.review_confidence);
+    const currentLabel = review?.currentItemIndex > 0
+      ? `${Number(review.currentItemIndex || 0)}. ${String(review.currentItemTitle || "작업 항목")}`
+      : "미매칭";
+    const attrs = [
+      `data-source-type="${escapeHtml(String(review?.sourceType || "item"))}"`,
+      `data-item-index="${Number(review?.itemIndex || 0)}"`,
+      `data-image-index="${Number(review?.imageIndex || 0)}"`,
+      `data-unmatched-index="${Number(review?.unmatchedIndex || -1)}"`,
+    ].join(" ");
+    const candidates = Array.isArray(image.review_candidates) ? image.review_candidates.slice(0, 3) : [];
+    return [
+      '<article class="work-report-review-card">',
+      '<div class="work-report-review-head">',
+      `<strong>${escapeHtml(`${stageLabel} · ${String(image.filename || "-")}`)}</strong>`,
+      confidenceLabel ? `<span class="work-report-review-chip">${escapeHtml(confidenceLabel)}</span>` : "",
+      "</div>",
+      `<p>${escapeHtml(`현재 연결: ${currentLabel}`)}</p>`,
+      image.review_reason ? `<p>${escapeHtml(`검토 사유: ${String(image.review_reason || "")}`)}</p>` : "",
+      candidates.length
+        ? `<div class="work-report-review-options">${candidates.map((candidate) => renderWorkReportReviewCandidate(review, candidate)).join("")}</div>`
+        : '<p>추천 후보를 만들지 못했습니다. 아래 편집기에서 직접 선택해 주세요.</p>',
+      '<div class="work-report-review-actions">',
+      `<button class="work-report-review-confirm" type="button" ${attrs}>현재 선택 확정</button>`,
+      `<button class="work-report-review-unmatched" type="button" ${attrs} data-destination-item-index="__unmatched__">미매칭으로 두기</button>`,
+      "</div>",
+      "</article>",
+    ].join("");
+  }
+
   function renderWorkReportResult(item) {
     const report = item || {};
     const items = Array.isArray(report.items) ? report.items : [];
     const imageItems = items.filter((row) => Array.isArray(row.images) && row.images.length);
     const textOnlyItems = items.filter((row) => !Array.isArray(row.images) || !row.images.length);
     const unmatchedImages = Array.isArray(report.unmatched_images) ? report.unmatched_images : [];
+    const reviewQueue = collectWorkReportReviewQueue(report);
     const modeLabel = workReportAnalysisModeLabel(report);
     const reasonLabel = workReportAnalysisReasonLabel(report);
     const feedback = buildWorkReportFeedbackSummary(report, lastWorkReportBaseline);
@@ -4270,6 +4404,11 @@
         + "</div>"
       );
       sections.push('<div class="detail-block">이미지 매칭이 애매하면 사진별로 연결 작업과 단계값을 직접 바꿀 수 있습니다. 저장한 수정 내역은 다음 매칭 개선용 피드백으로 누적됩니다.</div>');
+    }
+    if (reviewQueue.length) {
+      sections.push("<div class=\"subhead\">애매한 이미지 검토 큐</div>");
+      sections.push('<div class="detail-block">점수 차이가 작거나 단서가 약한 사진만 따로 모았습니다. 추천 후보를 누르거나 현재 선택을 확정하면 검토 큐에서 빠집니다.</div>');
+      sections.push(`<div class="work-report-review-list">${reviewQueue.map((review) => renderWorkReportReviewCard(review)).join("")}</div>`);
     }
     if (imageItems.length) {
       sections.push("<div class=\"subhead\">사진 포함 작업 항목</div>");
@@ -4370,6 +4509,17 @@
     }
   }
 
+  function workReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex) {
+    if (!lastWorkReportResult) return null;
+    if (String(sourceType || "item") === "unmatched") {
+      const unmatched = Array.isArray(lastWorkReportResult.unmatched_images) ? lastWorkReportResult.unmatched_images : [];
+      return unmatched[Number(unmatchedIndex || -1)] || null;
+    }
+    const item = workReportItemByIndex(lastWorkReportResult, itemIndex);
+    if (!item || !Array.isArray(item.images)) return null;
+    return item.images[Number(imageIndex || -1)] || null;
+  }
+
   function markWorkReportImageManualOverride(image) {
     if (!image || typeof image !== "object") return;
     image.manual_override = true;
@@ -4425,6 +4575,13 @@
     if (Array.isArray(lastWorkReportResult.unmatched_images)) {
       syncWorkReportImageCollection(lastWorkReportResult.unmatched_images);
     }
+    return true;
+  }
+
+  function confirmWorkReportImageReview(sourceType, itemIndex, imageIndex, unmatchedIndex) {
+    const row = workReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex);
+    if (!row) return false;
+    markWorkReportImageManualOverride(row);
     return true;
   }
 
@@ -4546,6 +4703,31 @@
     const changed = updateWorkReportImageStage(sourceType, itemIndex, imageIndex, unmatchedIndex, target.value);
     if (!changed) return;
     rerenderWorkReportPreview("이미지 단계값을 수정했습니다. 현재 보정 결과로 PDF가 생성됩니다.");
+  }
+
+  function handleWorkReportReviewApply(event) {
+    const trigger = event?.target instanceof HTMLElement ? event.target.closest(".work-report-review-option, .work-report-review-unmatched") : null;
+    if (!(trigger instanceof HTMLElement) || !lastWorkReportResult) return;
+    const sourceType = String(trigger.getAttribute("data-source-type") || "item");
+    const itemIndex = Number(trigger.getAttribute("data-item-index") || -1);
+    const imageIndex = Number(trigger.getAttribute("data-image-index") || -1);
+    const unmatchedIndex = Number(trigger.getAttribute("data-unmatched-index") || -1);
+    const destinationItemIndex = String(trigger.getAttribute("data-destination-item-index") || "__unmatched__");
+    const changed = moveWorkReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex, destinationItemIndex);
+    if (!changed) return;
+    rerenderWorkReportPreview("추천 후보를 적용했습니다. 이 선택도 다음 매칭 개선용 피드백에 포함됩니다.");
+  }
+
+  function handleWorkReportReviewConfirm(event) {
+    const trigger = event?.target instanceof HTMLElement ? event.target.closest(".work-report-review-confirm") : null;
+    if (!(trigger instanceof HTMLElement) || !lastWorkReportResult) return;
+    const sourceType = String(trigger.getAttribute("data-source-type") || "item");
+    const itemIndex = Number(trigger.getAttribute("data-item-index") || -1);
+    const imageIndex = Number(trigger.getAttribute("data-image-index") || -1);
+    const unmatchedIndex = Number(trigger.getAttribute("data-unmatched-index") || -1);
+    const changed = confirmWorkReportImageReview(sourceType, itemIndex, imageIndex, unmatchedIndex);
+    if (!changed) return;
+    rerenderWorkReportPreview("현재 선택을 사람 검토 결과로 확정했습니다. 이 판단도 다음 매칭 개선 자료로 저장됩니다.");
   }
 
   async function handleWorkReportFeedbackSave(event) {
@@ -5045,6 +5227,8 @@
       handleWorkReportImageStageChange(event);
     });
     $("#workReportBox")?.addEventListener("click", (event) => {
+      handleWorkReportReviewApply(event);
+      handleWorkReportReviewConfirm(event);
       handleWorkReportFeedbackSave(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
     });
     $("#btnAnalyzeWorkReport")?.addEventListener("click", () => analyzeWorkReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));

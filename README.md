@@ -36,6 +36,7 @@ bash ./scripts/dev-test.sh
 - 로컬 개발 데이터는 `runtime/local` 아래에 저장됩니다.
 - 기본 개발 실행은 `ALLOW_INSECURE_DEFAULTS=1`, `KA_HSTS_ENABLED=0`, `KA_STORAGE_ROOT=runtime/local`를 사용합니다.
 - `dev-run`에 `-SeedDemo`를 주면 로컬 테스트용 관리자/테넌트가 자동 생성됩니다.
+- 업무보고 이미지 매칭 개선 순서는 [docs/work-report-learning-roadmap.md](C:/ka-part/render-sync/docs/work-report-learning-roadmap.md)에 기록합니다.
 
 기본 로컬 시드값:
 

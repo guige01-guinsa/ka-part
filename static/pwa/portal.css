@@ -1197,6 +1197,99 @@ body {
   opacity: 0.56;
 }
 
+.work-report-review-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.work-report-review-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(197, 116, 34, 0.18);
+  background: linear-gradient(180deg, rgba(255, 250, 245, 0.96), rgba(255, 255, 255, 0.94));
+  box-shadow: 0 10px 24px rgba(29, 42, 40, 0.05);
+}
+
+.work-report-review-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.work-report-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.work-report-review-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.work-report-review-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(197, 116, 34, 0.12);
+  border: 1px solid rgba(197, 116, 34, 0.18);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.work-report-review-options {
+  display: grid;
+  gap: 8px;
+}
+
+.work-report-review-option {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(23, 38, 37, 0.12);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--ink);
+  text-align: left;
+}
+
+.work-report-review-option strong {
+  font-size: 13px;
+}
+
+.work-report-review-option span,
+.work-report-review-option small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.work-report-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.work-report-review-confirm,
+.work-report-review-unmatched {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(23, 38, 37, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .work-report-advanced {
   margin-top: 14px;
 }
@@ -1446,6 +1539,12 @@ body {
 
   .work-report-feedback-save {
     width: 100%;
+  }
+
+  .work-report-review-head,
+  .work-report-review-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 
