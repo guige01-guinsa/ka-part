@@ -769,6 +769,42 @@ def test_work_report_analysis_uses_chunked_ai_for_large_image_batches(monkeypatc
     assert "단계적으로 매칭" in str(result["analysis_notice"])
 
 
+def test_work_report_batch_candidate_items_limits_large_item_context() -> None:
+    import app.work_report_service as service
+
+    items = []
+    for index in range(1, 31):
+        items.append(
+            {
+                "index": index,
+                "title": f"{index}동 공용부 센서등 점검",
+                "work_date": "2026-04-15",
+                "work_date_label": "4월 15일",
+                "vendor_name": "관리실",
+                "location_name": f"{index}동 공동현관",
+                "summary": f"{index}동 공동현관 센서등 점검",
+                "_minute_of_day": 540 + index,
+                "_image_notices": [],
+            }
+        )
+
+    cluster = [
+        {
+            "index": 1,
+            "filename": "KakaoTalk_20260415_091000_07동_공동현관_센서등.jpg",
+            "date": "2026-04-15",
+            "minute_of_day": 547,
+        }
+    ]
+    work_events = service._work_report_events("2026년 4월 15일 오전 9:07, 관리실 : 7동 공동현관 센서등 점검")
+
+    batch_items = service._batch_candidate_items([cluster], items, work_events, total_limit=8)
+
+    assert len(batch_items) <= 8
+    assert any(int(item["index"]) == 7 for item in batch_items)
+    assert len(batch_items) < len(items)
+
+
 def test_work_report_analysis_exposes_timeout_diagnostics_on_heuristic_fallback(monkeypatch) -> None:
     import app.work_report_service as service
 

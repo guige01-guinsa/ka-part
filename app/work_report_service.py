@@ -1690,6 +1690,30 @@ def _cluster_item_candidate_lines(
     limit: int = 3,
     feedback_profile: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
+    ranked = _cluster_ranked_item_candidates(
+        cluster,
+        items,
+        work_events,
+        feedback_profile=feedback_profile,
+    )
+    lines: List[str] = []
+    for score, item_index, title, location, keywords in ranked[:limit]:
+        parts = [f"T{item_index} {title or '-'}", f"점수 {score}"]
+        if location:
+            parts.append(f"위치 {location}")
+        if keywords:
+            parts.append("키워드 " + ", ".join(keywords[:4]))
+        lines.append(" / ".join(parts))
+    return lines
+
+
+def _cluster_ranked_item_candidates(
+    cluster: Sequence[Dict[str, Any]],
+    items: Sequence[Dict[str, Any]],
+    work_events: Sequence[Dict[str, Any]],
+    *,
+    feedback_profile: Optional[Dict[str, Any]] = None,
+) -> List[Tuple[int, int, str, str, List[str]]]:
     nearby = _cluster_nearby_events(cluster, work_events)[:4]
     ranked: List[Tuple[int, int, str, str, List[str]]] = []
     for item in list(items or []):
@@ -1715,15 +1739,48 @@ def _cluster_item_candidate_lines(
         if score > 0:
             ranked.append((score, item_index, title, location, keywords))
     ranked.sort(key=lambda row: (-row[0], row[1]))
-    lines: List[str] = []
-    for score, item_index, title, location, keywords in ranked[:limit]:
-        parts = [f"T{item_index} {title or '-'}", f"점수 {score}"]
-        if location:
-            parts.append(f"위치 {location}")
-        if keywords:
-            parts.append("키워드 " + ", ".join(keywords[:4]))
-        lines.append(" / ".join(parts))
-    return lines
+    return ranked
+
+
+def _batch_candidate_items(
+    clusters: Sequence[Sequence[Dict[str, Any]]],
+    items: Sequence[Dict[str, Any]],
+    work_events: Sequence[Dict[str, Any]],
+    *,
+    per_cluster_limit: int = 4,
+    total_limit: int = 18,
+    feedback_profile: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    indexed_items: Dict[int, Dict[str, Any]] = {
+        int(item.get("index") or 0): dict(item)
+        for item in list(items or [])
+        if int(item.get("index") or 0) > 0
+    }
+    if not indexed_items:
+        return []
+    score_map: Dict[int, int] = {}
+    for cluster in list(clusters or []):
+        ranked = _cluster_ranked_item_candidates(
+            cluster,
+            items,
+            work_events,
+            feedback_profile=feedback_profile,
+        )
+        for score, item_index, _title, _location, _keywords in ranked[: max(1, int(per_cluster_limit or 0))]:
+            score_map[item_index] = score_map.get(item_index, 0) + int(score or 0)
+        best_item_index = _best_item_index_for_cluster(items, cluster, feedback_profile=feedback_profile)
+        if best_item_index > 0:
+            score_map[best_item_index] = max(score_map.get(best_item_index, 0), 1)
+    if not score_map:
+        return [indexed_items[index] for index in sorted(indexed_items)]
+    ranked_indexes = [
+        item_index
+        for item_index, _score in sorted(score_map.items(), key=lambda row: (-row[1], row[0]))[: max(1, int(total_limit or 0))]
+        if item_index in indexed_items
+    ]
+    if not ranked_indexes:
+        return [indexed_items[index] for index in sorted(indexed_items)]
+    return [indexed_items[item_index] for item_index in ranked_indexes]
 
 
 def _chunk_assign(entries: List[Dict[str, Any]], items: List[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
@@ -2513,6 +2570,10 @@ def _openai_match_image_chunks(
         sample_per_cluster = min(sample_per_cluster, 2)
     if len(image_inputs) >= 36:
         max_clusters = min(max_clusters, 3)
+    if len(image_inputs) >= 40 or len(items) >= 80:
+        sample_per_cluster = 1
+    if len(image_inputs) >= 40 and len(items) >= 60:
+        max_clusters = min(max_clusters, 2)
     image_lookup = {index: row for index, row in enumerate(list(image_inputs or []), start=1)}
     image_meta_rows = [_openai_image_meta(index, row) for index, row in image_lookup.items()]
     clusters = _cluster_openai_image_meta(image_meta_rows)
@@ -2520,12 +2581,14 @@ def _openai_match_image_chunks(
         return None
 
     work_events = _work_report_events(text)
-    item_lines = _openai_item_summary_lines(items)
     assigned_rows: Dict[int, List[Dict[str, Any]]] = {int(item.get("index") or 0): [] for item in items if int(item.get("index") or 0) > 0}
     unmatched_image_indexes: set[int] = set()
     analysis_notes: List[str] = []
     openai_failures: List[Dict[str, str]] = []
     few_shot_lines = _feedback_few_shot_lines(feedback_profile, limit=4)
+    max_item_context = 18 if len(items) >= 40 else max(8, len(items))
+    if len(items) >= 80:
+        max_item_context = 12
 
     prompt = """
 너는 이미 추출된 시설팀 작업 항목에 현장 사진 군집을 매칭하는 도우미다.
@@ -2565,7 +2628,16 @@ def _openai_match_image_chunks(
             hint="대량 이미지는 군집 단위로 나눠 작업 항목과 연결합니다.",
         )
         content: List[Dict[str, Any]] = [{"type": "input_text", "text": prompt}]
-        content.append({"type": "input_text", "text": "작업 항목 목록:\n" + "\n".join(item_lines)})
+        batch_items = _batch_candidate_items(
+            batch_clusters,
+            items,
+            work_events,
+            per_cluster_limit=4,
+            total_limit=max_item_context,
+            feedback_profile=feedback_profile,
+        )
+        batch_item_lines = _openai_item_summary_lines(batch_items or items)
+        content.append({"type": "input_text", "text": "작업 항목 목록:\n" + "\n".join(batch_item_lines)})
         if few_shot_lines:
             content.append({"type": "input_text", "text": "최근 사람 검토 예시:\n" + "\n".join(few_shot_lines)})
 
@@ -2699,6 +2771,7 @@ def _openai_match_image_chunks(
             "max_clusters_per_batch": max_clusters,
             "sample_per_cluster": sample_per_cluster,
             "few_shot_example_count": len(few_shot_lines),
+            "max_item_context": max_item_context,
             "openai_failures": openai_failures,
         },
     }
