@@ -14,6 +14,7 @@ WORK_REPORT_JOB_ROOT = (STORAGE_ROOT / "uploads" / "work_report_jobs").resolve()
 WORK_REPORT_JOB_TOTAL_STEPS = 5
 WORK_REPORT_JOB_POLL_AFTER_MS = 2000
 WORK_REPORT_JOB_RETENTION_DAYS = 3
+WORK_REPORT_JOB_IMAGE_PREVIEW_DIR = "image_previews"
 _JOB_STATUS_VALUES = {"queued", "running", "completed", "failed"}
 
 
@@ -151,6 +152,12 @@ def _cleanup_finished_job_artifacts_for_record(record: Dict[str, Any]) -> None:
     if raw_result_path:
         try:
             keep_paths.add(_safe_job_dir(Path(raw_result_path)))
+        except Exception:
+            pass
+    preview_dir = job_dir / WORK_REPORT_JOB_IMAGE_PREVIEW_DIR
+    if preview_dir.exists():
+        try:
+            keep_paths.add(_safe_job_dir(preview_dir))
         except Exception:
             pass
     _cleanup_job_dir_contents(job_dir, keep_paths=keep_paths)

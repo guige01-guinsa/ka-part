@@ -965,6 +965,7 @@ def _openai_image_meta(index: int, entry: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "index": int(index),
         "filename": filename,
+        "preview_available": bool(_collapse(entry.get("preview_relative_path") or "")),
         "date": _collapse(time_fields.get("date") or ""),
         "minute_of_day": int(time_fields.get("minute_of_day") or -1),
         "second_of_day": int(time_fields.get("second_of_day") or -1),
@@ -2084,6 +2085,7 @@ def _apply_image_matches_to_items(
                 {
                     "index": int(row.get("index") or 0),
                     "filename": _collapse(row.get("filename") or ""),
+                    "preview_available": bool(row.get("preview_available")),
                     "stage": _collapse(row.get("stage") or row.get("stage_hint") or ""),
                 }
             )
@@ -2505,6 +2507,7 @@ def _openai_work_report(
                     {
                         "index": image_index,
                         "filename": row.get("filename"),
+                        "preview_available": bool(_collapse(row.get("preview_relative_path") or "")),
                         "stage": stage,
                     }
                 )
@@ -3279,6 +3282,7 @@ def analyze_work_report(
         {
             "index": index,
             "filename": images[index - 1].get("filename"),
+            "preview_available": bool(_collapse(images[index - 1].get("preview_relative_path") or "")),
             "stage": _collapse(image_entries[index - 1].get("stage_hint") or "") or "general",
             "stage_label": _stage_label(_collapse(image_entries[index - 1].get("stage_hint") or "") or "general"),
         }

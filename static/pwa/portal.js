@@ -99,6 +99,7 @@
   let lastWorkReportBaseline = null;
   let lastWorkReportJobId = "";
   let lastWorkReportFeedbackSavedSignature = "";
+  let activeWorkReportPreviewIndex = 0;
   let currentIntakeStep = 1;
   let currentMobileWorkspace = "intake";
 
@@ -4383,6 +4384,29 @@
     )).join("");
   }
 
+  function workReportPreviewJobId(report) {
+    return String(report?.batch_job_id || lastWorkReportJobId || "").trim();
+  }
+
+  function workReportImagePreviewUrl(report, image) {
+    if (image && image.preview_available === false) return "";
+    const jobId = workReportPreviewJobId(report);
+    const imageIndex = Number(image?.index || 0);
+    if (!jobId || imageIndex <= 0) return "";
+    return `/api/ai/work_report/jobs/${encodeURIComponent(jobId)}/images/${imageIndex}`;
+  }
+
+  function renderWorkReportInlineImagePreview(report, image) {
+    const previewUrl = workReportImagePreviewUrl(report, image);
+    const imageIndex = Number(image?.index || 0);
+    if (!previewUrl || activeWorkReportPreviewIndex !== imageIndex) return "";
+    return [
+      '<div class="work-report-image-preview-panel">',
+      `<img src="${escapeHtml(previewUrl)}" alt="${escapeHtml(String(image?.filename || "업무보고 이미지"))}" loading="lazy">`,
+      "</div>",
+    ].join("");
+  }
+
   function renderWorkReportImageEditor(report, image, config = {}) {
     const row = image && typeof image === "object" ? image : {};
     const stage = normalizeWorkReportImageStage(row.stage);
@@ -4397,16 +4421,24 @@
       : `data-source-type="item" data-item-index="${Number(config.itemIndex || 0)}" data-image-index="${Number(config.imageIndex || 0)}"`;
     const assignmentValue = sourceType === "unmatched" ? "__unmatched__" : String(Number(config.itemIndex || 0));
     const checkboxClass = sourceType === "unmatched" ? "work-report-unmatched-output-check" : "work-report-output-check";
+    const previewUrl = workReportImagePreviewUrl(report, row);
+    const previewButton = previewUrl
+      ? `<button class="work-report-image-preview-toggle" type="button" data-image-preview-index="${Number(row.index || 0)}">${escapeHtml(activeWorkReportPreviewIndex === Number(row.index || 0) ? "이미지 닫기" : "이미지 보기")}</button>`
+      : "";
     return [
       '<div class="work-report-image-select">',
       `<input class="${checkboxClass}" type="checkbox" ${sourceAttrs}${checked}>`,
       '<div class="work-report-image-body">',
+      '<div class="work-report-image-head">',
       `<span class="work-report-image-title">${escapeHtml(`${stageLabel} · ${String(row.filename || "-")}`)}</span>`,
+      previewButton,
+      "</div>",
       row.manual_override ? '<span class="work-report-image-note">수동 보정</span>' : "",
       '<div class="work-report-image-controls">',
       `<label class="work-report-control-field"><span>연결 작업</span><select class="work-report-image-assignment" ${editorAttrs}>${renderWorkReportAssignmentOptions(report, assignmentValue)}</select></label>`,
       `<label class="work-report-control-field"><span>단계</span><select class="work-report-image-stage" ${editorAttrs}>${renderWorkReportStageOptions(stage)}</select></label>`,
       "</div>",
+      renderWorkReportInlineImagePreview(report, row),
       "</div>",
       "</div>",
     ].join("");
@@ -4484,6 +4516,7 @@
     const currentLabel = review?.currentItemIndex > 0
       ? `${Number(review.currentItemIndex || 0)}. ${String(review.currentItemTitle || "작업 항목")}`
       : "미매칭";
+    const previewUrl = workReportImagePreviewUrl(lastWorkReportResult, image);
     const attrs = [
       `data-source-type="${escapeHtml(String(review?.sourceType || "item"))}"`,
       `data-item-index="${Number(review?.itemIndex || 0)}"`,
@@ -4495,10 +4528,14 @@
       '<article class="work-report-review-card">',
       '<div class="work-report-review-head">',
       `<strong>${escapeHtml(`${stageLabel} · ${String(image.filename || "-")}`)}</strong>`,
+      '<div class="work-report-review-head-actions">',
       confidenceLabel ? `<span class="work-report-review-chip">${escapeHtml(confidenceLabel)}</span>` : "",
+      previewUrl ? `<button class="work-report-image-preview-toggle" type="button" data-image-preview-index="${Number(image.index || 0)}">${escapeHtml(activeWorkReportPreviewIndex === Number(image.index || 0) ? "이미지 닫기" : "이미지 보기")}</button>` : "",
+      '</div>',
       "</div>",
       `<p>${escapeHtml(`현재 연결: ${currentLabel}`)}</p>`,
       image.review_reason ? `<p>${escapeHtml(`검토 사유: ${String(image.review_reason || "")}`)}</p>` : "",
+      renderWorkReportInlineImagePreview(lastWorkReportResult, image),
       candidates.length
         ? `<div class="work-report-review-options">${candidates.map((candidate) => renderWorkReportReviewCandidate(review, candidate)).join("")}</div>`
         : '<p>추천 후보를 만들지 못했습니다. 아래 편집기에서 직접 선택해 주세요.</p>',
@@ -4629,6 +4666,7 @@
     lastWorkReportBaseline = null;
     lastWorkReportJobId = "";
     lastWorkReportFeedbackSavedSignature = "";
+    activeWorkReportPreviewIndex = 0;
   }
 
   function cloneWorkReportForPdf(report) {
@@ -4857,6 +4895,15 @@
     rerenderWorkReportPreview("이미지 단계값을 수정했습니다. 현재 보정 결과로 PDF가 생성됩니다.");
   }
 
+  function handleWorkReportImagePreviewToggle(event) {
+    const trigger = event?.target instanceof HTMLElement ? event.target.closest(".work-report-image-preview-toggle") : null;
+    if (!(trigger instanceof HTMLElement)) return;
+    const imageIndex = Number(trigger.getAttribute("data-image-preview-index") || 0);
+    if (imageIndex <= 0) return;
+    activeWorkReportPreviewIndex = activeWorkReportPreviewIndex === imageIndex ? 0 : imageIndex;
+    rerenderWorkReportPreview();
+  }
+
   function handleWorkReportReviewApply(event) {
     const trigger = event?.target instanceof HTMLElement ? event.target.closest(".work-report-review-option, .work-report-review-unmatched") : null;
     if (!(trigger instanceof HTMLElement) || !lastWorkReportResult) return;
@@ -5033,6 +5080,7 @@
       lastWorkReportResult = result || null;
       lastWorkReportBaseline = deepCloneJson(result || null);
       lastWorkReportFeedbackSavedSignature = "";
+      activeWorkReportPreviewIndex = 0;
       $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
       const previewNotice = String(lastWorkReportResult?.analysis_notice || "").trim();
       const previewMessage = `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`;
@@ -5380,6 +5428,7 @@
       handleWorkReportImageStageChange(event);
     });
     $("#workReportBox")?.addEventListener("click", (event) => {
+      handleWorkReportImagePreviewToggle(event);
       handleWorkReportReviewApply(event);
       handleWorkReportReviewConfirm(event);
       handleWorkReportFeedbackSave(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));

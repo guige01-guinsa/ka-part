@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -48,6 +49,7 @@ from ..work_report_batch import (
     mark_work_report_job_running,
     new_work_report_job_id,
     reclaim_work_report_job_storage,
+    WORK_REPORT_JOB_IMAGE_PREVIEW_DIR,
     update_work_report_job_progress,
 )
 from ..work_report_service import (
@@ -58,6 +60,11 @@ from ..work_report_service import (
 
 router = APIRouter()
 logger = logging.getLogger("ka-part.work-report")
+try:
+    from PIL import Image as PILImage
+except Exception:  # pragma: no cover - Pillow optional at runtime
+    PILImage = None
+
 AUTH_COOKIE_NAME = (os.getenv("KA_AUTH_COOKIE_NAME") or "ka_part_auth_token").strip()
 UPLOAD_ROOT = (STORAGE_ROOT / "uploads" / "complaints").resolve()
 DIGEST_IMAGE_MAX_BYTES = 10 * 1024 * 1024
@@ -66,6 +73,8 @@ WORK_REPORT_SAMPLE_MAX_BYTES = 30 * 1024 * 1024
 MAX_WORK_REPORT_SOURCE_FILES = 20
 WORK_REPORT_BATCH_METADATA_FILE = "job-input.json"
 WORK_REPORT_BATCH_TASKS: set[asyncio.Task[Any]] = set()
+WORK_REPORT_PREVIEW_MAX_DIM = 960
+WORK_REPORT_PREVIEW_IMAGE_QUALITY = 78
 
 
 def _access_token(request: Request) -> str:
@@ -350,7 +359,33 @@ def _safe_work_report_batch_name(filename: str, default: str) -> str:
     return cleaned[:140] or default
 
 
-def _stage_work_report_batch_images(job_dir: Path, rows: List[Dict[str, Any]], folder: str) -> List[Dict[str, Any]]:
+def _write_work_report_batch_preview_image(job_dir: Path, *, image_index: int, raw: bytes) -> str:
+    if image_index <= 0 or not raw:
+        return ""
+    preview_root = (job_dir / WORK_REPORT_JOB_IMAGE_PREVIEW_DIR).resolve()
+    preview_root.mkdir(parents=True, exist_ok=True)
+    preview_path = (preview_root / f"{image_index:03d}.jpg").resolve()
+    if not str(preview_path).startswith(str(job_dir.resolve())):
+        raise ValueError("invalid batch image preview path")
+    if PILImage is None:
+        return ""
+    try:
+        image = PILImage.open(BytesIO(raw))
+        image.load()
+        image = image.convert("RGB")
+        image.thumbnail((WORK_REPORT_PREVIEW_MAX_DIM, WORK_REPORT_PREVIEW_MAX_DIM), PILImage.Resampling.LANCZOS)
+        output = BytesIO()
+        image.save(output, format="JPEG", quality=WORK_REPORT_PREVIEW_IMAGE_QUALITY, optimize=True)
+        preview_bytes = output.getvalue()
+        if not preview_bytes:
+            return ""
+        preview_path.write_bytes(preview_bytes)
+        return str(preview_path.relative_to(job_dir.resolve())).replace("\\", "/")
+    except Exception:
+        return ""
+
+
+def _stage_work_report_batch_images(job_dir: Path, rows: List[Dict[str, Any]], folder: str, *, create_preview: bool = False) -> List[Dict[str, Any]]:
     staged: List[Dict[str, Any]] = []
     target_root = (job_dir / folder).resolve()
     target_root.mkdir(parents=True, exist_ok=True)
@@ -361,12 +396,14 @@ def _stage_work_report_batch_images(job_dir: Path, rows: List[Dict[str, Any]], f
             raise ValueError("invalid batch image path")
         raw = bytes(row.get("bytes") or b"")
         target_path.write_bytes(raw)
+        preview_relative_path = _write_work_report_batch_preview_image(job_dir, image_index=index, raw=raw) if create_preview else ""
         staged.append(
             {
                 "filename": str(row.get("filename") or filename),
                 "content_type": str(row.get("content_type") or "image/jpeg"),
                 "size_bytes": int(row.get("size_bytes") or len(raw)),
                 "relative_path": str(target_path.relative_to(job_dir.resolve())).replace("\\", "/"),
+                "preview_relative_path": preview_relative_path,
             }
         )
     return staged
@@ -391,7 +428,7 @@ def _write_work_report_batch_payload(
         "source_names": [str(value or "") for value in source.get("source_names") or []],
         "source_text": str(source.get("source_text") or ""),
         "reference_images": _stage_work_report_batch_images(target_dir, list(source.get("source_images") or []), "reference_images"),
-        "images": _stage_work_report_batch_images(target_dir, list(image_inputs or []), "images"),
+        "images": _stage_work_report_batch_images(target_dir, list(image_inputs or []), "images", create_preview=True),
         "attachments": [
             {
                 "filename": str(row.get("filename") or ""),
@@ -443,6 +480,7 @@ def _read_work_report_batch_payload(job_dir: Path) -> Dict[str, Any]:
                     "content_type": str(row.get("content_type") or "image/jpeg"),
                     "size_bytes": int(row.get("size_bytes") or file_path.stat().st_size),
                     "bytes": file_path.read_bytes(),
+                    "preview_relative_path": str(row.get("preview_relative_path") or "").strip(),
                 }
             )
         return items
@@ -535,6 +573,7 @@ async def _run_work_report_batch_preview(job_id: str) -> None:
     try:
         payload = await run_in_threadpool(_read_work_report_batch_payload, Path(str(record.get("job_dir") or "")))
         report = await run_in_threadpool(_execute_work_report_batch_preview, job_id, payload)
+        report["batch_job_id"] = job_id
         complete_work_report_job(job_id, result=report)
         result_reason = str(report.get("analysis_reason") or "").strip()
         result_model = str(report.get("analysis_model") or "").strip()
@@ -845,6 +884,18 @@ def ai_work_report_job_detail(request: Request, job_id: str) -> Dict[str, Any]:
     if not item:
         raise HTTPException(status_code=404, detail="work report job not found")
     return {"ok": True, "item": item}
+
+
+@router.get("/ai/work_report/jobs/{job_id}/images/{image_index}")
+def ai_work_report_job_image_preview(request: Request, job_id: str, image_index: int) -> FileResponse:
+    record, _user, _tenant = _authorized_work_report_job(request, job_id)
+    if int(image_index or 0) <= 0:
+        raise HTTPException(status_code=404, detail="work report image not found")
+    job_dir = Path(str(record.get("job_dir") or "")).resolve()
+    preview_path = (job_dir / WORK_REPORT_JOB_IMAGE_PREVIEW_DIR / f"{int(image_index):03d}.jpg").resolve()
+    if not str(preview_path).startswith(str(job_dir)) or not preview_path.exists():
+        raise HTTPException(status_code=404, detail="work report image not found")
+    return FileResponse(preview_path, media_type="image/jpeg")
 
 
 @router.post("/ai/work_report/pdf")

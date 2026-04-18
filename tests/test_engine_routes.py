@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib
 import io
 import json
@@ -138,16 +139,16 @@ def test_build_info_endpoints_expose_release_and_asset_versions(app_client) -> N
     api_response = client.get("/api/build_info")
     assert api_response.status_code == 200
     api_payload = api_response.json()
-    assert api_payload["release_id"] == "2026-04-18-buildbadge-1"
-    assert api_payload["static_assets"]["pwa_asset_version"] == "20260418f"
+    assert api_payload["release_id"] == "2026-04-18-imagepreview-1"
+    assert api_payload["static_assets"]["pwa_asset_version"] == "20260418g"
     assert api_payload["frontend_expectations"]["build_info_page"] == "/diag/build"
     assert api_response.headers["cache-control"].startswith("no-store")
 
     html_response = client.get("/diag/build")
     assert html_response.status_code == 200
     assert "text/html" in html_response.headers["content-type"]
-    assert "2026-04-18-buildbadge-1" in html_response.text
-    assert "20260418f" in html_response.text
+    assert "2026-04-18-imagepreview-1" in html_response.text
+    assert "20260418g" in html_response.text
     assert "/api/build_info" in html_response.text
 
 
@@ -1479,6 +1480,89 @@ def test_work_report_batch_job_can_poll_until_completed(app_client, monkeypatch)
     assert detail_item["result"]["analysis_diagnostics"]["openai_failures"] == []
     assert detail_item["result"]["item_count"] == 1
     assert detail_item["result"]["template_source_name"] == ""
+
+
+def test_work_report_batch_job_exposes_preview_image_endpoint(app_client, monkeypatch) -> None:
+    client = app_client
+    api_key = _bootstrap_admin_and_tenant(client)
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    import app.routes.engine as engine
+
+    def _fake_analyze_work_report(
+        text,
+        *,
+        tenant_id="",
+        image_inputs=None,
+        reference_image_inputs=None,
+        attachment_inputs=None,
+        sample_title="",
+        sample_lines=None,
+        progress_callback=None,
+    ):
+        return {
+            "report_title": "시설팀 주요 업무 보고",
+            "period_label": "7월 4일",
+            "template_title": "시설팀 주요 업무 보고",
+            "analysis_model": "gpt-5.4",
+            "analysis_mode_label": "OpenAI (gpt-5.4)",
+            "analysis_reason": "",
+            "analysis_reason_label": "",
+            "analysis_notice": "",
+            "analysis_diagnostics": {"openai_failures": []},
+            "item_count": 1,
+            "image_item_count": 1,
+            "text_only_item_count": 0,
+            "items": [
+                {
+                    "index": 1,
+                    "title": "어린이 수영장 청소",
+                    "work_date": "2026-07-04",
+                    "work_date_label": "7월 4일",
+                    "vendor_name": "관리실",
+                    "location_name": "어린이 수영장",
+                    "summary": "어린이 수영장 청소 진행",
+                    "images": [{"index": 1, "filename": "7월4일-수영장-작업전.png", "stage": "general"}],
+                    "attachments": [],
+                }
+            ],
+            "image_items": [],
+            "text_only_items": [],
+            "unmatched_images": [],
+            "unmatched_attachments": [],
+            "source_text_preview": ["2026년 7월 4일 오전 9:00, 관리실 : 어린이 수영장 청소"],
+            "report_text": "어린이 수영장 청소",
+        }
+
+    monkeypatch.setattr(engine, "analyze_work_report", _fake_analyze_work_report)
+
+    png_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W3ioAAAAASUVORK5CYII=")
+    created = client.post(
+        "/api/ai/work_report/jobs",
+        headers=headers,
+        data={"tenant_id": "ys_thesharp", "text": "2026년 7월 4일 오전 9:00, 관리실 : 어린이 수영장 청소"},
+        files=[
+            ("images", ("7월4일-수영장-작업전.png", io.BytesIO(png_bytes), "image/png")),
+        ],
+    )
+    assert created.status_code == 200
+    created_item = created.json()["item"]
+
+    detail_item = None
+    for _ in range(40):
+        detail = client.get(f"/api/ai/work_report/jobs/{created_item['id']}", headers=headers)
+        assert detail.status_code == 200
+        detail_item = detail.json()["item"]
+        if detail_item["status"] == "completed":
+            break
+        time.sleep(0.05)
+
+    assert detail_item is not None
+    assert detail_item["status"] == "completed"
+    preview = client.get(f"/api/ai/work_report/jobs/{created_item['id']}/images/1", headers=headers)
+    assert preview.status_code == 200
+    assert preview.headers["content-type"].startswith("image/jpeg")
+    assert preview.content[:2] == b"\xff\xd8"
 
 
 def test_work_report_batch_cleanup_preserves_result_but_removes_staged_files(app_client, monkeypatch) -> None:

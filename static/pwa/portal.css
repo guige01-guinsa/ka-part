@@ -1153,6 +1153,13 @@ body {
   min-width: 0;
 }
 
+.work-report-image-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .work-report-image-title {
   display: block;
   color: var(--ink);
@@ -1174,6 +1181,39 @@ body {
   color: var(--ink);
   font-size: 11px;
   font-weight: 700;
+}
+
+.work-report-image-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(19, 57, 54, 0.16);
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.work-report-image-preview-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(19, 57, 54, 0.1);
+  background: rgba(250, 248, 244, 0.92);
+}
+
+.work-report-image-preview-panel img {
+  width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
 }
 
 .work-report-image-controls {
@@ -1289,6 +1329,13 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.work-report-review-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .work-report-review-head strong {
@@ -1594,6 +1641,12 @@ body {
 
   .work-report-image-controls {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .work-report-image-head,
+  .work-report-review-head-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .work-report-feedback-bar {
