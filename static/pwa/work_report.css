@@ -1,0 +1,193 @@
+.work-report-module-shell .layout {
+  gap: 20px;
+}
+
+.work-report-module-hero {
+  margin-bottom: 20px;
+}
+
+.work-report-module-grid {
+  margin-top: 14px;
+}
+
+.work-report-module-card-list,
+.work-report-module-image-grid,
+.work-report-module-source-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.work-report-module-stage-card,
+.work-report-module-item,
+.work-report-module-image-card,
+.work-report-module-source-row {
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(19, 57, 54, 0.1);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 10px 24px rgba(29, 42, 40, 0.05);
+}
+
+.work-report-module-item {
+  display: grid;
+  gap: 8px;
+}
+
+.work-report-module-item-head,
+.work-report-module-selection-bar,
+.work-report-module-image-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.work-report-module-selection-bar {
+  margin: 14px 0 10px;
+}
+
+.work-report-module-selection-bar strong,
+.work-report-module-item strong,
+.work-report-module-image-meta strong,
+.work-report-module-source-meta strong {
+  color: var(--ink);
+}
+
+.work-report-module-item p,
+.work-report-module-stage-card p,
+.work-report-module-source-meta span,
+.work-report-module-source-meta small,
+.work-report-module-image-meta span,
+.work-report-module-image-meta small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.work-report-module-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(13, 106, 103, 0.14);
+  background: rgba(244, 250, 248, 0.95);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.work-report-module-choice input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.work-report-module-source-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.work-report-module-source-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.work-report-module-source-row input {
+  width: 18px;
+  height: 18px;
+  margin-top: 4px;
+}
+
+.work-report-module-source-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.work-report-module-image-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.work-report-module-image-card {
+  display: grid;
+  gap: 10px;
+}
+
+.work-report-module-image-thumb {
+  width: 100%;
+  height: 170px;
+  object-fit: cover;
+  border-radius: 14px;
+  background: rgba(245, 244, 240, 0.95);
+}
+
+.work-report-module-image-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.work-report-module-image-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.work-report-module-image-controls select {
+  width: 100%;
+  min-width: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(23, 38, 37, 0.12);
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.work-report-module-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.work-report-module-meta span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(13, 106, 103, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.work-report-module-section + .work-report-module-section {
+  margin-top: 18px;
+}
+
+.work-report-module-section-title {
+  margin: 0 0 10px;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.work-report-module-summary {
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  .work-report-module-image-grid,
+  .work-report-module-source-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .work-report-module-item-head,
+  .work-report-module-selection-bar,
+  .work-report-module-image-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

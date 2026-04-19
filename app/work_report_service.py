@@ -3044,7 +3044,7 @@ def analyze_work_report(
             progress_callback,
             current_step=1,
             summary="선택된 작업 항목에만 현장 사진을 다시 매칭하고 있습니다.",
-            hint="사람이 고른 사진 포함 항목만 대상으로 이미지 매칭을 실행합니다.",
+            hint="사람이 고른 사진 포함 항목과 선택 이미지에만 매칭을 실행합니다.",
         )
         report_title = _collapse((base_report or {}).get("report_title") or _sample_heading(sample_title, sample_lines))
         period_label = _collapse((base_report or {}).get("period_label") or _sample_period(sample_lines))
@@ -3109,7 +3109,7 @@ def analyze_work_report(
         else:
             unmatched_image_indexes = [int(row.get("index") or 0) for row in image_entries if int(row.get("index") or 0) > 0]
             if images and not selected_item_index_set:
-                analysis_notice = "사진 포함 작업 항목이 아직 선택되지 않아 이미지 매칭을 실행하지 않았습니다."
+                analysis_notice = "사진 포함 작업 항목이나 사용할 이미지가 아직 정리되지 않아 이미지 매칭을 실행하지 않았습니다."
             else:
                 analysis_notice = "현장 사진이 없어 이미지 매칭을 실행하지 않았습니다."
         return _finalize_work_report_result(
@@ -3270,7 +3270,7 @@ def analyze_work_report(
             progress_callback,
             current_step=3,
             summary="작업 항목과 현장 사진의 대응 관계를 정리하고 있습니다." if not defer_image_matching else "작업 항목 추출을 마치고 사진 선택 단계를 준비하고 있습니다.",
-            hint="사진이 적어도 단계 정보와 위치 문맥을 다시 정리합니다." if not defer_image_matching else "사람이 사진 포함 항목을 고른 뒤 선택 항목만 이미지 매칭을 실행합니다.",
+            hint="사진이 적어도 단계 정보와 위치 문맥을 다시 정리합니다." if not defer_image_matching else "사람이 사진 포함 항목과 사용할 이미지를 고른 뒤 선택 매칭을 실행합니다.",
         )
         items = list(ai_result.get("items") or [])
         unmatched_image_indexes = list(ai_result.get("unmatched_image_indexes") or [])
@@ -3299,7 +3299,7 @@ def analyze_work_report(
             for item in items:
                 item["images"] = []
             unmatched_image_indexes = [int(row.get("index") or 0) for row in image_entries if int(row.get("index") or 0) > 0]
-            selection_notice = "불필요한 대화 내용을 정리한 뒤 사진 포함 항목을 고르면, 선택된 항목만 AI 이미지 매칭을 실행합니다."
+            selection_notice = "불필요한 대화를 제외한 뒤 사진 포함 항목과 사용할 이미지를 고르면, 선택된 범위에만 AI 이미지 매칭을 실행합니다."
             analysis_notice = selection_notice if not analysis_notice else f"{analysis_notice} {selection_notice}"
     else:
         _report_progress(
@@ -3555,7 +3555,7 @@ def analyze_work_report(
                 item.pop("_attachment_notice_texts", None)
                 item.pop("_attachment_notice_tokens", None)
         if defer_image_matching:
-            selection_notice = "불필요한 대화 내용을 정리한 뒤 사진 포함 항목을 고르면, 선택된 항목만 AI 이미지 매칭을 실행합니다."
+            selection_notice = "불필요한 대화를 제외한 뒤 사진 포함 항목과 사용할 이미지를 고르면, 선택된 범위에만 AI 이미지 매칭을 실행합니다."
             analysis_notice = selection_notice if not analysis_notice else f"{analysis_notice} {selection_notice}"
 
     _report_progress(
