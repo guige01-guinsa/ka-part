@@ -99,6 +99,9 @@
   let lastWorkReportBaseline = null;
   let lastWorkReportJobId = "";
   let lastWorkReportFeedbackSavedSignature = "";
+  let workReportFeedbackSavePromise = null;
+  let workReportFeedbackSaveQueued = false;
+  let workReportFeedbackQueuedSilent = true;
   let activeWorkReportPreviewIndex = 0;
   let currentIntakeStep = 1;
   let currentMobileWorkspace = "intake";
@@ -4942,41 +4945,64 @@
   }
 
   async function saveWorkReportFeedback(options = {}) {
-    const silent = !!options.silent;
-    if (!lastWorkReportResult || !lastWorkReportBaseline) return 0;
-    syncWorkReportPendingEditsFromDom();
-    const feedback = buildWorkReportFeedbackSummary(lastWorkReportResult, lastWorkReportBaseline);
-    if (!feedback.changes.length) {
-      if (!silent) {
-        setMessage("#intakeMsg", "저장할 이미지 매칭 수정이 없습니다.");
+    const requestedSilent = !!options.silent;
+    if (workReportFeedbackSavePromise) {
+      workReportFeedbackSaveQueued = true;
+      workReportFeedbackQueuedSilent = workReportFeedbackQueuedSilent && requestedSilent;
+      return workReportFeedbackSavePromise;
+    }
+
+    const runSave = async (silent) => {
+      if (!lastWorkReportResult || !lastWorkReportBaseline) return 0;
+      syncWorkReportPendingEditsFromDom();
+      const savedReport = deepCloneJson(lastWorkReportResult);
+      const feedback = buildWorkReportFeedbackSummary(savedReport, lastWorkReportBaseline);
+      if (!feedback.changes.length) {
+        if (!silent) {
+          setMessage("#intakeMsg", "저장할 이미지 매칭 수정이 없습니다.");
+        }
+        return 0;
       }
-      return 0;
-    }
-    if (feedback.signature && feedback.signature === lastWorkReportFeedbackSavedSignature) {
+      const tenantId = currentTenantId();
+      if (!tenantId) throw new Error("테넌트를 선택하세요.");
+      const data = await authFetchJson("/api/ai/work_report/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenant_id: tenantId,
+          job_id: lastWorkReportJobId,
+          corrections: feedback.changes,
+          report: buildWorkReportFeedbackSnapshot(savedReport),
+        }),
+      });
+      lastWorkReportBaseline = deepCloneJson(savedReport);
+      lastWorkReportFeedbackSavedSignature = "";
+      $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
+      const savedCount = Number(data?.item?.correction_count || feedback.changes.length || 0);
       if (!silent) {
-        setMessage("#intakeMsg", `이미지 매칭 수정 ${feedback.changes.length}건이 이미 저장되었습니다.`);
+        setMessage("#intakeMsg", `이미지 매칭 수정 ${savedCount}건을 다음 매칭 개선용 피드백으로 저장했습니다.`);
       }
-      return feedback.changes.length;
-    }
-    const tenantId = currentTenantId();
-    if (!tenantId) throw new Error("테넌트를 선택하세요.");
-    const data = await authFetchJson("/api/ai/work_report/feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tenant_id: tenantId,
-        job_id: lastWorkReportJobId,
-        corrections: feedback.changes,
-        report: buildWorkReportFeedbackSnapshot(lastWorkReportResult),
-      }),
-    });
-    lastWorkReportFeedbackSavedSignature = feedback.signature;
-    $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
-    const savedCount = Number(data?.item?.correction_count || feedback.changes.length || 0);
-    if (!silent) {
-      setMessage("#intakeMsg", `이미지 매칭 수정 ${savedCount}건을 다음 매칭 개선용 피드백으로 저장했습니다.`);
-    }
-    return savedCount;
+      return savedCount;
+    };
+
+    workReportFeedbackSavePromise = (async () => {
+      let silent = requestedSilent;
+      let savedCount = 0;
+      try {
+        do {
+          workReportFeedbackSaveQueued = false;
+          workReportFeedbackQueuedSilent = true;
+          savedCount = await runSave(silent);
+          silent = workReportFeedbackQueuedSilent;
+        } while (workReportFeedbackSaveQueued);
+        return savedCount;
+      } finally {
+        workReportFeedbackSavePromise = null;
+        workReportFeedbackSaveQueued = false;
+        workReportFeedbackQueuedSilent = true;
+      }
+    })();
+    return workReportFeedbackSavePromise;
   }
 
   function handleWorkReportImageOutputToggle(event) {
@@ -5014,22 +5040,26 @@
     rerenderWorkReportPreview("미매칭 이미지도 체크된 항목만 PDF에 출력됩니다.");
   }
 
-  function handleWorkReportImageAssignmentChange(event) {
+  async function handleWorkReportImageAssignmentChange(event) {
     const target = event?.target;
     if (!(target instanceof HTMLSelectElement) || !target.classList.contains("work-report-image-assignment")) return;
     if (!lastWorkReportResult) return;
     const changed = syncWorkReportPendingEditsFromDom();
     if (!changed) return;
     rerenderWorkReportPreview("이미지 연결 작업을 수동으로 조정했습니다. 필요하면 '매칭 수정 저장'으로 다음 매칭 개선 자료로 남길 수 있습니다.");
+    await saveWorkReportFeedback({ silent: true });
+    setMessage("#intakeMsg", "이미지 연결 작업 변경을 저장했습니다.");
   }
 
-  function handleWorkReportImageStageChange(event) {
+  async function handleWorkReportImageStageChange(event) {
     const target = event?.target;
     if (!(target instanceof HTMLSelectElement) || !target.classList.contains("work-report-image-stage")) return;
     if (!lastWorkReportResult) return;
     const changed = syncWorkReportPendingEditsFromDom();
     if (!changed) return;
     rerenderWorkReportPreview("이미지 단계값을 수정했습니다. 현재 보정 결과로 PDF가 생성됩니다.");
+    await saveWorkReportFeedback({ silent: true });
+    setMessage("#intakeMsg", "이미지 단계값 변경을 저장했습니다.");
   }
 
   function handleWorkReportImagePreviewToggle(event) {
@@ -5042,7 +5072,7 @@
     rerenderWorkReportPreview();
   }
 
-  function handleWorkReportReviewApply(event) {
+  async function handleWorkReportReviewApply(event) {
     const trigger = event?.target instanceof HTMLElement ? event.target.closest(".work-report-review-option, .work-report-review-unmatched") : null;
     if (!(trigger instanceof HTMLElement) || !lastWorkReportResult) return;
     const sourceType = String(trigger.getAttribute("data-source-type") || "item");
@@ -5053,9 +5083,11 @@
     const changed = moveWorkReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex, destinationItemIndex);
     if (!changed) return;
     rerenderWorkReportPreview("추천 후보를 적용했습니다. 이 선택도 다음 매칭 개선용 피드백에 포함됩니다.");
+    await saveWorkReportFeedback({ silent: true });
+    setMessage("#intakeMsg", "추천 후보 적용 결과를 저장했습니다.");
   }
 
-  function handleWorkReportReviewConfirm(event) {
+  async function handleWorkReportReviewConfirm(event) {
     const trigger = event?.target instanceof HTMLElement ? event.target.closest(".work-report-review-confirm") : null;
     if (!(trigger instanceof HTMLElement) || !lastWorkReportResult) return;
     const sourceType = String(trigger.getAttribute("data-source-type") || "item");
@@ -5065,6 +5097,8 @@
     const changed = confirmWorkReportImageReview(sourceType, itemIndex, imageIndex, unmatchedIndex);
     if (!changed) return;
     rerenderWorkReportPreview("현재 선택을 사람 검토 결과로 확정했습니다. 이 판단도 다음 매칭 개선 자료로 저장됩니다.");
+    await saveWorkReportFeedback({ silent: true });
+    setMessage("#intakeMsg", "현재 선택 확정 결과를 저장했습니다.");
   }
 
   async function handleWorkReportFeedbackSave(event) {
@@ -5562,13 +5596,13 @@
       handleWorkReportItemOutputToggle(event);
       handleWorkReportImageOutputToggle(event);
       handleWorkReportUnmatchedOutputToggle(event);
-      handleWorkReportImageAssignmentChange(event);
-      handleWorkReportImageStageChange(event);
+      handleWorkReportImageAssignmentChange(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
+      handleWorkReportImageStageChange(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
     });
     $("#workReportBox")?.addEventListener("click", (event) => {
       handleWorkReportImagePreviewToggle(event);
-      handleWorkReportReviewApply(event);
-      handleWorkReportReviewConfirm(event);
+      handleWorkReportReviewApply(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
+      handleWorkReportReviewConfirm(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
       handleWorkReportFeedbackSave(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
     });
     $("#btnAnalyzeWorkReport")?.addEventListener("click", () => analyzeWorkReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
