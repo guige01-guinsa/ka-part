@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-APP_RELEASE_ID = "2026-04-19-simplify-1"
+APP_RELEASE_ID = "2026-04-19-timeout-1"
 PWA_ASSET_VERSION = "20260419g"
 AUTH_ASSET_VERSION = "20260407a"
 PWA_MANIFEST_VERSION = "14"
