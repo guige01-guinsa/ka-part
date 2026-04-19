@@ -1651,6 +1651,81 @@ body {
   max-width: 100%;
 }
 
+.work-report-source-filter {
+  display: grid;
+  gap: 14px;
+}
+
+.work-report-source-filter-head,
+.work-report-photo-target-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.work-report-source-filter-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.work-report-source-filter-list,
+.work-report-photo-target-list {
+  display: grid;
+  gap: 10px;
+}
+
+.work-report-source-filter-row,
+.work-report-photo-target-chip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(19, 57, 54, 0.1);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.work-report-source-filter-row input,
+.work-report-photo-target-chip input,
+.work-report-photo-target-toggle input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+}
+
+.work-report-source-filter-row small,
+.work-report-photo-target-chip small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 4px;
+}
+
+.work-report-source-filter-empty {
+  color: var(--muted);
+}
+
+.work-report-photo-target-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(13, 106, 103, 0.16);
+  background: rgba(244, 250, 248, 0.95);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.work-report-run-selected-match {
+  min-width: 210px;
+}
+
 @keyframes work-report-spin {
   from {
     transform: rotate(0deg);
@@ -1712,6 +1787,12 @@ body {
 
   .work-report-feedback-save {
     width: 100%;
+  }
+
+  .work-report-source-filter-head,
+  .work-report-photo-target-bar {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .work-report-review-head,

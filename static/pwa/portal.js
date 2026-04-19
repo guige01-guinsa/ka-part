@@ -102,6 +102,8 @@
   let workReportFeedbackSavePromise = null;
   let workReportFeedbackSaveQueued = false;
   let workReportFeedbackQueuedSilent = true;
+  let workReportSourceFilterBlocks = [];
+  let workReportSourceFilterSelectedKeys = new Set();
   let activeWorkReportPreviewIndex = 0;
   let currentIntakeStep = 1;
   let currentMobileWorkspace = "intake";
@@ -4193,6 +4195,127 @@
     return JSON.parse(JSON.stringify(value));
   }
 
+  function buildWorkReportSourceFilterBlocks(text) {
+    return String(text || "")
+      .split(/\r?\n/)
+      .map((line, index) => ({ line: String(line || ""), lineNumber: index + 1 }))
+      .filter((row) => row.line.trim())
+      .map((row, index) => ({
+        key: `source-line-${index + 1}`,
+        lineNumber: row.lineNumber,
+        text: row.line,
+      }));
+  }
+
+  function resetWorkReportSourceFilterState() {
+    workReportSourceFilterBlocks = [];
+    workReportSourceFilterSelectedKeys = new Set();
+    const box = $("#workReportSourceFilterBox");
+    if (box) {
+      box.classList.add("hidden");
+      box.innerHTML = "";
+    }
+    const note = $("#workReportSourceFilterNote");
+    if (note) {
+      note.textContent = "필요 없는 대화 줄을 먼저 제외하면, 남긴 원문만으로 작업 항목을 추출합니다.";
+    }
+  }
+
+  function currentWorkReportSourceText() {
+    const raw = String($("#chatInput")?.value || "");
+    if (!workReportSourceFilterBlocks.length || workReportSourceFilterSelectedKeys.size >= workReportSourceFilterBlocks.length) {
+      return raw.trim();
+    }
+    const selected = workReportSourceFilterBlocks
+      .filter((row) => workReportSourceFilterSelectedKeys.has(String(row.key || "")))
+      .map((row) => String(row.text || ""));
+    return selected.join("\n").trim();
+  }
+
+  function renderWorkReportSourceFilter() {
+    const box = $("#workReportSourceFilterBox");
+    if (!(box instanceof HTMLElement)) return;
+    if (!workReportSourceFilterBlocks.length) {
+      box.classList.add("hidden");
+      box.innerHTML = "";
+      return;
+    }
+    const selectedCount = workReportSourceFilterBlocks.filter((row) => workReportSourceFilterSelectedKeys.has(String(row.key || ""))).length;
+    const filteredActive = selectedCount > 0 && selectedCount < workReportSourceFilterBlocks.length;
+    const note = $("#workReportSourceFilterNote");
+    if (note) {
+      note.textContent = filteredActive
+        ? `원문 ${workReportSourceFilterBlocks.length}줄 중 ${selectedCount}줄만 분석에 사용합니다.`
+        : `원문 ${workReportSourceFilterBlocks.length}줄이 모두 분석 대상입니다. 필요 없는 줄만 해제하세요.`;
+    }
+    box.classList.remove("hidden");
+    box.innerHTML = [
+      '<div class="work-report-source-filter">',
+      '<div class="work-report-source-filter-head">',
+      `<div><strong>원문 선별</strong><p>${escapeHtml(filteredActive ? "체크된 줄만 작업 항목 추출에 사용합니다." : "필요 없는 대화 줄을 해제하면 그 줄은 분석에서 제외됩니다.")}</p></div>`,
+      '<div class="work-report-source-filter-actions">',
+      '<button class="ghost-btn work-report-source-filter-select-all" type="button">모두 선택</button>',
+      '<button class="ghost-btn work-report-source-filter-clear" type="button">필터 해제</button>',
+      '</div>',
+      '</div>',
+      workReportSourceFilterBlocks.length
+        ? `<div class="work-report-source-filter-list">${workReportSourceFilterBlocks.map((row) => {
+            const checked = workReportSourceFilterSelectedKeys.has(String(row.key || "")) ? " checked" : "";
+            return [
+              '<label class="work-report-source-filter-row">',
+              `<input class="work-report-source-filter-check" type="checkbox" data-source-filter-key="${escapeHtml(String(row.key || ""))}"${checked}>`,
+              '<span>',
+              `${escapeHtml(String(row.text || ""))}`,
+              `<small>${escapeHtml(`${Number(row.lineNumber || 0)}번째 줄`)}</small>`,
+              '</span>',
+              '</label>',
+            ].join("");
+          }).join("")}</div>`
+        : '<div class="work-report-source-filter-empty">선택할 원문 줄이 없습니다.</div>',
+      '</div>',
+    ].join("");
+  }
+
+  function prepareWorkReportSourceFilter() {
+    const raw = String($("#chatInput")?.value || "");
+    const blocks = buildWorkReportSourceFilterBlocks(raw);
+    if (!blocks.length) {
+      throw new Error("원문 선별은 카톡 대화 원문을 먼저 붙여 넣은 뒤 사용할 수 있습니다.");
+    }
+    workReportSourceFilterBlocks = blocks;
+    workReportSourceFilterSelectedKeys = new Set(blocks.map((row) => String(row.key || "")));
+    renderWorkReportSourceFilter();
+    $("#workReportSourceFilterBox")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    setMessage("#intakeMsg", `원문 ${blocks.length}줄을 불러왔습니다. 필요 없는 대화 줄만 해제한 뒤 1차 추출을 실행하세요.`);
+  }
+
+  function handleWorkReportSourceFilterChange(event) {
+    const target = event?.target;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains("work-report-source-filter-check")) return;
+    const key = String(target.getAttribute("data-source-filter-key") || "").trim();
+    if (!key) return;
+    if (target.checked) {
+      workReportSourceFilterSelectedKeys.add(key);
+    } else {
+      workReportSourceFilterSelectedKeys.delete(key);
+    }
+    renderWorkReportSourceFilter();
+  }
+
+  function handleWorkReportSourceFilterAction(event) {
+    const target = event?.target instanceof HTMLElement ? event.target.closest(".work-report-source-filter-select-all, .work-report-source-filter-clear") : null;
+    if (!(target instanceof HTMLElement)) return;
+    event.preventDefault();
+    if (target.classList.contains("work-report-source-filter-select-all")) {
+      workReportSourceFilterSelectedKeys = new Set(workReportSourceFilterBlocks.map((row) => String(row.key || "")));
+    } else {
+      workReportSourceFilterSelectedKeys = new Set(workReportSourceFilterBlocks.map((row) => String(row.key || "")));
+      resetWorkReportSourceFilterState();
+      return;
+    }
+    renderWorkReportSourceFilter();
+  }
+
   function normalizeWorkReportImageStage(stage) {
     const value = String(stage || "").trim();
     return WORK_REPORT_IMAGE_STAGE_OPTIONS.some((row) => row.value === value) ? value : "general";
@@ -4615,6 +4738,37 @@
     ].join("");
   }
 
+  function workReportSelectedImageItemIndexSet(report) {
+    return new Set(
+      (Array.isArray(report?.selected_image_item_indexes) ? report.selected_image_item_indexes : [])
+        .map((value) => Number(value || 0))
+        .filter((value) => value > 0)
+    );
+  }
+
+  function setWorkReportSelectedImageItem(report, itemIndex, checked) {
+    if (!report) return;
+    const current = workReportSelectedImageItemIndexSet(report);
+    const cleanIndex = Number(itemIndex || 0);
+    if (cleanIndex <= 0) return;
+    if (checked) {
+      current.add(cleanIndex);
+    } else {
+      current.delete(cleanIndex);
+    }
+    report.selected_image_item_indexes = Array.from(current).sort((left, right) => left - right);
+  }
+
+  function renderWorkReportSelectedImageTargetBar(report) {
+    const selectedCount = workReportSelectedImageItemIndexSet(report).size;
+    return [
+      '<div class="work-report-photo-target-bar">',
+      `<div><strong>사진 포함 항목 선택</strong><span>${escapeHtml(selectedCount ? `${selectedCount}건 선택됨` : "아직 선택한 항목이 없습니다.")}</span></div>`,
+      `<button class="action-btn work-report-run-selected-match" type="button"${selectedCount ? "" : " disabled"}>선택 항목만 이미지 매칭</button>`,
+      '</div>',
+    ].join("");
+  }
+
   function renderWorkReportResult(item) {
     const report = item || {};
     syncWorkReportItemOutputStates(report);
@@ -4626,6 +4780,7 @@
     const modeLabel = workReportAnalysisModeLabel(report);
     const reasonLabel = workReportAnalysisReasonLabel(report);
     const isRuleBasedMode = String(report?.analysis_model || "").trim() === "heuristic" || modeLabel === "규칙 기반";
+    const extractOnlyStage = String(report?.analysis_stage || "").trim() === "extract_only";
     const feedback = buildWorkReportFeedbackSummary(report, lastWorkReportBaseline);
     const feedbackSaved = !!feedback.signature && feedback.signature === lastWorkReportFeedbackSavedSignature;
     const feedbackDisabled = !feedback.changes.length || feedbackSaved;
@@ -4663,7 +4818,11 @@
     if (imageItems.length) {
       sections.push('<div class="detail-block">미리보기에서 체크된 사진만 PDF에 출력됩니다.</div>');
     }
-    if (imageItems.length || unmatchedImages.length) {
+    if (extractOnlyStage && Number(report?.image_input_count || 0) > 0 && items.length) {
+      sections.push('<div class="detail-block">불필요한 대화 내용을 먼저 제외한 뒤 작업 항목을 정리했습니다. 이제 실제로 사진이 붙어야 할 항목만 체크하고, 선택 항목만 이미지 매칭을 실행하세요.</div>');
+      sections.push(renderWorkReportSelectedImageTargetBar(report));
+    }
+    if (!extractOnlyStage && (imageItems.length || unmatchedImages.length)) {
       sections.push(
         `<div class="work-report-feedback-bar${feedback.changes.length && !feedbackSaved ? " is-dirty" : ""}${feedbackSaved ? " is-saved" : ""}">`
         + `<div class="work-report-feedback-summary"><strong>이미지 매칭 보정</strong><span>${escapeHtml(feedbackSummary)}</span></div>`
@@ -4672,12 +4831,12 @@
       );
       sections.push('<div class="detail-block">이미지 매칭이 애매하면 사진별로 연결 작업과 단계값을 직접 바꿀 수 있습니다. 저장한 수정 내역은 다음 매칭 개선용 피드백으로 누적됩니다.</div>');
     }
-    if (reviewQueue.length) {
+    if (!extractOnlyStage && reviewQueue.length) {
       sections.push("<div class=\"subhead\">애매한 이미지 검토 큐</div>");
       sections.push('<div class="detail-block">점수 차이가 작거나 단서가 약한 사진만 따로 모았습니다. 추천 후보를 누르거나 현재 선택을 확정하면 검토 큐에서 빠집니다.</div>');
       sections.push(`<div class="work-report-review-list">${reviewQueue.map((review) => renderWorkReportReviewCard(review)).join("")}</div>`);
     }
-    if (imageItems.length) {
+    if (!extractOnlyStage && imageItems.length) {
       sections.push("<div class=\"subhead\">사진 포함 작업 항목</div>");
       sections.push(
         `<div class="work-report-match-list">${imageItems.map((row, index) => [
@@ -4703,14 +4862,13 @@
       );
     }
     if (textOnlyItems.length) {
-      sections.push("<div class=\"subhead\">세대민원 및 기타 작업</div>");
+      sections.push(`<div class="subhead">${escapeHtml(extractOnlyStage ? "추출 작업 항목" : "세대민원 및 기타 작업")}</div>`);
       sections.push(
         `<div class="work-report-match-list">${textOnlyItems.map((row, index) => [
           '<article class="work-report-match-card">',
-          '<label class="work-report-item-toggle">',
-          `<input class="work-report-item-output-check" type="checkbox" data-item-index="${Number(row.index || 0)}"${row && row.include_in_output !== false ? " checked" : ""}>`,
-          '<span>이 항목 출력</span>',
-          '</label>',
+          extractOnlyStage
+            ? `<label class="work-report-photo-target-toggle"><input class="work-report-photo-target-check" type="checkbox" data-item-index="${Number(row.index || 0)}"${workReportSelectedImageItemIndexSet(report).has(Number(row.index || 0)) ? " checked" : ""}><span>이 항목은 사진 포함</span></label>`
+            : ['<label class="work-report-item-toggle">', `<input class="work-report-item-output-check" type="checkbox" data-item-index="${Number(row.index || 0)}"${row && row.include_in_output !== false ? " checked" : ""}>`, '<span>이 항목 출력</span>', '</label>'].join(""),
           `<strong>${escapeHtml(`${index + 1}. ${String(row.title || "-")}`)}</strong>`,
           `<p>${escapeHtml(`작업일자: ${String(row.work_date_label || row.work_date || "-")} / 작업자: ${String(row.vendor_name || "-")} / 위치: ${String(row.location_name || "-")}`)}</p>`,
           `<p>${escapeHtml(`내용설명 : ${String(row.summary || row.title || "-")}`)}</p>`,
@@ -4718,7 +4876,7 @@
         ].join("")).join("")}</div>`
       );
     }
-    if (unmatchedImages.length) {
+    if (!extractOnlyStage && unmatchedImages.length) {
       sections.push("<div class=\"subhead\">미매칭 자료</div>");
       sections.push(
         `<div class="work-report-image-select-list">${
@@ -5040,6 +5198,16 @@
     rerenderWorkReportPreview("미매칭 이미지도 체크된 항목만 PDF에 출력됩니다.");
   }
 
+  function handleWorkReportPhotoTargetToggle(event) {
+    const target = event?.target;
+    if (!(target instanceof HTMLInputElement) || !target.classList.contains("work-report-photo-target-check")) return;
+    if (!lastWorkReportResult) return;
+    const itemIndex = Number(target.getAttribute("data-item-index") || -1);
+    if (itemIndex <= 0) return;
+    setWorkReportSelectedImageItem(lastWorkReportResult, itemIndex, !!target.checked);
+    rerenderWorkReportPreview("사진이 실제로 포함된 항목만 체크한 뒤 선택 항목만 이미지 매칭을 실행하세요.");
+  }
+
   async function handleWorkReportImageAssignmentChange(event) {
     const target = event?.target;
     if (!(target instanceof HTMLSelectElement) || !target.classList.contains("work-report-image-assignment")) return;
@@ -5108,11 +5276,20 @@
     await saveWorkReportFeedback();
   }
 
+  async function handleWorkReportSelectedImageMatch(event) {
+    const target = event?.target instanceof HTMLElement ? event.target.closest(".work-report-run-selected-match") : null;
+    if (!(target instanceof HTMLElement)) return;
+    event.preventDefault();
+    await matchWorkReportSelectedItems();
+  }
+
   function workReportFormData(options = {}) {
     const includeCachedReport = !!options.includeCachedReport;
+    const deferImageMatching = !!options.deferImageMatching;
+    const includeImageSelection = !!options.includeImageSelection;
     const tenantId = currentTenantId();
     if (!tenantId) throw new Error("테넌트를 선택하세요.");
-    const text = String($("#chatInput")?.value || "").trim();
+    const text = currentWorkReportSourceText();
     const images = selectedFiles("#chatImageInput");
     const attachments = selectedFiles("#workReportFileInput");
     const sourceFiles = selectedFiles("#workReportSourceInput");
@@ -5128,6 +5305,14 @@
     attachments.forEach((file) => fd.append("attachments", file, file.name || "attachment"));
     if (sampleFile) {
       fd.append("sample_file", sampleFile, sampleFile.name || "sample");
+    }
+    if (deferImageMatching) {
+      fd.append("defer_image_matching", "1");
+    }
+    if (includeImageSelection && lastWorkReportResult) {
+      const selectedIndexes = Array.from(workReportSelectedImageItemIndexSet(lastWorkReportResult));
+      fd.append("report_json", JSON.stringify(deepCloneJson(lastWorkReportResult)));
+      fd.append("selected_image_item_indexes", selectedIndexes.join(","));
     }
     if (includeCachedReport && lastWorkReportResult) {
       fd.append("report_json", JSON.stringify(cloneWorkReportForPdf(lastWorkReportResult)));
@@ -5237,7 +5422,7 @@
     try {
       const created = await authFetchJson("/api/ai/work_report/jobs", {
         method: "POST",
-        body: workReportFormData(),
+        body: workReportFormData({ deferImageMatching: true }),
         timeoutMs: WORK_REPORT_REQUEST_TIMEOUT_MS,
       });
       const job = created.item || {};
@@ -5255,8 +5440,50 @@
       activeWorkReportPreviewIndex = 0;
       $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
       const previewNotice = String(lastWorkReportResult?.analysis_notice || "").trim();
-      const previewMessage = `미리보기에서 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`;
+      const previewMessage = Number(lastWorkReportResult?.image_input_count || 0) > 0
+        ? `1차 추출로 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다. 사진 포함 항목을 선택한 뒤 이미지 매칭을 이어서 실행하세요.`
+        : `1차 추출로 작업 ${Number(lastWorkReportResult?.item_count || 0)}건을 정리했습니다.`;
       setMessage("#intakeMsg", previewNotice ? `${previewMessage} ${previewNotice}` : previewMessage, !!previewNotice);
+    } catch (error) {
+      progress.fail(error);
+      throw error;
+    } finally {
+      progress.stop();
+    }
+  }
+
+  async function matchWorkReportSelectedItems() {
+    if (!lastWorkReportResult) {
+      throw new Error("먼저 1차 추출을 실행해 작업 항목을 만든 뒤 선택해 주세요.");
+    }
+    const selectedIndexes = Array.from(workReportSelectedImageItemIndexSet(lastWorkReportResult));
+    if (!selectedIndexes.length) {
+      throw new Error("사진이 실제로 포함된 작업 항목을 먼저 하나 이상 선택해 주세요.");
+    }
+    const progress = startWorkReportProgress("preview");
+    try {
+      const created = await authFetchJson("/api/ai/work_report/jobs", {
+        method: "POST",
+        body: workReportFormData({ includeImageSelection: true }),
+        timeoutMs: WORK_REPORT_REQUEST_TIMEOUT_MS,
+      });
+      const job = created.item || {};
+      lastWorkReportJobId = String(job.id || "");
+      progress.sync({
+        elapsedSec: job.elapsed_sec,
+        currentStep: job.current_step,
+        summary: job.summary || "선택 항목만 이미지 매칭을 시작했습니다.",
+        hint: job.hint || "",
+      });
+      const result = await pollWorkReportPreviewJob(String(job.id || ""), progress);
+      lastWorkReportResult = result || null;
+      lastWorkReportBaseline = deepCloneJson(result || null);
+      lastWorkReportFeedbackSavedSignature = "";
+      activeWorkReportPreviewIndex = 0;
+      $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
+      const notice = String(lastWorkReportResult?.analysis_notice || "").trim();
+      const message = `선택한 ${selectedIndexes.length}개 항목만 이미지 매칭을 실행했습니다.`;
+      setMessage("#intakeMsg", notice ? `${message} ${notice}` : message, !!notice);
     } catch (error) {
       progress.fail(error);
       throw error;
@@ -5268,6 +5495,9 @@
   async function downloadWorkReportPdf() {
     if (!lastWorkReportResult) {
       throw new Error("먼저 미리보기를 생성한 뒤, 미리보기에서 출력할 사진을 선택해 주세요.");
+    }
+    if (String(lastWorkReportResult?.analysis_stage || "").trim() === "extract_only" && Number(lastWorkReportResult?.image_input_count || 0) > 0) {
+      throw new Error("먼저 사진 포함 항목을 선택하고 '선택 항목만 이미지 매칭'을 실행한 뒤 PDF를 생성해 주세요.");
     }
     let savedFeedbackCount = 0;
     try {
@@ -5592,10 +5822,24 @@
     $("#btnPreviewDigestSource")?.addEventListener("click", () => previewChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnDownloadDigestSource")?.addEventListener("click", () => downloadChatSourceImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnPasteDigestImage")?.addEventListener("click", () => importClipboardImages().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
+    $("#btnPrepareWorkReportSourceFilter")?.addEventListener("click", () => {
+      try {
+        prepareWorkReportSourceFilter();
+      } catch (error) {
+        setMessage("#intakeMsg", error.message || String(error), true);
+      }
+    });
+    $("#workReportSourceFilterBox")?.addEventListener("change", (event) => {
+      handleWorkReportSourceFilterChange(event);
+    });
+    $("#workReportSourceFilterBox")?.addEventListener("click", (event) => {
+      handleWorkReportSourceFilterAction(event);
+    });
     $("#workReportBox")?.addEventListener("change", (event) => {
       handleWorkReportItemOutputToggle(event);
       handleWorkReportImageOutputToggle(event);
       handleWorkReportUnmatchedOutputToggle(event);
+      handleWorkReportPhotoTargetToggle(event);
       handleWorkReportImageAssignmentChange(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
       handleWorkReportImageStageChange(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
     });
@@ -5604,6 +5848,7 @@
       handleWorkReportReviewApply(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
       handleWorkReportReviewConfirm(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
       handleWorkReportFeedbackSave(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
+      handleWorkReportSelectedImageMatch(event).catch((error) => setMessage("#intakeMsg", error.message || String(error), true));
     });
     $("#btnAnalyzeWorkReport")?.addEventListener("click", () => analyzeWorkReport().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
     $("#btnWorkReportPdf")?.addEventListener("click", () => downloadWorkReportPdf().catch((error) => setMessage("#intakeMsg", error.message || String(error), true)));
@@ -5760,6 +6005,7 @@
       invalidateWorkReportCache();
       clearChatSourcePreview();
       resetDigestImportState();
+      resetWorkReportSourceFilterState();
       updateChatDigestHint();
     });
     $("#chatInput")?.addEventListener("paste", (event) => handleChatInputPaste(event));

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import uuid
 from io import BytesIO
@@ -418,6 +419,9 @@ def _write_work_report_batch_payload(
     image_inputs: List[Dict[str, Any]],
     attachment_inputs: List[Dict[str, Any]],
     sample: Dict[str, Any],
+    defer_image_matching: bool = False,
+    selected_image_item_indexes: List[int] | None = None,
+    base_report: Dict[str, Any] | None = None,
 ) -> None:
     target_dir = job_dir.resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -444,6 +448,9 @@ def _write_work_report_batch_payload(
             "source_name": str(sample.get("source_name") or ""),
             "kind": str(sample.get("kind") or ""),
         },
+        "defer_image_matching": bool(defer_image_matching),
+        "selected_image_item_indexes": [int(value) for value in list(selected_image_item_indexes or []) if int(value) > 0],
+        "base_report": base_report if isinstance(base_report, dict) else {},
     }
     metadata_path = (target_dir / WORK_REPORT_BATCH_METADATA_FILE).resolve()
     if not str(metadata_path).startswith(str(target_dir)):
@@ -509,6 +516,9 @@ def _read_work_report_batch_payload(job_dir: Path) -> Dict[str, Any]:
             "source_name": str((payload.get("sample") or {}).get("source_name") or ""),
             "kind": str((payload.get("sample") or {}).get("kind") or ""),
         },
+        "defer_image_matching": bool(payload.get("defer_image_matching")),
+        "selected_image_item_indexes": [int(value) for value in list(payload.get("selected_image_item_indexes") or []) if str(value).isdigit() and int(value) > 0],
+        "base_report": payload.get("base_report") if isinstance(payload.get("base_report"), dict) else {},
     }
 
 
@@ -552,6 +562,9 @@ def _execute_work_report_batch_preview(job_id: str, payload: Dict[str, Any]) -> 
         attachment_inputs=list(payload.get("attachments") or []),
         sample_title=str((payload.get("sample") or {}).get("title") or "").strip(),
         sample_lines=[str(line or "") for line in ((payload.get("sample") or {}).get("lines") or [])],
+        defer_image_matching=bool(payload.get("defer_image_matching")),
+        base_report=payload.get("base_report") if isinstance(payload.get("base_report"), dict) else None,
+        selected_image_item_indexes=[int(value) for value in list(payload.get("selected_image_item_indexes") or []) if int(value) > 0],
         progress_callback=progress_callback,
     )
     report["template_source_name"] = str((payload.get("sample") or {}).get("source_name") or "").strip()
@@ -788,6 +801,9 @@ async def ai_work_report_job_create(
     images: List[UploadFile] = File(default=[]),
     attachments: List[UploadFile] = File(default=[]),
     sample_file: UploadFile | None = File(default=None),
+    report_json: str = Form(default=""),
+    selected_image_item_indexes: str = Form(default=""),
+    defer_image_matching: str = Form(default=""),
 ) -> Dict[str, Any]:
     payload = {"tenant_id": tenant_id}
     resolved_tenant_id, user, tenant = _tenant_id_from_request(request, payload)
@@ -801,6 +817,21 @@ async def ai_work_report_job_create(
         raise HTTPException(status_code=400, detail=f"현장 사진은 최대 {MAX_WORK_REPORT_IMAGES}장까지 업로드할 수 있습니다.")
     attachment_inputs = await _read_work_report_attachments(list(attachments or []))
     sample = await _read_work_report_sample(sample_file)
+    defer_matching = str(defer_image_matching or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+    selected_item_indexes = [
+        int(value)
+        for value in re.split(r"[\s,]+", str(selected_image_item_indexes or "").strip())
+        if str(value or "").isdigit() and int(value) > 0
+    ]
+    base_report: Dict[str, Any] | None = None
+    if str(report_json or "").strip():
+        try:
+            parsed_report = json.loads(str(report_json or ""))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="report_json 형식이 잘못되었습니다.") from exc
+        if not isinstance(parsed_report, dict):
+            raise HTTPException(status_code=400, detail="report_json 형식이 잘못되었습니다.")
+        base_report = parsed_report
     if not source_text and not image_inputs and not reference_image_inputs and not attachment_inputs:
         raise HTTPException(status_code=400, detail="text, image, or attachment is required")
 
@@ -816,6 +847,9 @@ async def ai_work_report_job_create(
             image_inputs=image_inputs,
             attachment_inputs=attachment_inputs,
             sample=sample,
+            defer_image_matching=defer_matching,
+            selected_image_item_indexes=selected_item_indexes,
+            base_report=base_report,
         )
         item = create_work_report_job(
             job_id=job_id,

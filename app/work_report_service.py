@@ -2185,6 +2185,194 @@ def _build_text_summary(report_title: str, period_label: str, items: List[Dict[s
     return "\n".join(lines)
 
 
+def _normalize_existing_work_report_items(base_report: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(base_report, dict):
+        return []
+    rows = list(base_report.get("items") or []) if isinstance(base_report.get("items"), list) else []
+    items: List[Dict[str, Any]] = []
+    seen_indexes: set[int] = set()
+    for position, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        item_index = int(row.get("index") or 0)
+        if item_index <= 0 or item_index in seen_indexes:
+            item_index = position
+            while item_index in seen_indexes:
+                item_index += 1
+        seen_indexes.add(item_index)
+        attachments: List[Dict[str, Any]] = []
+        for attachment in list(row.get("attachments") or []):
+            if not isinstance(attachment, dict):
+                continue
+            attachments.append(
+                {
+                    "index": int(attachment.get("index") or 0),
+                    "filename": _collapse(attachment.get("filename") or ""),
+                    "preview_text": _collapse(attachment.get("preview_text") or ""),
+                }
+            )
+        items.append(
+            {
+                "index": item_index,
+                "title": _clean_item_title(row.get("title") or row.get("summary") or ""),
+                "work_date": _collapse(row.get("work_date") or ""),
+                "work_date_label": _collapse(row.get("work_date_label") or ""),
+                "vendor_name": _collapse(row.get("vendor_name") or ""),
+                "location_name": _collapse(row.get("location_name") or ""),
+                "summary": _collapse(row.get("summary") or row.get("title") or ""),
+                "confidence": _collapse(row.get("confidence") or "manual"),
+                "images": [],
+                "attachments": attachments,
+            }
+        )
+    return items
+
+
+def _normalize_existing_unmatched_attachments(base_report: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(base_report, dict):
+        return []
+    rows = list(base_report.get("unmatched_attachments") or []) if isinstance(base_report.get("unmatched_attachments"), list) else []
+    normalized: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        normalized.append(
+            {
+                "index": int(row.get("index") or 0),
+                "filename": _collapse(row.get("filename") or ""),
+            }
+        )
+    return normalized
+
+
+def _finalize_work_report_result(
+    *,
+    normalized_text: str,
+    sample_title: str,
+    report_title: str,
+    period_label: str,
+    items: List[Dict[str, Any]],
+    images: Sequence[Dict[str, Any]],
+    attachments: Sequence[Dict[str, Any]],
+    image_entries: Sequence[Dict[str, Any]],
+    unmatched_image_indexes: Sequence[int],
+    unmatched_attachment_indexes: Sequence[int],
+    analysis_notice: str,
+    analysis_model: str,
+    analysis_reason: str,
+    analysis_diagnostics: Dict[str, Any],
+    openai_failures: Sequence[Dict[str, str]],
+    tenant_feedback_profile: Optional[Dict[str, Any]] = None,
+    analysis_stage: str = "image_matched",
+    selected_image_item_indexes: Sequence[int] | None = None,
+    unmatched_attachments_override: Sequence[Dict[str, Any]] | None = None,
+    use_chunked_image_matching: bool = False,
+    reference_images: Sequence[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    dated_items = [item for item in items if item.get("work_date")]
+    if dated_items:
+        dates = sorted(item["work_date"] for item in dated_items)
+        if len(dates) == 1:
+            month = int(dates[0][5:7])
+            day = int(dates[0][8:10])
+            period_label = f"{month}월 {day}일"
+        else:
+            start_month = int(dates[0][5:7])
+            start_day = int(dates[0][8:10])
+            end_month = int(dates[-1][5:7])
+            end_day = int(dates[-1][8:10])
+            period_label = f"{start_month}월 {start_day}일 ~ {end_month}월 {end_day}일"
+
+    unmatched_images = [
+        {
+            "index": index,
+            "filename": images[index - 1].get("filename"),
+            "preview_available": bool(_collapse(images[index - 1].get("preview_relative_path") or "")),
+            "stage": _collapse(image_entries[index - 1].get("stage_hint") or "") or "general",
+            "stage_label": _stage_label(_collapse(image_entries[index - 1].get("stage_hint") or "") or "general"),
+        }
+        for index in unmatched_image_indexes
+        if 0 < int(index) <= len(images)
+    ]
+    if unmatched_attachments_override is None:
+        unmatched_attachments = [
+            {"index": index, "filename": attachments[index - 1].get("filename")}
+            for index in unmatched_attachment_indexes
+            if 0 < int(index) <= len(attachments)
+        ]
+    else:
+        unmatched_attachments = [dict(row) for row in list(unmatched_attachments_override or [])]
+
+    review_queue: List[Dict[str, Any]] = []
+    if analysis_stage != "extract_only":
+        review_queue = _attach_image_review_metadata(items, unmatched_images, image_entries, feedback_profile=tenant_feedback_profile)
+    for item in items:
+        item.pop("_minute_of_day", None)
+    image_items = [item for item in items if item.get("images")]
+    text_only_items = [item for item in items if not item.get("images")]
+    report_text = _build_text_summary(report_title, period_label, items, unmatched_images, unmatched_attachments, analysis_notice)
+    analysis_reason_label = _analysis_reason_label(analysis_reason)
+    analysis_mode_label = _analysis_mode_label(analysis_model, analysis_reason)
+    final_diagnostics = dict(analysis_diagnostics or {})
+    final_diagnostics["openai_failures"] = list(openai_failures or [])
+    final_diagnostics["final_model"] = analysis_model
+    final_diagnostics["final_reason"] = analysis_reason
+    final_diagnostics["review_queue_count"] = len(review_queue)
+    final_diagnostics["analysis_stage"] = analysis_stage
+    final_diagnostics["selected_image_item_count"] = len([value for value in list(selected_image_item_indexes or []) if int(value) > 0])
+    if analysis_reason or analysis_model == "heuristic":
+        logger.warning(
+            "work report analysis fallback: stage=%s model=%s reason=%s items=%s images=%s ref_images=%s attachments=%s chunked=%s failures=%s",
+            analysis_stage or "-",
+            analysis_model or "-",
+            analysis_reason or "-",
+            len(items),
+            len(images),
+            len(list(reference_images or [])),
+            len(attachments),
+            use_chunked_image_matching,
+            len(list(openai_failures or [])),
+        )
+    elif use_chunked_image_matching:
+        logger.info(
+            "work report analysis completed: stage=%s model=%s items=%s images=%s ref_images=%s attachments=%s chunked=%s",
+            analysis_stage or "-",
+            analysis_model or "-",
+            len(items),
+            len(images),
+            len(list(reference_images or [])),
+            len(attachments),
+            use_chunked_image_matching,
+        )
+    return {
+        "report_title": report_title,
+        "period_label": period_label,
+        "template_title": _collapse(sample_title) or report_title,
+        "analysis_model": analysis_model,
+        "analysis_mode_label": analysis_mode_label,
+        "analysis_reason": analysis_reason,
+        "analysis_reason_label": analysis_reason_label,
+        "analysis_notice": analysis_notice,
+        "analysis_diagnostics": final_diagnostics,
+        "analysis_stage": analysis_stage,
+        "image_selection_required": analysis_stage == "extract_only" and bool(images),
+        "selected_image_item_indexes": sorted({int(value) for value in list(selected_image_item_indexes or []) if int(value) > 0}),
+        "image_input_count": len(images),
+        "item_count": len(items),
+        "image_item_count": len(image_items),
+        "text_only_item_count": len(text_only_items),
+        "items": items,
+        "image_items": image_items,
+        "text_only_items": text_only_items,
+        "review_queue_count": len(review_queue),
+        "review_queue": review_queue,
+        "unmatched_images": unmatched_images,
+        "unmatched_attachments": unmatched_attachments,
+        "source_text_preview": [_collapse(line) for line in normalized_text.splitlines() if _collapse(line)][:16],
+        "report_text": report_text,
+    }
+
+
 def _openai_json_response(
     *,
     client: Any,
@@ -2789,6 +2977,9 @@ def analyze_work_report(
     attachment_inputs: Sequence[Dict[str, Any]] | None = None,
     sample_title: str = "",
     sample_lines: Sequence[str] | None = None,
+    defer_image_matching: bool = False,
+    base_report: Optional[Dict[str, Any]] = None,
+    selected_image_item_indexes: Sequence[int] | None = None,
     progress_callback: WorkReportProgressCallback | None = None,
 ) -> Dict[str, Any]:
     normalized_text = str(text or "")
@@ -2797,6 +2988,10 @@ def analyze_work_report(
     attachments = list(attachment_inputs or [])[:MAX_WORK_REPORT_ATTACHMENTS]
     sample_lines = list(sample_lines or [])
     image_heavy = len(images) >= WORK_REPORT_HEAVY_IMAGE_THRESHOLD
+    defer_image_matching = bool(defer_image_matching)
+    selected_item_index_set = {int(value) for value in list(selected_image_item_indexes or []) if int(value) > 0}
+    normalized_base_items = _normalize_existing_work_report_items(base_report)
+    normalized_base_unmatched_attachments = _normalize_existing_unmatched_attachments(base_report)
     if not _collapse(normalized_text) and not images and not reference_images and not attachments:
         raise ValueError("text, image, or attachment is required")
 
@@ -2814,7 +3009,7 @@ def analyze_work_report(
         WORK_REPORT_OPENAI_CHUNK_TRIGGER_IMAGES,
         minimum=1,
     )
-    use_chunked_image_matching = bool(images) and len(images) >= chunk_trigger_images
+    use_chunked_image_matching = bool(images) and len(images) >= chunk_trigger_images and not defer_image_matching and not normalized_base_items
     openai_failures: List[Dict[str, str]] = []
     analysis_diagnostics: Dict[str, Any] = {
         "input_image_count": len(images),
@@ -2843,6 +3038,103 @@ def analyze_work_report(
                     "details": _collapse(snapshot.get("details") or ""),
                 }
             )
+
+    if normalized_base_items:
+        _report_progress(
+            progress_callback,
+            current_step=1,
+            summary="선택된 작업 항목에만 현장 사진을 다시 매칭하고 있습니다.",
+            hint="사람이 고른 사진 포함 항목만 대상으로 이미지 매칭을 실행합니다.",
+        )
+        report_title = _collapse((base_report or {}).get("report_title") or _sample_heading(sample_title, sample_lines))
+        period_label = _collapse((base_report or {}).get("period_label") or _sample_period(sample_lines))
+        unmatched_attachment_indexes: List[int] = []
+        analysis_notice = ""
+        analysis_model = "manual-selection"
+        analysis_reason = ""
+        matched_items = [dict(item) for item in normalized_base_items]
+        if selected_item_index_set and images:
+            selected_items = [dict(item) for item in matched_items if int(item.get("index") or 0) in selected_item_index_set]
+            chunked_images = _openai_match_image_chunks(
+                text=normalized_text,
+                image_inputs=images,
+                items=selected_items,
+                progress_callback=progress_callback,
+                feedback_profile=tenant_feedback_profile,
+            )
+            if not chunked_images:
+                remember_openai_error("selected_image_match")
+                image_matches = _assign_entries(selected_items, image_entries, allow_chunk_fallback=False, feedback_profile=tenant_feedback_profile)
+                matched_indexes = {
+                    int(row.get("index") or 0)
+                    for rows in image_matches.values()
+                    for row in rows
+                    if int(row.get("index") or 0) > 0
+                }
+                selected_lookup = {
+                    int(item.get("index") or 0): item
+                    for item in _apply_image_matches_to_items(selected_items, image_matches)
+                }
+                matched_items = []
+                for item in normalized_base_items:
+                    clone = dict(item)
+                    selected = selected_lookup.get(int(clone.get("index") or 0))
+                    clone["images"] = list(selected.get("images") or []) if selected else []
+                    matched_items.append(clone)
+                unmatched_image_indexes = [
+                    int(row.get("index") or 0)
+                    for row in image_entries
+                    if int(row.get("index") or 0) > 0 and int(row.get("index") or 0) not in matched_indexes
+                ]
+                analysis_model = "heuristic"
+                analysis_reason = next((row["reason"] for row in openai_failures if _collapse(row.get("reason") or "")), "")
+                analysis_notice = "선택 항목 기준으로 규칙 기반 이미지 매칭을 적용했습니다."
+            else:
+                analysis_diagnostics["selected_image_match"] = dict(chunked_images.get("analysis_diagnostics") or {})
+                selected_lookup = {
+                    int(item.get("index") or 0): item
+                    for item in list(chunked_images.get("items") or [])
+                    if int(item.get("index") or 0) > 0
+                }
+                matched_items = []
+                for item in normalized_base_items:
+                    clone = dict(item)
+                    selected = selected_lookup.get(int(clone.get("index") or 0))
+                    clone["images"] = list(selected.get("images") or []) if selected else []
+                    matched_items.append(clone)
+                unmatched_image_indexes = list(chunked_images.get("unmatched_image_indexes") or [])
+                analysis_notice = _collapse(chunked_images.get("analysis_notice") or "")
+                analysis_model = _collapse(chunked_images.get("analysis_model") or "gpt-5.4")
+                analysis_reason = _collapse(chunked_images.get("analysis_reason") or "")
+        else:
+            unmatched_image_indexes = [int(row.get("index") or 0) for row in image_entries if int(row.get("index") or 0) > 0]
+            if images and not selected_item_index_set:
+                analysis_notice = "사진 포함 작업 항목이 아직 선택되지 않아 이미지 매칭을 실행하지 않았습니다."
+            else:
+                analysis_notice = "현장 사진이 없어 이미지 매칭을 실행하지 않았습니다."
+        return _finalize_work_report_result(
+            normalized_text=normalized_text,
+            sample_title=sample_title,
+            report_title=report_title,
+            period_label=period_label,
+            items=matched_items,
+            images=images,
+            attachments=attachments,
+            image_entries=image_entries,
+            unmatched_image_indexes=unmatched_image_indexes,
+            unmatched_attachment_indexes=unmatched_attachment_indexes,
+            unmatched_attachments_override=normalized_base_unmatched_attachments,
+            analysis_notice=analysis_notice,
+            analysis_model=analysis_model,
+            analysis_reason=analysis_reason,
+            analysis_diagnostics=analysis_diagnostics,
+            openai_failures=openai_failures,
+            tenant_feedback_profile=tenant_feedback_profile,
+            analysis_stage="selected_image_match",
+            selected_image_item_indexes=sorted(selected_item_index_set),
+            use_chunked_image_matching=bool(images),
+            reference_images=reference_images,
+        )
 
     ai_result: Dict[str, Any] | None = None
     if use_chunked_image_matching:
@@ -2911,7 +3203,7 @@ def analyze_work_report(
         )
         ai_result = _openai_work_report(
             text=normalized_text,
-            image_inputs=images,
+            image_inputs=[] if defer_image_matching else images,
             reference_image_inputs=reference_images,
             attachment_inputs=attachments,
             sample_title=sample_title,
@@ -2922,7 +3214,7 @@ def analyze_work_report(
             remember_openai_error("direct_extract")
         else:
             analysis_diagnostics["direct_extract"] = dict(ai_result.get("analysis_diagnostics") or {})
-    if not ai_result and images:
+    if not ai_result and images and not defer_image_matching:
         _report_progress(
             progress_callback,
             current_step=2,
@@ -2977,8 +3269,8 @@ def analyze_work_report(
         _report_progress(
             progress_callback,
             current_step=3,
-            summary="작업 항목과 현장 사진의 대응 관계를 정리하고 있습니다.",
-            hint="사진이 적어도 단계 정보와 위치 문맥을 다시 정리합니다.",
+            summary="작업 항목과 현장 사진의 대응 관계를 정리하고 있습니다." if not defer_image_matching else "작업 항목 추출을 마치고 사진 선택 단계를 준비하고 있습니다.",
+            hint="사진이 적어도 단계 정보와 위치 문맥을 다시 정리합니다." if not defer_image_matching else "사람이 사진 포함 항목을 고른 뒤 선택 항목만 이미지 매칭을 실행합니다.",
         )
         items = list(ai_result.get("items") or [])
         unmatched_image_indexes = list(ai_result.get("unmatched_image_indexes") or [])
@@ -3003,6 +3295,12 @@ def analyze_work_report(
                 items.append(item)
             supplement_notice = f"텍스트 전용 작업 {len(supplemental_items)}건을 추가로 보강했습니다."
             analysis_notice = supplement_notice if not analysis_notice else f"{analysis_notice} {supplement_notice}"
+        if defer_image_matching:
+            for item in items:
+                item["images"] = []
+            unmatched_image_indexes = [int(row.get("index") or 0) for row in image_entries if int(row.get("index") or 0) > 0]
+            selection_notice = "불필요한 대화 내용을 정리한 뒤 사진 포함 항목을 고르면, 선택된 항목만 AI 이미지 매칭을 실행합니다."
+            analysis_notice = selection_notice if not analysis_notice else f"{analysis_notice} {selection_notice}"
     else:
         _report_progress(
             progress_callback,
@@ -3154,10 +3452,10 @@ def analyze_work_report(
         _report_progress(
             progress_callback,
             current_step=3,
-            summary="원문에서 찾은 작업 후보와 사진/첨부를 보수적으로 매칭하고 있습니다.",
-            hint="근거가 약한 사진은 억지로 붙이지 않고 미매칭으로 남깁니다.",
+            summary="원문에서 찾은 작업 후보와 사진/첨부를 보수적으로 매칭하고 있습니다." if not defer_image_matching else "원문에서 찾은 작업 후보를 정리하고 사진 선택 단계를 준비하고 있습니다.",
+            hint="근거가 약한 사진은 억지로 붙이지 않고 미매칭으로 남깁니다." if not defer_image_matching else "사진 매칭은 아직 실행하지 않고 작업 후보만 먼저 정리합니다.",
         )
-        explicit_image_matches, remaining_images = _assign_images_by_notices(explicit_items, image_entries)
+        explicit_image_matches, remaining_images = _assign_images_by_notices(explicit_items, image_entries) if not defer_image_matching else ({}, list(image_entries))
         items = _merge_explicit_items(explicit_items, explicit_image_matches)
         if not items and attachments:
             for entry in attachments:
@@ -3210,7 +3508,7 @@ def analyze_work_report(
                 item.get("_attachment_notice_tokens") for item in items
             ):
                 attachment_matches, remaining_attachments = _assign_entries_by_expected_counts(items, attachment_entries, "_expected_attachment_count")
-            if remaining_images:
+            if remaining_images and not defer_image_matching:
                 score_matches = _assign_entries(items, remaining_images, allow_chunk_fallback=False, feedback_profile=tenant_feedback_profile)
                 for item_index, rows in score_matches.items():
                     image_matches[item_index].extend(rows)
@@ -3256,6 +3554,9 @@ def analyze_work_report(
                 item.pop("_image_notices", None)
                 item.pop("_attachment_notice_texts", None)
                 item.pop("_attachment_notice_tokens", None)
+        if defer_image_matching:
+            selection_notice = "불필요한 대화 내용을 정리한 뒤 사진 포함 항목을 고르면, 선택된 항목만 AI 이미지 매칭을 실행합니다."
+            analysis_notice = selection_notice if not analysis_notice else f"{analysis_notice} {selection_notice}"
 
     _report_progress(
         progress_callback,
@@ -3264,90 +3565,25 @@ def analyze_work_report(
         hint="사진 선별 출력과 PDF 재사용에 필요한 결과를 저장합니다.",
     )
 
-    dated_items = [item for item in items if item.get("work_date")]
-    if dated_items:
-        dates = sorted(item["work_date"] for item in dated_items)
-        if len(dates) == 1:
-            month = int(dates[0][5:7])
-            day = int(dates[0][8:10])
-            period_label = f"{month}월 {day}일"
-        else:
-            start_month = int(dates[0][5:7])
-            start_day = int(dates[0][8:10])
-            end_month = int(dates[-1][5:7])
-            end_day = int(dates[-1][8:10])
-            period_label = f"{start_month}월 {start_day}일 ~ {end_month}월 {end_day}일"
-
-    unmatched_images = [
-        {
-            "index": index,
-            "filename": images[index - 1].get("filename"),
-            "preview_available": bool(_collapse(images[index - 1].get("preview_relative_path") or "")),
-            "stage": _collapse(image_entries[index - 1].get("stage_hint") or "") or "general",
-            "stage_label": _stage_label(_collapse(image_entries[index - 1].get("stage_hint") or "") or "general"),
-        }
-        for index in unmatched_image_indexes
-        if 0 < int(index) <= len(images)
-    ]
-    unmatched_attachments = [
-        {"index": index, "filename": attachments[index - 1].get("filename")}
-        for index in unmatched_attachment_indexes
-        if 0 < int(index) <= len(attachments)
-    ]
-    review_queue = _attach_image_review_metadata(items, unmatched_images, image_entries, feedback_profile=tenant_feedback_profile)
-    for item in items:
-        item.pop("_minute_of_day", None)
-    image_items = [item for item in items if item.get("images")]
-    text_only_items = [item for item in items if not item.get("images")]
-    report_text = _build_text_summary(report_title, period_label, items, unmatched_images, unmatched_attachments, analysis_notice)
-    analysis_reason_label = _analysis_reason_label(analysis_reason)
-    analysis_mode_label = _analysis_mode_label(analysis_model, analysis_reason)
-    analysis_diagnostics["openai_failures"] = openai_failures
-    analysis_diagnostics["final_model"] = analysis_model
-    analysis_diagnostics["final_reason"] = analysis_reason
-    analysis_diagnostics["review_queue_count"] = len(review_queue)
-    if analysis_reason or analysis_model == "heuristic":
-        logger.warning(
-            "work report analysis fallback: model=%s reason=%s items=%s images=%s ref_images=%s attachments=%s chunked=%s failures=%s",
-            analysis_model or "-",
-            analysis_reason or "-",
-            len(items),
-            len(images),
-            len(reference_images),
-            len(attachments),
-            use_chunked_image_matching,
-            len(openai_failures),
-        )
-    elif use_chunked_image_matching:
-        logger.info(
-            "work report analysis completed: model=%s items=%s images=%s ref_images=%s attachments=%s chunked=%s",
-            analysis_model or "-",
-            len(items),
-            len(images),
-            len(reference_images),
-            len(attachments),
-            use_chunked_image_matching,
-        )
-    return {
-        "report_title": report_title,
-        "period_label": period_label,
-        "template_title": _collapse(sample_title) or report_title,
-        "analysis_model": analysis_model,
-        "analysis_mode_label": analysis_mode_label,
-        "analysis_reason": analysis_reason,
-        "analysis_reason_label": analysis_reason_label,
-        "analysis_notice": analysis_notice,
-        "analysis_diagnostics": analysis_diagnostics,
-        "item_count": len(items),
-        "image_item_count": len(image_items),
-        "text_only_item_count": len(text_only_items),
-        "items": items,
-        "image_items": image_items,
-        "text_only_items": text_only_items,
-        "review_queue_count": len(review_queue),
-        "review_queue": review_queue,
-        "unmatched_images": unmatched_images,
-        "unmatched_attachments": unmatched_attachments,
-        "source_text_preview": [_collapse(line) for line in normalized_text.splitlines() if _collapse(line)][:16],
-        "report_text": report_text,
-    }
+    return _finalize_work_report_result(
+        normalized_text=normalized_text,
+        sample_title=sample_title,
+        report_title=report_title,
+        period_label=period_label,
+        items=items,
+        images=images,
+        attachments=attachments,
+        image_entries=image_entries,
+        unmatched_image_indexes=unmatched_image_indexes,
+        unmatched_attachment_indexes=unmatched_attachment_indexes,
+        analysis_notice=analysis_notice,
+        analysis_model=analysis_model,
+        analysis_reason=analysis_reason,
+        analysis_diagnostics=analysis_diagnostics,
+        openai_failures=openai_failures,
+        tenant_feedback_profile=tenant_feedback_profile,
+        analysis_stage="extract_only" if defer_image_matching else "image_matched",
+        selected_image_item_indexes=sorted(selected_item_index_set),
+        use_chunked_image_matching=use_chunked_image_matching,
+        reference_images=reference_images,
+    )

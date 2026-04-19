@@ -139,16 +139,16 @@ def test_build_info_endpoints_expose_release_and_asset_versions(app_client) -> N
     api_response = client.get("/api/build_info")
     assert api_response.status_code == 200
     api_payload = api_response.json()
-    assert api_payload["release_id"] == "2026-04-19-autosave-1"
-    assert api_payload["static_assets"]["pwa_asset_version"] == "20260419e"
+    assert api_payload["release_id"] == "2026-04-19-sourcefilter-1"
+    assert api_payload["static_assets"]["pwa_asset_version"] == "20260419f"
     assert api_payload["frontend_expectations"]["build_info_page"] == "/diag/build"
     assert api_response.headers["cache-control"].startswith("no-store")
 
     html_response = client.get("/diag/build")
     assert html_response.status_code == 200
     assert "text/html" in html_response.headers["content-type"]
-    assert "2026-04-19-autosave-1" in html_response.text
-    assert "20260419e" in html_response.text
+    assert "2026-04-19-sourcefilter-1" in html_response.text
+    assert "20260419f" in html_response.text
     assert "/api/build_info" in html_response.text
 
 
@@ -838,6 +838,135 @@ def test_work_report_analysis_exposes_timeout_diagnostics_on_heuristic_fallback(
     failures = result["analysis_diagnostics"]["openai_failures"]
     assert failures[0]["stage"] == "direct_extract"
     assert failures[0]["reason"] == "api_timeout"
+
+
+def test_work_report_analysis_can_defer_image_matching_until_user_selection(monkeypatch) -> None:
+    import app.work_report_service as service
+
+    def _fake_openai_work_report(
+        *,
+        text,
+        image_inputs,
+        reference_image_inputs,
+        attachment_inputs,
+        sample_title,
+        sample_lines,
+        feedback_profile=None,
+    ):
+        assert list(image_inputs or []) == []
+        return {
+            "report_title": "시설팀 주요 업무 보고",
+            "period_label": "4월 19일",
+            "items": [
+                {
+                    "index": 1,
+                    "title": "103동 자동폐쇄장치 기판 교체",
+                    "work_date": "2026-04-19",
+                    "work_date_label": "4월 19일",
+                    "vendor_name": "조은",
+                    "location_name": "103동 21층",
+                    "summary": "자동폐쇄장치 기판 교체",
+                    "confidence": "high",
+                    "images": [],
+                    "attachments": [],
+                }
+            ],
+            "unmatched_image_indexes": [],
+            "unmatched_attachment_indexes": [],
+            "analysis_notice": "",
+            "analysis_model": "gpt-5.4",
+            "analysis_diagnostics": {},
+        }
+
+    monkeypatch.setattr(service, "_openai_work_report", _fake_openai_work_report)
+
+    result = service.analyze_work_report(
+        "2026년 4월 19일 오전 9:00, 관리실 : 103동 자동폐쇄장치 기판 교체",
+        image_inputs=[
+            {"filename": "KakaoTalk_20260419_090001.jpg", "bytes": b"img-1", "content_type": "image/jpeg"},
+            {"filename": "KakaoTalk_20260419_090101.jpg", "bytes": b"img-2", "content_type": "image/jpeg"},
+        ],
+        defer_image_matching=True,
+    )
+
+    assert result["analysis_stage"] == "extract_only"
+    assert result["image_selection_required"] is True
+    assert result["selected_image_item_indexes"] == []
+    assert len(result["items"]) == 1
+    assert result["items"][0]["images"] == []
+    assert [int(row["index"]) for row in result["unmatched_images"]] == [1, 2]
+
+
+def test_work_report_analysis_matches_only_user_selected_photo_items(monkeypatch) -> None:
+    import app.work_report_service as service
+
+    def _fake_openai_match_image_chunks(*, text, image_inputs, items, progress_callback=None, feedback_profile=None):
+        assert [int(item["index"]) for item in items] == [2]
+        return {
+            "items": [
+                {
+                    **dict(items[0]),
+                    "images": [
+                        {"index": 1, "filename": "KakaoTalk_20260419_091000.jpg", "stage": "before", "stage_label": "작업 전"},
+                        {"index": 2, "filename": "KakaoTalk_20260419_091100.jpg", "stage": "after", "stage_label": "작업 후"},
+                    ],
+                }
+            ],
+            "unmatched_image_indexes": [],
+            "analysis_notice": "선택 항목만 이미지 매칭을 완료했습니다.",
+            "analysis_model": "gpt-5.4",
+            "analysis_reason": "",
+            "analysis_diagnostics": {},
+        }
+
+    monkeypatch.setattr(service, "_openai_match_image_chunks", _fake_openai_match_image_chunks)
+
+    base_report = {
+        "report_title": "시설팀 주요 업무 보고",
+        "period_label": "4월 19일",
+        "items": [
+            {
+                "index": 1,
+                "title": "101동 센서등 점검",
+                "summary": "101동 센서등 점검",
+                "work_date": "2026-04-19",
+                "work_date_label": "4월 19일",
+                "vendor_name": "관리실",
+                "location_name": "101동",
+                "attachments": [],
+            },
+            {
+                "index": 2,
+                "title": "103동 자동폐쇄장치 기판 교체",
+                "summary": "103동 자동폐쇄장치 기판 교체",
+                "work_date": "2026-04-19",
+                "work_date_label": "4월 19일",
+                "vendor_name": "조은",
+                "location_name": "103동 21층",
+                "attachments": [],
+            },
+        ],
+    }
+
+    result = service.analyze_work_report(
+        "2026년 4월 19일 오전 9:00, 관리실 : 103동 자동폐쇄장치 기판 교체",
+        image_inputs=[
+            {"filename": "KakaoTalk_20260419_091000.jpg", "bytes": b"img-1", "content_type": "image/jpeg"},
+            {"filename": "KakaoTalk_20260419_091100.jpg", "bytes": b"img-2", "content_type": "image/jpeg"},
+        ],
+        base_report=base_report,
+        selected_image_item_indexes=[2],
+    )
+
+    assert result["analysis_stage"] == "selected_image_match"
+    assert result["selected_image_item_indexes"] == [2]
+    first_item = next(row for row in result["items"] if int(row["index"]) == 1)
+    second_item = next(row for row in result["items"] if int(row["index"]) == 2)
+    assert first_item["images"] == []
+    assert [str(image["filename"]) for image in second_item["images"]] == [
+        "KakaoTalk_20260419_091000.jpg",
+        "KakaoTalk_20260419_091100.jpg",
+    ]
 
 
 def test_work_report_cluster_candidate_lines_prioritize_nearby_location_match() -> None:
