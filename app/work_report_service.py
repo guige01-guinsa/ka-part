@@ -1334,7 +1334,15 @@ def _feedback_few_shot_lines(feedback_profile: Optional[Dict[str, Any]], *, limi
 def _load_work_report_feedback_profile(tenant_id: str) -> Dict[str, Any]:
     clean_tenant_id = _collapse(tenant_id).lower()
     if not clean_tenant_id:
-        return {"tenant_id": "", "rows_used": 0, "positive_tokens": {}, "negative_tokens": {}, "few_shot_examples": []}
+        return {
+            "tenant_id": "",
+            "rows_used": 0,
+            "positive_tokens": {},
+            "negative_tokens": {},
+            "preferred_title_keys": {},
+            "rejected_title_keys": {},
+            "few_shot_examples": [],
+        }
     try:
         from .db import list_work_report_image_feedback
         from .work_report_learning import build_feedback_few_shot_examples
@@ -1342,10 +1350,20 @@ def _load_work_report_feedback_profile(tenant_id: str) -> Dict[str, Any]:
         rows = list_work_report_image_feedback(tenant_id=clean_tenant_id, limit=300)
     except Exception:
         logger.exception("failed to load work report feedback profile: tenant_id=%s", clean_tenant_id)
-        return {"tenant_id": clean_tenant_id, "rows_used": 0, "positive_tokens": {}, "negative_tokens": {}, "few_shot_examples": []}
+        return {
+            "tenant_id": clean_tenant_id,
+            "rows_used": 0,
+            "positive_tokens": {},
+            "negative_tokens": {},
+            "preferred_title_keys": {},
+            "rejected_title_keys": {},
+            "few_shot_examples": [],
+        }
 
     positive_tokens: Dict[str, float] = {}
     negative_tokens: Dict[str, float] = {}
+    preferred_title_keys: Dict[str, float] = {}
+    rejected_title_keys: Dict[str, float] = {}
     rows_used = 0
     few_shot_examples = build_feedback_few_shot_examples(rows, limit=8)
     for row in rows:
@@ -1368,9 +1386,12 @@ def _load_work_report_feedback_profile(tenant_id: str) -> Dict[str, Any]:
             weight *= 0.9
 
         to_item_index = int(row.get("to_item_index") or 0)
+        chosen_title_key = _title_key(row.get("to_item_title") or "")
+        from_title_key = _title_key(row.get("from_item_title") or "")
         chosen_tokens = _feedback_title_tokens(row.get("to_item_title") or "")
         from_tokens = _feedback_title_tokens(row.get("from_item_title") or "")
         candidate_tokens: List[set[str]] = []
+        rejected_title_candidates: List[str] = []
         try:
             candidate_items = json.loads(str(row.get("candidate_items_json") or "[]"))
         except Exception:
@@ -1386,15 +1407,24 @@ def _load_work_report_feedback_profile(tenant_id: str) -> Dict[str, Any]:
                 if candidate_item_index == to_item_index and chosen_tokens:
                     continue
                 candidate_tokens.append(tokens)
+                candidate_title_key = _title_key(candidate.get("title") or "")
+                if candidate_title_key and candidate_title_key != chosen_title_key:
+                    rejected_title_candidates.append(candidate_title_key)
         rejected_tokens: set[str] = set()
         for tokens in candidate_tokens:
             rejected_tokens.update(tokens)
+        if chosen_title_key:
+            preferred_title_keys[chosen_title_key] = preferred_title_keys.get(chosen_title_key, 0.0) + weight
         if feedback_type == "reassign_item" and from_tokens:
             rejected_tokens.update(from_tokens)
+        if feedback_type == "reassign_item" and from_title_key and from_title_key != chosen_title_key:
+            rejected_title_candidates.append(from_title_key)
         if feedback_type == "mark_unmatched":
             for tokens in candidate_tokens:
                 for token in tokens:
                     negative_tokens[token] = negative_tokens.get(token, 0.0) + weight
+            for rejected_title_key in rejected_title_candidates:
+                rejected_title_keys[rejected_title_key] = rejected_title_keys.get(rejected_title_key, 0.0) + weight
             rows_used += 1
             continue
         positive_signal = chosen_tokens - rejected_tokens if chosen_tokens else set()
@@ -1406,12 +1436,16 @@ def _load_work_report_feedback_profile(tenant_id: str) -> Dict[str, Any]:
                 positive_tokens[token] = positive_tokens.get(token, 0.0) + weight
         for token in negative_signal:
             negative_tokens[token] = negative_tokens.get(token, 0.0) + (weight * 0.9)
+        for rejected_title_key in rejected_title_candidates:
+            rejected_title_keys[rejected_title_key] = rejected_title_keys.get(rejected_title_key, 0.0) + (weight * 0.9)
         rows_used += 1
     return {
         "tenant_id": clean_tenant_id,
         "rows_used": rows_used,
         "positive_tokens": positive_tokens,
         "negative_tokens": negative_tokens,
+        "preferred_title_keys": preferred_title_keys,
+        "rejected_title_keys": rejected_title_keys,
         "few_shot_examples": few_shot_examples,
     }
 
@@ -1442,6 +1476,35 @@ def _tenant_feedback_bonus(item: Dict[str, Any], feedback_profile: Optional[Dict
         "bonus": bonus,
         "positive_tokens": positive_hits[:3],
         "negative_tokens": negative_hits[:3],
+    }
+
+
+def _tenant_feedback_title_bonus(item: Dict[str, Any], feedback_profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    profile = dict(feedback_profile or {})
+    if int(profile.get("rows_used") or 0) <= 0:
+        return {"bonus": 0, "preferred_weight": 0.0, "rejected_weight": 0.0}
+    item_title_key = _title_key(item.get("title") or "")
+    if not item_title_key:
+        return {"bonus": 0, "preferred_weight": 0.0, "rejected_weight": 0.0}
+    preferred_map = dict(profile.get("preferred_title_keys") or {})
+    rejected_map = dict(profile.get("rejected_title_keys") or {})
+    preferred_weight = float(preferred_map.get(item_title_key) or 0.0)
+    rejected_weight = float(rejected_map.get(item_title_key) or 0.0)
+    raw_score = preferred_weight - rejected_weight
+    if raw_score >= 6.0:
+        bonus = 8
+    elif raw_score >= 3.0:
+        bonus = 5
+    elif raw_score <= -5.0:
+        bonus = -6
+    elif raw_score <= -2.0:
+        bonus = -3
+    else:
+        bonus = 0
+    return {
+        "bonus": bonus,
+        "preferred_weight": preferred_weight,
+        "rejected_weight": rejected_weight,
     }
 
 
@@ -1539,6 +1602,7 @@ def _match_score_breakdown(
         "month_day_bonus": 0,
         "vendor_bonus": 0,
         "feedback_bonus": 0,
+        "feedback_title_bonus": 0,
         "feedback_positive_tokens": [],
         "feedback_negative_tokens": [],
         "score": 0,
@@ -1566,6 +1630,9 @@ def _match_score_breakdown(
     result["feedback_positive_tokens"] = list(feedback.get("positive_tokens") or [])
     result["feedback_negative_tokens"] = list(feedback.get("negative_tokens") or [])
     score += int(feedback.get("bonus") or 0)
+    title_feedback = _tenant_feedback_title_bonus(item, feedback_profile)
+    result["feedback_title_bonus"] = int(title_feedback.get("bonus") or 0)
+    score += int(title_feedback.get("bonus") or 0)
     result["score"] = score
     return result
 
@@ -1595,6 +1662,8 @@ def _image_candidate_reason_parts(breakdown: Dict[str, Any]) -> List[str]:
         parts.append("업체명 단서 일치")
     if int(breakdown.get("feedback_bonus") or 0) > 0:
         parts.append("누적 피드백 보정")
+    if int(breakdown.get("feedback_title_bonus") or 0) > 0:
+        parts.append("사람 확정 작업 재학습")
     if not parts:
         parts.append("명확한 단서는 약함")
     return parts

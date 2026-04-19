@@ -1215,6 +1215,59 @@ def test_work_report_analysis_uses_tenant_feedback_to_rerank_ambiguous_candidate
     assert result["analysis_diagnostics"]["tenant_feedback_rows_used"] == 1
 
 
+def test_work_report_analysis_uses_exact_human_selected_title_to_break_same_token_ties(monkeypatch) -> None:
+    import app.work_report_service as service
+
+    monkeypatch.setattr(service, "_openai_work_report", lambda **kwargs: None)
+
+    db_module = importlib.import_module("app.db")
+    monkeypatch.setattr(
+        db_module,
+        "list_work_report_image_feedback",
+        lambda *, tenant_id, limit=100: [
+            {
+                "feedback_type": "reassign_item",
+                "to_item_index": 2,
+                "to_item_title": "103-1/2라인 21층 방화문 자동폐쇄장치 기판 수리",
+                "from_item_index": 1,
+                "from_item_title": "103-1/2라인 21층 방화문 자동폐쇄장치 기판 교체",
+                "review_confidence": "low",
+                "candidate_items_json": json.dumps(
+                    [
+                        {"item_index": 1, "title": "103-1/2라인 21층 방화문 자동폐쇄장치 기판 교체", "score": 8},
+                        {"item_index": 2, "title": "103-1/2라인 21층 방화문 자동폐쇄장치 기판 수리", "score": 8},
+                    ],
+                    ensure_ascii=False,
+                ),
+            }
+        ],
+    )
+
+    result = service.analyze_work_report(
+        "\n".join(
+            [
+                "2026년 7월 2일 수요일",
+                "[관리실] [오전 9:10] 103-1/2라인 21층 방화문 자동폐쇄장치 기판 교체",
+                "[관리실] [오전 9:10] 103-1/2라인 21층 방화문 자동폐쇄장치 기판 수리",
+            ]
+        ),
+        tenant_id="ys_thesharp",
+        image_inputs=[
+            {
+                "filename": "KakaoTalk_20260702_091000.jpg",
+                "bytes": b"fake-image",
+                "content_type": "image/jpeg",
+            }
+        ],
+    )
+
+    second_item = next(row for row in result["items"] if "기판 수리" in str(row["title"]))
+    assert [str(image["filename"]) for image in second_item["images"]] == ["KakaoTalk_20260702_091000.jpg"]
+    candidates = result["review_queue"][0]["candidate_items"] if result["review_queue"] else []
+    if candidates:
+        assert candidates[0]["title"].endswith("기판 수리")
+
+
 def test_work_report_finalize_image_stages_keeps_all_matched_images() -> None:
     from app.work_report_service import _finalize_image_stages
 
