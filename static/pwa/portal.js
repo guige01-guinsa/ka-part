@@ -4224,6 +4224,23 @@
     return report.items.find((row) => Number(row?.index || 0) === Number(itemIndex || 0)) || null;
   }
 
+  function syncWorkReportItemOutputState(item) {
+    if (!item || typeof item !== "object") return;
+    const images = Array.isArray(item.images) ? item.images : [];
+    if (images.some((image) => image && image.include_in_output !== false)) {
+      item.include_in_output = true;
+      return;
+    }
+    if (item.include_in_output === undefined) {
+      item.include_in_output = true;
+    }
+  }
+
+  function syncWorkReportItemOutputStates(report) {
+    if (!report || !Array.isArray(report.items)) return;
+    report.items.forEach((item) => syncWorkReportItemOutputState(item));
+  }
+
   function workReportImageKey(image, fallbackKey = "") {
     const index = Number(image?.index || 0);
     if (index > 0) return `id:${index}`;
@@ -4591,6 +4608,7 @@
 
   function renderWorkReportResult(item) {
     const report = item || {};
+    syncWorkReportItemOutputStates(report);
     const items = Array.isArray(report.items) ? report.items : [];
     const imageItems = items.filter((row) => Array.isArray(row.images) && row.images.length);
     const textOnlyItems = items.filter((row) => !Array.isArray(row.images) || !row.images.length);
@@ -4743,6 +4761,7 @@
 
   function rerenderWorkReportPreview(message = "", isError = false) {
     if (lastWorkReportResult) {
+      syncWorkReportItemOutputStates(lastWorkReportResult);
       $("#workReportBox").innerHTML = renderWorkReportResult(lastWorkReportResult);
     }
     if (message) {
@@ -4782,12 +4801,13 @@
     let sourceList = [];
     let sourceRow = null;
     let sourcePosition = -1;
+    let sourceItem = null;
     if (sourceKind === "unmatched") {
       sourceList = Array.isArray(lastWorkReportResult.unmatched_images) ? lastWorkReportResult.unmatched_images : [];
       sourcePosition = Number(unmatchedIndex || -1);
       sourceRow = sourceList[sourcePosition] || null;
     } else {
-      const sourceItem = workReportItemByIndex(lastWorkReportResult, itemIndex);
+      sourceItem = workReportItemByIndex(lastWorkReportResult, itemIndex);
       if (!sourceItem) return false;
       sourceItem.images = Array.isArray(sourceItem.images) ? sourceItem.images : [];
       sourceList = sourceItem.images;
@@ -4797,11 +4817,12 @@
     if (!sourceRow) return false;
 
     let targetList = null;
+    let targetItem = null;
     if (nextDestination === "__unmatched__") {
       lastWorkReportResult.unmatched_images = Array.isArray(lastWorkReportResult.unmatched_images) ? lastWorkReportResult.unmatched_images : [];
       targetList = lastWorkReportResult.unmatched_images;
     } else {
-      const targetItem = workReportItemByIndex(lastWorkReportResult, Number(nextDestination || 0));
+      targetItem = workReportItemByIndex(lastWorkReportResult, Number(nextDestination || 0));
       if (!targetItem) return false;
       targetItem.images = Array.isArray(targetItem.images) ? targetItem.images : [];
       targetList = targetItem.images;
@@ -4813,6 +4834,8 @@
     targetList.push(moved);
     syncWorkReportImageCollection(sourceList);
     syncWorkReportImageCollection(targetList);
+    syncWorkReportItemOutputState(sourceItem);
+    syncWorkReportItemOutputState(targetItem);
     if (Array.isArray(lastWorkReportResult.unmatched_images)) {
       syncWorkReportImageCollection(lastWorkReportResult.unmatched_images);
     }
@@ -4878,7 +4901,8 @@
   function syncWorkReportPendingEditsFromDom() {
     if (!lastWorkReportResult) return;
     const root = $("#workReportBox");
-    if (!(root instanceof HTMLElement)) return;
+    if (!(root instanceof HTMLElement)) return false;
+    let changed = false;
 
     root.querySelectorAll(".work-report-image-assignment").forEach((element) => {
       if (!(element instanceof HTMLSelectElement)) return;
@@ -4889,7 +4913,7 @@
       const currentValue = location.sourceType === "unmatched" ? "__unmatched__" : String(location.itemIndex);
       const nextValue = String(element.value || "__unmatched__");
       if (nextValue === currentValue) return;
-      moveWorkReportImageByKey(imageKey, nextValue);
+      changed = moveWorkReportImageByKey(imageKey, nextValue) || changed;
     });
 
     root.querySelectorAll(".work-report-image-stage").forEach((element) => {
@@ -4901,8 +4925,10 @@
       const currentStage = normalizeWorkReportImageStage(location.row.stage);
       const nextStage = normalizeWorkReportImageStage(element.value);
       if (currentStage === nextStage) return;
-      updateWorkReportImageStageByKey(imageKey, nextStage);
+      changed = updateWorkReportImageStageByKey(imageKey, nextStage) || changed;
     });
+    syncWorkReportItemOutputStates(lastWorkReportResult);
+    return changed;
   }
 
   async function saveWorkReportFeedback(options = {}) {
@@ -4952,6 +4978,7 @@
     const item = lastWorkReportResult.items.find((row) => Number(row?.index || 0) === itemIndex);
     if (!item || !Array.isArray(item.images) || !item.images[imageIndex]) return;
     item.images[imageIndex].include_in_output = !!target.checked;
+    syncWorkReportItemOutputState(item);
     rerenderWorkReportPreview("미리보기에서 선택한 사진만 PDF에 출력됩니다.");
   }
 
@@ -4981,14 +5008,7 @@
     const target = event?.target;
     if (!(target instanceof HTMLSelectElement) || !target.classList.contains("work-report-image-assignment")) return;
     if (!lastWorkReportResult) return;
-    const sourceType = String(target.getAttribute("data-source-type") || "item");
-    const itemIndex = Number(target.getAttribute("data-item-index") || -1);
-    const imageIndex = Number(target.getAttribute("data-image-index") || -1);
-    const unmatchedIndex = Number(target.getAttribute("data-unmatched-index") || -1);
-    const imageKey = String(target.getAttribute("data-image-record-key") || "").trim();
-    const changed = imageKey
-      ? moveWorkReportImageByKey(imageKey, target.value)
-      : moveWorkReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex, target.value);
+    const changed = syncWorkReportPendingEditsFromDom();
     if (!changed) return;
     rerenderWorkReportPreview("이미지 연결 작업을 수동으로 조정했습니다. 필요하면 '매칭 수정 저장'으로 다음 매칭 개선 자료로 남길 수 있습니다.");
   }
@@ -4997,14 +5017,7 @@
     const target = event?.target;
     if (!(target instanceof HTMLSelectElement) || !target.classList.contains("work-report-image-stage")) return;
     if (!lastWorkReportResult) return;
-    const sourceType = String(target.getAttribute("data-source-type") || "item");
-    const itemIndex = Number(target.getAttribute("data-item-index") || -1);
-    const imageIndex = Number(target.getAttribute("data-image-index") || -1);
-    const unmatchedIndex = Number(target.getAttribute("data-unmatched-index") || -1);
-    const imageKey = String(target.getAttribute("data-image-record-key") || "").trim();
-    const changed = imageKey
-      ? updateWorkReportImageStageByKey(imageKey, target.value)
-      : updateWorkReportImageStage(sourceType, itemIndex, imageIndex, unmatchedIndex, target.value);
+    const changed = syncWorkReportPendingEditsFromDom();
     if (!changed) return;
     rerenderWorkReportPreview("이미지 단계값을 수정했습니다. 현재 보정 결과로 PDF가 생성됩니다.");
   }
