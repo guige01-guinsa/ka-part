@@ -139,16 +139,16 @@ def test_build_info_endpoints_expose_release_and_asset_versions(app_client) -> N
     api_response = client.get("/api/build_info")
     assert api_response.status_code == 200
     api_payload = api_response.json()
-    assert api_payload["release_id"] == "2026-04-19-editsync-1"
-    assert api_payload["static_assets"]["pwa_asset_version"] == "20260419c"
+    assert api_payload["release_id"] == "2026-04-19-imagesave-1"
+    assert api_payload["static_assets"]["pwa_asset_version"] == "20260419d"
     assert api_payload["frontend_expectations"]["build_info_page"] == "/diag/build"
     assert api_response.headers["cache-control"].startswith("no-store")
 
     html_response = client.get("/diag/build")
     assert html_response.status_code == 200
     assert "text/html" in html_response.headers["content-type"]
-    assert "2026-04-19-editsync-1" in html_response.text
-    assert "20260419c" in html_response.text
+    assert "2026-04-19-imagesave-1" in html_response.text
+    assert "20260419d" in html_response.text
     assert "/api/build_info" in html_response.text
 
 

@@ -4481,16 +4481,22 @@
     const assignmentValue = sourceType === "unmatched" ? "__unmatched__" : String(Number(config.itemIndex || 0));
     const checkboxClass = sourceType === "unmatched" ? "work-report-unmatched-output-check" : "work-report-output-check";
     const previewUrl = workReportImagePreviewUrl(report, row);
+    const feedbackDirty = !!config.feedbackDirty;
+    const feedbackSaved = !!config.feedbackSaved;
     const previewButton = previewUrl
       ? `<button class="work-report-image-preview-toggle" type="button" data-image-preview-index="${Number(row.index || 0)}">${escapeHtml(activeWorkReportPreviewIndex === Number(row.index || 0) ? "이미지 닫기" : "이미지 보기")}</button>`
       : "";
+    const saveButton = `<button class="work-report-image-save" type="button"${feedbackDirty ? "" : " disabled"}>${escapeHtml(feedbackSaved ? "저장 완료" : feedbackDirty ? "수정완료(저장)" : "저장할 변경 없음")}</button>`;
     return [
       '<div class="work-report-image-select">',
       `<input class="${checkboxClass}" type="checkbox" ${sourceAttrs}${checked}>`,
       '<div class="work-report-image-body">',
       '<div class="work-report-image-head">',
       `<span class="work-report-image-title">${escapeHtml(`${stageLabel} · ${String(row.filename || "-")}`)}</span>`,
+      '<div class="work-report-image-head-actions">',
       previewButton,
+      saveButton,
+      '</div>',
       "</div>",
       row.manual_override ? '<span class="work-report-image-note">수동 보정</span>' : "",
       '<div class="work-report-image-controls">',
@@ -4685,6 +4691,8 @@
               sourceType: "item",
               itemIndex: Number(row.index || 0),
               imageIndex,
+              feedbackDirty: feedback.changes.length > 0,
+              feedbackSaved,
             })
           )).join("")}</div>` : '<p>매칭된 이미지 없음</p>',
           "</article>",
@@ -4715,6 +4723,8 @@
             renderWorkReportImageEditor(report, row, {
               sourceType: "unmatched",
               unmatchedIndex: index,
+              feedbackDirty: feedback.changes.length > 0,
+              feedbackSaved,
             })
           )).join("")
         }</div>`
@@ -5059,7 +5069,7 @@
 
   async function handleWorkReportFeedbackSave(event) {
     const target = event?.target;
-    if (!(target instanceof HTMLElement) || !target.closest(".work-report-feedback-save")) return;
+    if (!(target instanceof HTMLElement) || !target.closest(".work-report-feedback-save, .work-report-image-save")) return;
     event.preventDefault();
     await saveWorkReportFeedback();
   }
