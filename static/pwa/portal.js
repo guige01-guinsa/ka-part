@@ -136,7 +136,7 @@
     return `${minutes}분 ${String(seconds).padStart(2, "0")}초`;
   }
 
-  const WORK_REPORT_REQUEST_TIMEOUT_MS = 900000;
+  const WORK_REPORT_REQUEST_TIMEOUT_MS = 1200000;
   const WORK_REPORT_IMAGE_STAGE_OPTIONS = [
     { value: "general", label: "현장 이미지" },
     { value: "before", label: "작업 전" },
@@ -4232,6 +4232,42 @@
     return `fallback:${fallbackKey}`;
   }
 
+  function workReportImageLocationByKey(report, imageKey) {
+    const normalizedKey = String(imageKey || "").trim();
+    if (!report || !normalizedKey) return null;
+    const items = Array.isArray(report.items) ? report.items : [];
+    for (const item of items) {
+      const itemIndex = Number(item?.index || 0);
+      const images = Array.isArray(item?.images) ? item.images : [];
+      for (let imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
+        const image = images[imageIndex];
+        if (workReportImageKey(image, `item-${itemIndex}-${imageIndex}`) === normalizedKey) {
+          return {
+            sourceType: "item",
+            itemIndex,
+            imageIndex,
+            unmatchedIndex: -1,
+            row: image,
+          };
+        }
+      }
+    }
+    const unmatchedImages = Array.isArray(report.unmatched_images) ? report.unmatched_images : [];
+    for (let unmatchedIndex = 0; unmatchedIndex < unmatchedImages.length; unmatchedIndex += 1) {
+      const image = unmatchedImages[unmatchedIndex];
+      if (workReportImageKey(image, `unmatched-${unmatchedIndex}`) === normalizedKey) {
+        return {
+          sourceType: "unmatched",
+          itemIndex: 0,
+          imageIndex: -1,
+          unmatchedIndex,
+          row: image,
+        };
+      }
+    }
+    return null;
+  }
+
   function collectWorkReportImageAssignments(report) {
     const snapshot = new Map();
     const items = Array.isArray(report?.items) ? report.items : [];
@@ -4413,12 +4449,18 @@
     const stageLabel = String(row.stage_label || workReportImageStageLabel(stage));
     const checked = row && row.include_in_output !== false ? " checked" : "";
     const sourceType = String(config.sourceType || "item");
+    const imageKey = workReportImageKey(
+      row,
+      sourceType === "unmatched"
+        ? `unmatched-${Number(config.unmatchedIndex || 0)}`
+        : `item-${Number(config.itemIndex || 0)}-${Number(config.imageIndex || 0)}`
+    );
     const sourceAttrs = sourceType === "unmatched"
-      ? `data-unmatched-index="${Number(config.unmatchedIndex || 0)}"`
-      : `data-item-index="${Number(config.itemIndex || 0)}" data-image-index="${Number(config.imageIndex || 0)}"`;
+      ? `data-unmatched-index="${Number(config.unmatchedIndex || 0)}" data-image-record-key="${escapeHtml(imageKey)}"`
+      : `data-item-index="${Number(config.itemIndex || 0)}" data-image-index="${Number(config.imageIndex || 0)}" data-image-record-key="${escapeHtml(imageKey)}"`;
     const editorAttrs = sourceType === "unmatched"
-      ? `data-source-type="unmatched" data-unmatched-index="${Number(config.unmatchedIndex || 0)}"`
-      : `data-source-type="item" data-item-index="${Number(config.itemIndex || 0)}" data-image-index="${Number(config.imageIndex || 0)}"`;
+      ? `data-source-type="unmatched" data-unmatched-index="${Number(config.unmatchedIndex || 0)}" data-image-record-key="${escapeHtml(imageKey)}"`
+      : `data-source-type="item" data-item-index="${Number(config.itemIndex || 0)}" data-image-index="${Number(config.imageIndex || 0)}" data-image-record-key="${escapeHtml(imageKey)}"`;
     const assignmentValue = sourceType === "unmatched" ? "__unmatched__" : String(Number(config.itemIndex || 0));
     const checkboxClass = sourceType === "unmatched" ? "work-report-unmatched-output-check" : "work-report-output-check";
     const previewUrl = workReportImagePreviewUrl(report, row);
@@ -4768,6 +4810,19 @@
     return true;
   }
 
+  function moveWorkReportImageByKey(imageKey, destinationValue) {
+    if (!lastWorkReportResult) return false;
+    const location = workReportImageLocationByKey(lastWorkReportResult, imageKey);
+    if (!location) return false;
+    return moveWorkReportImageRecord(
+      location.sourceType,
+      location.itemIndex,
+      location.imageIndex,
+      location.unmatchedIndex,
+      destinationValue
+    );
+  }
+
   function confirmWorkReportImageReview(sourceType, itemIndex, imageIndex, unmatchedIndex) {
     const row = workReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex);
     if (!row) return false;
@@ -4798,9 +4853,53 @@
     return true;
   }
 
+  function updateWorkReportImageStageByKey(imageKey, stageValue) {
+    if (!lastWorkReportResult) return false;
+    const location = workReportImageLocationByKey(lastWorkReportResult, imageKey);
+    if (!location) return false;
+    return updateWorkReportImageStage(
+      location.sourceType,
+      location.itemIndex,
+      location.imageIndex,
+      location.unmatchedIndex,
+      stageValue
+    );
+  }
+
+  function syncWorkReportPendingEditsFromDom() {
+    if (!lastWorkReportResult) return;
+    const root = $("#workReportBox");
+    if (!(root instanceof HTMLElement)) return;
+
+    root.querySelectorAll(".work-report-image-assignment").forEach((element) => {
+      if (!(element instanceof HTMLSelectElement)) return;
+      const imageKey = String(element.getAttribute("data-image-record-key") || "").trim();
+      if (!imageKey) return;
+      const location = workReportImageLocationByKey(lastWorkReportResult, imageKey);
+      if (!location) return;
+      const currentValue = location.sourceType === "unmatched" ? "__unmatched__" : String(location.itemIndex);
+      const nextValue = String(element.value || "__unmatched__");
+      if (nextValue === currentValue) return;
+      moveWorkReportImageByKey(imageKey, nextValue);
+    });
+
+    root.querySelectorAll(".work-report-image-stage").forEach((element) => {
+      if (!(element instanceof HTMLSelectElement)) return;
+      const imageKey = String(element.getAttribute("data-image-record-key") || "").trim();
+      if (!imageKey) return;
+      const location = workReportImageLocationByKey(lastWorkReportResult, imageKey);
+      if (!location || !location.row) return;
+      const currentStage = normalizeWorkReportImageStage(location.row.stage);
+      const nextStage = normalizeWorkReportImageStage(element.value);
+      if (currentStage === nextStage) return;
+      updateWorkReportImageStageByKey(imageKey, nextStage);
+    });
+  }
+
   async function saveWorkReportFeedback(options = {}) {
     const silent = !!options.silent;
     if (!lastWorkReportResult || !lastWorkReportBaseline) return 0;
+    syncWorkReportPendingEditsFromDom();
     const feedback = buildWorkReportFeedbackSummary(lastWorkReportResult, lastWorkReportBaseline);
     if (!feedback.changes.length) {
       if (!silent) {
@@ -4877,7 +4976,10 @@
     const itemIndex = Number(target.getAttribute("data-item-index") || -1);
     const imageIndex = Number(target.getAttribute("data-image-index") || -1);
     const unmatchedIndex = Number(target.getAttribute("data-unmatched-index") || -1);
-    const changed = moveWorkReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex, target.value);
+    const imageKey = String(target.getAttribute("data-image-record-key") || "").trim();
+    const changed = imageKey
+      ? moveWorkReportImageByKey(imageKey, target.value)
+      : moveWorkReportImageRecord(sourceType, itemIndex, imageIndex, unmatchedIndex, target.value);
     if (!changed) return;
     rerenderWorkReportPreview("이미지 연결 작업을 수동으로 조정했습니다. 필요하면 '매칭 수정 저장'으로 다음 매칭 개선 자료로 남길 수 있습니다.");
   }
@@ -4890,7 +4992,10 @@
     const itemIndex = Number(target.getAttribute("data-item-index") || -1);
     const imageIndex = Number(target.getAttribute("data-image-index") || -1);
     const unmatchedIndex = Number(target.getAttribute("data-unmatched-index") || -1);
-    const changed = updateWorkReportImageStage(sourceType, itemIndex, imageIndex, unmatchedIndex, target.value);
+    const imageKey = String(target.getAttribute("data-image-record-key") || "").trim();
+    const changed = imageKey
+      ? updateWorkReportImageStageByKey(imageKey, target.value)
+      : updateWorkReportImageStage(sourceType, itemIndex, imageIndex, unmatchedIndex, target.value);
     if (!changed) return;
     rerenderWorkReportPreview("이미지 단계값을 수정했습니다. 현재 보정 결과로 PDF가 생성됩니다.");
   }
@@ -4898,6 +5003,7 @@
   function handleWorkReportImagePreviewToggle(event) {
     const trigger = event?.target instanceof HTMLElement ? event.target.closest(".work-report-image-preview-toggle") : null;
     if (!(trigger instanceof HTMLElement)) return;
+    syncWorkReportPendingEditsFromDom();
     const imageIndex = Number(trigger.getAttribute("data-image-preview-index") || 0);
     if (imageIndex <= 0) return;
     activeWorkReportPreviewIndex = activeWorkReportPreviewIndex === imageIndex ? 0 : imageIndex;
