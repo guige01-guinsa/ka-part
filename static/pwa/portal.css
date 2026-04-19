@@ -1056,6 +1056,32 @@ body {
   margin-top: 10px;
 }
 
+.work-report-mode-banner {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(185, 92, 44, 0.18);
+  background: linear-gradient(180deg, rgba(255, 244, 236, 0.96), rgba(255, 251, 247, 0.98));
+  box-shadow: 0 14px 28px rgba(154, 79, 36, 0.08);
+}
+
+.work-report-mode-banner strong {
+  color: #8f4c26;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.work-report-mode-banner span,
+.work-report-mode-banner p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .work-report-meta span,
 .work-report-chip-list span {
   display: inline-flex;

@@ -4598,6 +4598,7 @@
     const reviewQueue = collectWorkReportReviewQueue(report);
     const modeLabel = workReportAnalysisModeLabel(report);
     const reasonLabel = workReportAnalysisReasonLabel(report);
+    const isRuleBasedMode = String(report?.analysis_model || "").trim() === "heuristic" || modeLabel === "규칙 기반";
     const feedback = buildWorkReportFeedbackSummary(report, lastWorkReportBaseline);
     const feedbackSaved = !!feedback.signature && feedback.signature === lastWorkReportFeedbackSavedSignature;
     const feedbackDisabled = !feedback.changes.length || feedbackSaved;
@@ -4606,22 +4607,30 @@
         ? `수동 보정 ${feedback.changes.length}건이 저장되었습니다.`
         : `수동 보정 ${feedback.changes.length}건이 저장 대기 중입니다.`
       : "아직 저장할 이미지 매칭 수정은 없습니다.";
-    const sections = [
-      [
-        "<div class=\"subhead\">보고 개요</div>",
-        `<div class="work-report-meta">`,
-        `<span>${escapeHtml(String(report.report_title || "시설팀 주요 업무 보고"))}</span>`,
-        `<span>기간 ${escapeHtml(String(report.period_label || "-"))}</span>`,
-        `<span>작업 ${escapeHtml(String(items.length || 0))}건</span>`,
-        `<span>사진 포함 ${escapeHtml(String(imageItems.length || 0))}건</span>`,
-        `<span>텍스트 전용 ${escapeHtml(String(textOnlyItems.length || 0))}건</span>`,
-        `<span>모델 ${escapeHtml(modeLabel)}</span>`,
-        reasonLabel ? `<span>사유 ${escapeHtml(reasonLabel)}</span>` : "",
-        report.template_source_name ? `<span>양식 ${escapeHtml(String(report.template_source_name || ""))}</span>` : "",
-        `</div>`,
-      ].join(""),
-    ];
-    if (report.analysis_notice) {
+    const sections = [];
+    if (isRuleBasedMode) {
+      sections.push([
+        '<div class="work-report-mode-banner is-fallback">',
+        `<strong>${escapeHtml(`모델 ${modeLabel}`)}</strong>`,
+        `<span>${escapeHtml(reasonLabel ? `사유 ${reasonLabel}` : "OpenAI 분석 결과를 받지 못해 규칙 기반 결과를 표시 중입니다.")}</span>`,
+        report.analysis_notice ? `<p>${escapeHtml(String(report.analysis_notice || ""))}</p>` : "",
+        "</div>",
+      ].join(""));
+    }
+    sections.push([
+      "<div class=\"subhead\">보고 개요</div>",
+      `<div class="work-report-meta">`,
+      `<span>${escapeHtml(String(report.report_title || "시설팀 주요 업무 보고"))}</span>`,
+      `<span>모델 ${escapeHtml(modeLabel)}</span>`,
+      reasonLabel ? `<span>사유 ${escapeHtml(reasonLabel)}</span>` : "",
+      `<span>기간 ${escapeHtml(String(report.period_label || "-"))}</span>`,
+      `<span>작업 ${escapeHtml(String(items.length || 0))}건</span>`,
+      `<span>사진 포함 ${escapeHtml(String(imageItems.length || 0))}건</span>`,
+      `<span>텍스트 전용 ${escapeHtml(String(textOnlyItems.length || 0))}건</span>`,
+      report.template_source_name ? `<span>양식 ${escapeHtml(String(report.template_source_name || ""))}</span>` : "",
+      `</div>`,
+    ].join(""));
+    if (report.analysis_notice && !isRuleBasedMode) {
       sections.push(`<div class="detail-block">${escapeHtml(String(report.analysis_notice || ""))}</div>`);
     }
     if (imageItems.length) {

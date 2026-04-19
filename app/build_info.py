@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-APP_RELEASE_ID = "2026-04-19-previewsync-1"
-PWA_ASSET_VERSION = "20260419a"
+APP_RELEASE_ID = "2026-04-19-rulemode-1"
+PWA_ASSET_VERSION = "20260419b"
 AUTH_ASSET_VERSION = "20260407a"
 PWA_MANIFEST_VERSION = "14"
 STARTED_AT_UTC = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
