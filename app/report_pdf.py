@@ -13,7 +13,7 @@ from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 try:
     from PIL import Image as PILImage
@@ -94,6 +94,22 @@ def _work_report_analysis_reason_label(report: Dict[str, Any]) -> str:
     if reason == "openai_error":
         return "OpenAI 호출 실패"
     return ""
+
+
+def _work_report_header_meta_lines(report: Dict[str, Any], *, tenant_label: str) -> List[str]:
+    period_label = _collapse(report.get("period_label") or "-")
+    lines = [
+        f"대상 단지: {_collapse(tenant_label or '-') or '-'}",
+        f"보고기간: {period_label}",
+        f"분석 방식: {_work_report_analysis_mode_label(report)}",
+    ]
+    analysis_reason_label = _work_report_analysis_reason_label(report)
+    if analysis_reason_label:
+        lines.append(f"분석 사유: {analysis_reason_label}")
+    analysis_notice = _collapse(report.get("analysis_notice") or "")
+    if analysis_notice:
+        lines.append(f"안내: {analysis_notice}")
+    return lines
 
 
 def _styles() -> Dict[str, ParagraphStyle]:
@@ -697,20 +713,9 @@ def build_work_report_pdf(
     story.append(_work_report_approval_table(styles))
     story.append(Spacer(1, 3 * mm))
     report_title = _collapse(report.get("report_title") or "시설팀 주요 업무 보고")
-    period_label = _collapse(report.get("period_label") or "-")
     story.append(Paragraph(_escape(report_title), styles["title"]))
-    story.append(Paragraph(_escape(f"대상 단지: {tenant_label or '-'}"), styles["meta"]))
-    story.append(Paragraph(_escape(f"보고기간: {period_label}"), styles["meta"]))
-    story.append(Paragraph(_escape(f"생성시각: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}"), styles["meta"]))
-    if template_source_name:
-        story.append(Paragraph(_escape(f"참조 양식: {template_source_name}"), styles["meta"]))
-    story.append(Paragraph(_escape(f"분석 방식: {_work_report_analysis_mode_label(report)}"), styles["meta"]))
-    analysis_reason_label = _work_report_analysis_reason_label(report)
-    if analysis_reason_label:
-        story.append(Paragraph(_escape(f"분석 사유: {analysis_reason_label}"), styles["meta"]))
-    analysis_notice = _collapse(report.get("analysis_notice") or "")
-    if analysis_notice:
-        story.append(Paragraph(_escape(f"안내: {analysis_notice}"), styles["meta"]))
+    for meta_line in _work_report_header_meta_lines(report, tenant_label=tenant_label):
+        story.append(Paragraph(_escape(meta_line), styles["meta"]))
     story.append(Spacer(1, 4 * mm))
 
     _, image_items, text_only_items = _work_report_output_items(report)
@@ -720,13 +725,20 @@ def build_work_report_pdf(
         story.append(Spacer(1, 5 * mm))
         story.append(Paragraph("사진 포함 작업", styles["heading"]))
         for position, item in enumerate(image_items, start=1):
-            story.append(Spacer(1, 6 * mm))
-            story.append(Paragraph(_escape(f"{position}. 주요 작업"), styles["heading"]))
-            story.append(_work_report_detail_table(item, styles))
+            item_header_block: List[Any] = [
+                Spacer(1, 6 * mm),
+                Paragraph(_escape(f"{position}. 주요 작업"), styles["heading"]),
+                _work_report_detail_table(item, styles),
+            ]
             image_summary = _work_report_image_summary(item)
             if image_summary:
-                story.append(Spacer(1, 2 * mm))
-                story.append(Paragraph(_escape(f"내용설명 : {image_summary}"), styles["small"]))
+                item_header_block.extend(
+                    [
+                        Spacer(1, 2 * mm),
+                        Paragraph(_escape(f"내용설명 : {image_summary}"), styles["small"]),
+                    ]
+                )
+            story.append(KeepTogether(item_header_block))
             image_grid = _work_report_image_grid(item, image_inputs, styles)
             if image_grid:
                 story.append(Spacer(1, 3 * mm))

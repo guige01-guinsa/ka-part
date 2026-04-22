@@ -1286,16 +1286,37 @@ def test_admin_work_report_learning_dashboard_summarizes_feedback(app_client) ->
     assert item["latest_feedback_at"]
 
 
-def test_work_report_image_layout_uses_three_columns_for_three_images() -> None:
+def test_work_report_header_meta_lines_hide_generated_time_and_template_name() -> None:
+    from app.report_pdf import _work_report_header_meta_lines
+
+    lines = _work_report_header_meta_lines(
+        {
+            "period_label": "4월 14일 ~ 4월 14일",
+            "analysis_model": "heuristic",
+            "analysis_reason": "",
+        },
+        tenant_label="연산더샵",
+    )
+
+    assert "대상 단지: 연산더샵" in lines
+    assert "보고기간: 4월 14일 ~ 4월 14일" in lines
+    assert all("생성시각:" not in line for line in lines)
+    assert all("참조 양식:" not in line for line in lines)
+
+
+def test_work_report_image_layout_uses_three_columns_only_for_three_images() -> None:
     from app.report_pdf import _work_report_image_layout
 
     two_image_layout = _work_report_image_layout(2)
     three_image_layout = _work_report_image_layout(3)
+    four_image_layout = _work_report_image_layout(4)
 
     assert two_image_layout["columns"] == 2
     assert len(two_image_layout["col_widths"]) == 2
     assert three_image_layout["columns"] == 3
     assert len(three_image_layout["col_widths"]) == 3
+    assert four_image_layout["columns"] == 2
+    assert len(four_image_layout["col_widths"]) == 2
     assert three_image_layout["draw_width"] < two_image_layout["draw_width"]
     assert three_image_layout["draw_height"] < two_image_layout["draw_height"]
 
